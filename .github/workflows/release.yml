@@ -1,10 +1,12 @@
 name: Release
 
 # Publishes to npm when a v* tag is pushed, e.g.:
-#   npm version patch && git push --follow-tags
+#   npm version minor && git push --follow-tags
+# workflow_dispatch allows a manual run when a tag already exists.
 on:
   push:
     tags: ['v*']
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -28,19 +30,37 @@ jobs:
           cache: npm
           registry-url: https://registry.npmjs.org
 
+      # Fail before doing any work if the version can't be published, so a bad
+      # release costs seconds instead of a full KiCad-installing CI run.
+      #
+      # Note: versions at or below 0.2.1 are unusable. A previous owner of this
+      # name unpublished in 2022 and npm tombstones those numbers permanently.
+      # The registry stops advertising that list once a package has live
+      # versions again, so it cannot be checked here: just never go backwards.
+      - name: Preflight version check
+        run: |
+          VER="$(node -p "require('./package.json').version")"
+          echo "package.json version: $VER"
+
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            TAG="${GITHUB_REF_NAME#v}"
+            if [ "$TAG" != "$VER" ]; then
+              echo "::error::Tag v$TAG does not match package.json version $VER"
+              exit 1
+            fi
+          fi
+
+          if npm view "copperhead@$VER" version > /dev/null 2>&1; then
+            echo "::error::copperhead@$VER is already published. Bump the version."
+            exit 1
+          fi
+          echo "$VER is free to publish"
+
       - run: npm ci
       - run: npm run build
 
-      # Refuse to publish if the tag and package.json disagree.
-      - name: Verify tag matches package version
-        run: |
-          TAG="${GITHUB_REF_NAME#v}"
-          PKG="$(node -p "require('./package.json').version")"
-          if [ "$TAG" != "$PKG" ]; then
-            echo "Tag v$TAG does not match package.json version $PKG" >&2
-            exit 1
-          fi
-
+      # Provenance works here (unlike locally) because Actions supplies the
+      # OIDC token that npm attests against.
       - run: npm publish
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

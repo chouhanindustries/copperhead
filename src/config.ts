@@ -46,7 +46,25 @@ export async function loadConfig(repoRoot: string): Promise<CopperheadConfig> {
   };
 }
 
-/** Model selection precedence: flag > COPPERHEAD_MODEL > config > available key. */
+/**
+ * Model selection precedence: flag > COPPERHEAD_MODEL > config > available key.
+ *
+ * Accepted values (same set for `--model`, COPPERHEAD_MODEL, and `model` in
+ * .copperhead/config.json):
+ *
+ * - `claude`  : the Anthropic provider on its default model.
+ * - `claude-*`: any Anthropic model id, passed through verbatim, e.g.
+ *               `claude-opus-4-5`. Anything starting with `claude` routes here.
+ * - `gpt-5`   : the OpenAI provider on its default model.
+ * - anything else: sent to the OpenAI provider verbatim as a model id, e.g.
+ *               `gpt-5-mini` or `o3`.
+ *
+ * Routing is prefix-based, not a fixed list (see makeProvider in agent/loop.ts),
+ * so a model released after this build still works without a code change. The
+ * cost is that a typo like `claud-sonnet-5` silently routes to OpenAI and fails
+ * there. The chosen provider must have its key set: ANTHROPIC_API_KEY for
+ * `claude*`, OPENAI_API_KEY otherwise.
+ */
 export function resolveModel(flag: string | undefined, config: CopperheadConfig, env = process.env): string {
   if (flag) return flag;
   if (env.COPPERHEAD_MODEL) return env.COPPERHEAD_MODEL;

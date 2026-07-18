@@ -1,12 +1,13 @@
 # Tasks: Build copperhead Phase 1
 
-> **Status (2026-07-18): 49/61 complete.** Every deterministic capability is implemented and
-> covered by the offline suite (46 tests green: init, check, sexp, report, ledger, safety, sync
-> verify, fab export). The remaining work is all live-LLM verification, which is why it is still
-> open: the AC-3.x integration tests in `test/agent-integration.test.ts` are written but skip
-> without `OPENAI_API_KEY` / `ANTHROPIC_API_KEY`, so no acceptance criterion in section 8 has
-> ever been observed green. Section 9's create stages and section 10's resolve phase are
-> likewise implemented but have never been run end to end against a real model.
+> **Status (2026-07-18, evening): 52/61 complete.** Every deterministic capability is
+> implemented and covered by the offline suite (57 tests green). The agent loop is now
+> **verified live** with an OpenAI key (model `gpt-5-nano`, the only model on this key):
+> AC-3.1 net rename with surgical <5% diff (AC-3.7), AC-3.4 budget refusal via compliant
+> alternative, AC-3.5 repair convergence observed in run logs, AC-3.6 byte-identical rollback,
+> AC-4.1 no key material in the tree. Still open: AC-3.2/AC-3.3 integration tests (not yet
+> written), provider parity AC-3.10 (needs an Anthropic key), create-pipeline stages and the
+> sync resolve phase (implemented, never run live), and the section 11 demo tasks.
 >
 > Treat an unchecked box here as "not yet observed working", not "not yet written".
 
@@ -71,11 +72,11 @@
 - [x] 8.1 Wire `copperhead do` CLI: global flags (--repo, --dry-run, --json), --model, --max-turns, --allow-dirty, --interactive
 - [x] 8.2 Implement --dry-run: propose diff, write nothing (AC-3.9)
 - [x] 8.3 Structured commit message (`copperhead: <request>` + edits/verification summary)
-- [ ] 8.4 Integration test AC-3.1 (net rename): propagation to docs, ERC 0, one commit, diff locality < 5% lines (AC-3.7)
+- [x] 8.4 Integration test AC-3.1 (net rename): propagation to docs, ERC 0, one commit, diff locality < 5% lines (AC-3.7)
 - [ ] 8.5 Integration test AC-3.2 (RTC-capable pin move): strapping table consulted in transcript, schematic/PINOUT agree
 - [ ] 8.6 Integration test AC-3.3 (add RGB LED): unique refdes, valid footprint, UNVERIFIED BOM row with rationale
-- [ ] 8.7 Integration test AC-3.4 (budget refusal): 100kΩ pullup refused citing 25 µA budget — the money demo
-- [ ] 8.8 Integration tests AC-3.5/3.6 (repair loop converges; rollback leaves tree byte-identical)
+- [x] 8.7 Integration test AC-3.4 (budget refusal): 100kΩ pullup refused citing 25 µA budget — the money demo
+- [x] 8.8 Integration tests AC-3.5/3.6 (repair loop converges; rollback leaves tree byte-identical)
 - [ ] 8.9 Provider parity: AC-3.1 green on both --model gpt-5 and --model claude (AC-3.10)
 
 ## 9. `create` pipeline (Mode A)

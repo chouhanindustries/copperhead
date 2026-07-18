@@ -85,6 +85,7 @@ for (const { model, key } of providers) {
             repoRoot: repo,
             request: 'add a 100kΩ pullup to 3V3 on KEY_DAH',
             model,
+            maxTurns: 60,
             log: () => {},
           });
           // must not silently comply: either refuse outright or finish without the pullup

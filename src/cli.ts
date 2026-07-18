@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { Command } from 'commander';
 import path from 'node:path';
+import { createRequire } from 'node:module';
 import { createInterface } from 'node:readline/promises';
 import { loadConfig, resolveModel } from './config.js';
 import { runInit, InitError } from './memory/scaffold.js';
@@ -9,6 +10,19 @@ import { syncVerify, syncResolve, formatSyncReport } from './commands/sync.js';
 import { runCreate } from './commands/create.js';
 import { runAgentLoop } from './agent/loop.js';
 import { kicadCliVersion } from './kicad/cli.js';
+import { loadEnvFile } from './util/env.js';
+
+// Read .env from the working directory before any command resolves a model or a
+// provider. Loaded here rather than per-command so `check` behaves identically,
+// though check never reads a key: it stays LLM-free and network-free either way.
+// A real environment variable always beats the file.
+loadEnvFile(process.cwd());
+
+// Single source of truth for the version. Both src/cli.ts (via tsx) and
+// dist/cli.js sit one level below the package root, so the path holds either
+// way, and a release can never ship a version string that disagrees with the
+// package it was published as.
+const { version } = createRequire(import.meta.url)('../package.json') as { version: string };
 
 const program = new Command();
 
@@ -24,7 +38,7 @@ async function confirmTty(question: string): Promise<boolean> {
 program
   .name('copperhead')
   .description('Cursor for circuit boards: an AI agent for real KiCad repositories')
-  .version('0.1.0')
+  .version(version)
   .option('--repo <path>', 'target repository (default: cwd)')
   .option('--json', 'machine-readable output');
 
