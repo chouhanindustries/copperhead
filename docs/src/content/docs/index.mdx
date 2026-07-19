@@ -1,0 +1,43 @@
+---
+title: copperhead
+description: Cursor for circuit boards. An AI agent that designs, documents, and validates real PCBs from a prompt, working directly on existing KiCad repositories.
+template: splash
+hero:
+  title: copperhead
+  tagline: Cursor for circuit boards. An AI agent that designs, documents, and validates real PCBs from a prompt, working directly on existing KiCad repositories.
+  actions:
+    - text: Get started
+      link: /getting-started/quickstart/
+      icon: right-arrow
+    - text: CLI reference
+      link: /reference/cli/
+      variant: minimal
+    - text: GitHub
+      link: https://github.com/chouhanindustries/copperhead
+      variant: minimal
+      icon: github
+---
+
+import { Card, CardGrid } from '@astrojs/starlight/components';
+
+<CardGrid stagger>
+  <Card title="Edits the real files" icon="pencil">
+    Works on `.kicad_sch` and `.kicad_pcb` s-expression text in your own repo.
+    Your KiCad install stays the editor; there is no new format and no lock-in.
+  </Card>
+  <Card title="Spec-gated in" icon="document">
+    The agent cannot touch a KiCad file until a validated change proposal
+    exists. The edit tools are structurally absent from its tool list until
+    then, so every edit traces back to a documented intent.
+  </Card>
+  <Card title="Verification-gated out" icon="approve-check">
+    No mutation is done until `kicad-cli` ERC (and DRC, if the board changed)
+    passes. The agent reads its own errors back and repairs, or rolls back to
+    the git snapshot.
+  </Card>
+  <Card title="Docs as memory" icon="open-book">
+    Design docs are the agent's memory and its output. Decisions land in an
+    append-only DECISIONS.md, and every run writes a human-readable summary
+    next to its transcript.
+  </Card>
+</CardGrid>

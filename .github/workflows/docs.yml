@@ -6,7 +6,6 @@ on:
     paths:
       - 'docs/**'
       - '.github/workflows/docs.yml'
-      - 'package.json'
   workflow_dispatch:
 
 permissions:
@@ -28,10 +27,13 @@ jobs:
           fetch-depth: 0 # lastUpdated timestamps come from git history
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
+          cache-dependency-path: docs/package-lock.json
       - run: npm ci
-      - run: npm run docs:build
+        working-directory: docs
+      - run: npm run build
+        working-directory: docs
 
       # The docs own this subdomain outright, so the build output sits at the
       # artifact root. The apex, copperhead.sh, is served separately by the
@@ -39,7 +41,7 @@ jobs:
       - name: Assemble Pages artifact
         run: |
           mkdir -p _site
-          cp -r docs/.vitepress/dist/. _site/
+          cp -r docs/dist/. _site/
           echo 'docs.copperhead.sh' > _site/CNAME
 
       - uses: actions/configure-pages@v5

@@ -1,0 +1,12 @@
+/* Copper accent, matching the brand color #b87333. */
+:root {
+  --sl-color-accent-low: #3a230f;
+  --sl-color-accent: #b87333;
+  --sl-color-accent-high: #eec9a5;
+}
+
+:root[data-theme='light'] {
+  --sl-color-accent-low: #f5e3d2;
+  --sl-color-accent: #9c5c22;
+  --sl-color-accent-high: #4d2e10;
+}

@@ -1,4 +1,9 @@
-# Docs as memory
+---
+title: Docs as memory
+description: The markdown in your repo is the agent's memory, its output, and the thing verification protects.
+sidebar:
+  order: 3
+---
 
 copperhead has no hidden database. Its memory is the markdown in your repo, which means you can read all of it, edit all of it, and review it in a pull request like anything else.
 
@@ -34,13 +39,7 @@ Ask for something that costs more than the budget allows and the agent says no a
 
 Docs that disagree with the schematic are the failure mode this whole tool exists to prevent. `copperhead check` compares the two and reports every mismatch in the form "this doc claims X but the actual value is Y". Because `check` runs with no LLM and no network, you can put it in CI and in a pre-commit hook, and the hook is installed for you by `init`.
 
-Hand edits that desync the docs, the constraint registry, or the schematic fail at commit time.
-
-## Run artifacts
-
-Every run writes to `.copperhead/runs/<timestamp>/`: a JSONL transcript of the full agent loop, and a `summary.md` beside it written for a human. Anything matching an API key pattern is redacted at write time.
-
-`.copperhead/runs/` is gitignored by default. The transcripts are for you, not for your history.
+Hand edits that desync the docs, the constraint registry, or the schematic fail at commit time. See [Verify and sync](/workflows/verify-and-sync/).
 
 ## `.copperhead/README.md`
 

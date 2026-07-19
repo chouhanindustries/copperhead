@@ -1,8 +1,13 @@
-# Simple Demo
+---
+title: Simple demo
+description: Run the create pipeline end to end against the USB-C power breakout brief.
+sidebar:
+  order: 3
+---
 
 The quickest end-to-end demo uses the USB-C power breakout brief. It is intentionally small: one connector, passives, a power LED, and output protection.
 
-## Run It
+## Run it
 
 From the copperhead checkout:
 
@@ -29,7 +34,7 @@ To place the generated demo somewhere else:
 COPPERHEAD_DEMO_DIR=/tmp/copperhead-usb-c npm run demo:simple
 ```
 
-## What To Expect
+## What to expect
 
 The create pipeline is resumable. If the agent stops during a stage, rerun the same command and it continues from the first incomplete stage.
 

@@ -1,4 +1,9 @@
-# Configuration
+---
+title: Configuration
+description: Config file keys, environment variables, model selection, and the files copperhead writes.
+sidebar:
+  order: 2
+---
 
 ## `.copperhead/config.json`
 
@@ -22,7 +27,7 @@ Written by `copperhead init`. Every key is optional; the defaults below apply wh
 | --- | --- | --- |
 | `schematic` | `null` | Path to the `.kicad_sch`, relative to the repo root. ERC is skipped when null. |
 | `board` | `null` | Path to the `.kicad_pcb`. DRC is skipped when null. |
-| `docs` | `"docs/"` | The design docs directory: docs-as-memory. |
+| `docs` | `"docs/"` | The design docs directory: [docs-as-memory](/concepts/docs-as-memory/). |
 | `model` | `null` | Default model. Overridden by `--model` and `COPPERHEAD_MODEL`. |
 | `maxTurns` | `40` | Turn budget per run. |
 | `maxRepairCycles` | `5` | ERC/DRC repair attempts before the run rolls back to the git snapshot. |
@@ -56,6 +61,11 @@ The constraint registry: machine-readable counterparts to the constraints stated
 | `OPENAI_API_KEY` | OpenAI credentials. |
 | `ANTHROPIC_API_KEY` | Anthropic credentials. |
 | `COPPERHEAD_MODEL` | Default model. Overrides config, overridden by `--model`. |
+| `SYNAP_API_KEY` | Optional. Enables cross-run memory. Absent, copperhead behaves exactly as before and makes no Synap calls. |
+| `SYNAP_USER_ID` | Optional memory scope. Defaults to your `git config user.email`. |
+| `SYNAP_CUSTOMER_ID` | Optional memory scope. Defaults to `copperhead`; only matters on B2B Synap instances. |
+
+A `.env` file in the working directory is read at startup, before any command resolves a model or a provider. A real environment variable always wins over the file. Copy `.env.example` to get started.
 
 Keys are read from the environment only. copperhead never writes one to a config file, and redacts anything matching `sk-[A-Za-z0-9_-]+` when writing transcripts and summaries. Keep `.env` out of git; the shipped `.gitignore` already excludes it.
 
@@ -79,3 +89,11 @@ If none of these produce a model, the command exits with an error telling you th
 | `.copperhead/constraints.json` | Yes | Constraint registry. |
 | `.copperhead/README.md` | Yes | Self-describing docs for the above. |
 | `.copperhead/runs/<ts>/` | No | JSONL transcript plus a human-readable `summary.md`. Gitignored. |
+
+## Cross-run memory
+
+With `SYNAP_API_KEY` set, each run recalls relevant context from earlier runs, on this board and others, into the system prompt, then records its outcome, decisions, and refusals back.
+
+In-repo docs and the KiCad files stay the source of truth. Recalled memory is advisory context layered on top, never a substitute for reading `docs/`.
+
+It needs the optional `@maximem/synap-js-sdk` package and a Python 3.11+ runtime on the host, since the JS SDK drives a Python bridge as a subprocess. If either is missing, copperhead logs a line and continues without memory.

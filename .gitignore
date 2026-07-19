@@ -3,7 +3,8 @@
 node_modules/
 dist/
 *.tsbuildinfo
-docs/.vitepress/cache/
-docs/.vitepress/dist/
+docs/.astro/
+docs/dist/
+demo-runs/
 *.tgz
 .npmrc

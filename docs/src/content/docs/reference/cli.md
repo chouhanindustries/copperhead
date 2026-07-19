@@ -1,10 +1,25 @@
-# CLI reference
+---
+title: CLI reference
+description: Every copperhead command, flag, and exit code.
+sidebar:
+  order: 1
+---
 
 ```text
 copperhead [global options] <command>
 ```
 
-Every command probes `kicad-cli` before doing anything and exits 1 if it is not on your `PATH`.
+Every command probes `kicad-cli` before doing anything and exits 1 if it is not on your `PATH`. A `.env` in the working directory is loaded before any command resolves a model or a provider; a real environment variable always beats the file.
+
+## Commands at a glance
+
+| Command | Flow | LLM? | What it does |
+| --- | --- | --- | --- |
+| `init` | Setup | No | Scaffolds `docs/` from an existing schematic. |
+| `check` (`verify`) | Either | No | ERC, DRC, drift, constraints, spec validation. CI-safe. |
+| `do` | [Edit an existing board](/workflows/edit-existing-board/) | Yes | One change: propose, edit, verify, propagate, commit. |
+| `create` | [Design from a brief](/workflows/create-from-brief/) | Yes | Full pipeline from a markdown brief to an output package. |
+| `sync` | Either | Verify phase no, resolve phase yes | Reconciles docs, files, and constraints. |
 
 ## Global options
 
@@ -103,3 +118,37 @@ copperhead create --brief brief.md [--model <model>] [--interactive]
 | `--brief <file>` | **Required.** The product brief, in markdown. |
 | `--model <model>` | `gpt-5` or `claude`. |
 | `--interactive` | Re-enable the human gates: spec approval, and a pause before export. |
+
+Exits 1 if any stage fails to complete, 0 when the pipeline finishes.
+
+### Pipeline stages
+
+Each stage is a full `do` loop with its own prompt and gate. Stage completion is inferred from repo state, so the pipeline is resumable: rerun the same command after a failure and it skips what is done and resumes at the first incomplete stage.
+
+| # | Stage | Produces |
+| --- | --- | --- |
+| 1 | `spec` | `docs/SPEC.md`, plus every budget recorded as a constraint |
+| 2 | `architecture` | `docs/SUBSYSTEMS.md` |
+| 3 | `parts` | `docs/BOM.md`, MPNs flagged `UNVERIFIED` |
+| 4 | `schematic` | The `.kicad_sch`, ERC clean after each sheet |
+| 5 | `layout` | Draft placement and critical routing, DRC clean, plus a `## Draft quality` section in `LAYOUT.md` |
+| 6 | `outputs` | `outputs/`: gerbers, drill, DXF, STEP, SVG, `BOM.csv` |
+| 7 | `firmware` | `firmware/` scaffold, `pins.h` generated from `PINOUT.md` |
+| 8 | `devplan` | `docs/DEVPLAN.md` |
+
+Stages build on each other's uncommitted state, so `create` runs them as if `--allow-dirty` were set.
+
+## Repo scripts
+
+These are npm scripts in a copperhead checkout, not installed CLI commands.
+
+| Script | What it does |
+| --- | --- |
+| `npm run demo:simple` | Runs the create pipeline against `examples/simple/usb-c-breakout.md` in `demo-runs/usb-c-breakout/`. See [Simple demo](/getting-started/demo/). |
+| `npm run docs:dev` | Serves this documentation locally. |
+| `npm run docs:build` | Builds the documentation site. |
+| `npm test` | Runs the vitest suite. LLM-touching tests skip without an API key. |
+| `npm run typecheck` | Type-checks without emitting. |
+| `npm run build` | Compiles to `dist/`. |
+
+Pass `create` flags through after `--`, for example `npm run demo:simple -- --model claude`. Override the target directory with `COPPERHEAD_DEMO_DIR`.

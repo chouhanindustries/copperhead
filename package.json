@@ -4,7 +4,7 @@
   "description": "Cursor for circuit boards: an AI agent that designs, documents, and validates real PCBs on KiCad repositories",
   "license": "Apache-2.0",
   "author": "Animesh Chouhan <animeshchouhan@outlook.com>",
-  "homepage": "https://copperhead.chouhan.ai",
+  "homepage": "https://copperhead.sh",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/chouhanindustries/copperhead.git"
@@ -46,12 +46,13 @@
     "build": "tsc -p tsconfig.json",
     "prepublishOnly": "npm run typecheck && npm run build",
     "dev": "tsx src/cli.ts",
+    "demo:simple": "bash scripts/demo-simple.sh",
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "docs:dev": "vitepress dev docs",
-    "docs:build": "vitepress build docs",
-    "docs:preview": "vitepress preview docs"
+    "docs:dev": "npm --prefix docs run dev",
+    "docs:build": "npm --prefix docs run build",
+    "docs:preview": "npm --prefix docs run preview"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.39.0",
@@ -59,11 +60,13 @@
     "execa": "^9.5.2",
     "openai": "^4.87.3"
   },
+  "optionalDependencies": {
+    "@maximem/synap-js-sdk": "^0.3.0"
+  },
   "devDependencies": {
     "@types/node": "^22.13.10",
     "tsx": "^4.19.3",
     "typescript": "^5.8.2",
-    "vitepress": "^1.6.4",
     "vitest": "^3.0.8"
   },
   "allowScripts": {

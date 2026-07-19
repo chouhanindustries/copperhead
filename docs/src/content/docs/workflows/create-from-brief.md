@@ -1,21 +1,13 @@
-# The two flows
+---
+title: Design from a brief
+description: "Flow A: from a markdown product brief to a full, verified design package."
+sidebar:
+  order: 1
+---
 
-copperhead has exactly two ways in, and they are the same loop underneath.
+Flow A starts from nothing but a product brief and an empty git repo, and ends with a full design package. Underneath, it is [the same loop](/concepts/agent-loop/) as editing an existing board, run once per pipeline stage with a stage-specific prompt and gate.
 
-| | Flow A: from scratch | Flow B: on an existing repo |
-| --- | --- | --- |
-| Command | `copperhead create --brief brief.md` | `copperhead do "<request>"` |
-| Input | A product brief, in markdown | A change request, in natural language |
-| Starting point | An empty git repo | A repo that already has a schematic and `docs/` |
-| Output | A full design package in `outputs/` | One verified, committed change |
-
-Flow A is Flow B run repeatedly against a growing repo: same loop, same tools, same verification, same two invariants. The difference is that `create` supplies its own sequence of requests, one per pipeline stage, instead of taking one from you.
-
-If you have KiCad files already, you are in Flow B. Run [`copperhead init`](/reference/cli#copperhead-init) once to scaffold `docs/` from the existing schematic, then use `do`.
-
-## Flow A: from a markdown brief
-
-### 1. Write the brief
+## 1. Write the brief
 
 The brief is a plain markdown file. This is the entire input to the pipeline, so it is worth ten minutes. Save it as `brief.md`:
 
@@ -67,7 +59,7 @@ Anything you leave out, the agent picks a default and flags it `ASSUMED` in `doc
 
 Six ready-made briefs ship in [`examples/`](https://github.com/chouhanindustries/copperhead/tree/main/examples), graded by how much the agent has to hold in its head at once.
 
-### 2. Run the pipeline
+## 2. Run the pipeline
 
 ```bash
 mkdir usb-c-breakout && cd usb-c-breakout
@@ -77,7 +69,7 @@ copperhead create --brief ../brief.md
 
 The empty baseline commit matters: rollback snapshots need somewhere to roll back to.
 
-### 3. What runs
+## 3. What runs
 
 Eight stages, each one a full `do` loop with its own prompt and gate. A stage that does not pass its gate stops the pipeline.
 
@@ -96,7 +88,7 @@ The pipeline is resumable. Stage completion is inferred from repo state, so if a
 
 Stage 5 writes a `## Draft quality` section into `LAYOUT.md` saying exactly what is fine and what a human or a specialist tool should redo. Non-optimal is acceptable; unlabeled non-optimal is not.
 
-### 4. Read the output
+## 4. Read the output
 
 ```bash
 copperhead check   # ERC, DRC, drift, constraints. No LLM, no network.
@@ -104,33 +96,8 @@ copperhead check   # ERC, DRC, drift, constraints. No LLM, no network.
 
 Then read `docs/DECISIONS.md` for what was decided and why, and `docs/SPEC.md` for anything flagged `ASSUMED`.
 
-## Flow B: on an existing repo
-
-```bash
-cd my-board
-copperhead init                                    # once, scaffolds docs/
-copperhead do "add a 100nF decoupling cap on 3V3 at U2"
-```
-
-Each `do` run is one change: propose, edit, verify, propagate, commit. The agent reads the docs first, so it knows the whole design rather than the file in front of it, and a value change carries across every doc and schematic that references it.
-
-Two flags are worth knowing:
-
-```bash
-copperhead do "cut sleep current to under 10uA" --dry-run      # propose, write nothing
-copperhead do "fit this on 2 layers instead of 4" --interactive # approve before it writes
-```
-
-Use `--interactive` on changes where a refusal is a plausible correct answer. When a request would break a recorded budget, the run refuses with the arithmetic shown rather than quietly relaxing the budget, and that is worth watching happen.
-
-## Where the flows meet
-
-Both flows end in the same place: a repo where the KiCad files, the design docs, and the constraint registry all agree, and where `check` says so with no LLM in the loop.
-
-When they stop agreeing, [`copperhead sync`](/reference/cli#copperhead-sync) reconciles them under a fixed truth precedence: KiCad files are as-built facts, specs and budgets are requirements. Drift gets resolved, violations get reported and never auto-resolved.
-
 ## Next
 
-- [How it works](/guide/how-it-works): the loop and the two invariants
-- [Simple demo](/guide/simple-demo): Flow A end to end, one command
-- [CLI reference](/reference/cli): every command and flag
+- [Edit an existing board](/workflows/edit-existing-board/): every change after the first
+- [Simple demo](/getting-started/demo/): this flow end to end, one command
+- [`copperhead create`](/reference/cli/#copperhead-create): flags and stage reference
