@@ -9,9 +9,10 @@ export default defineConfig({
   cleanUrls: true,
   lastUpdated: true,
 
-  // Served at copperhead.animeshchouhan.ai/docs. The deploy workflow nests the
-  // build output in a docs/ folder so the artifact layout matches this base.
-  base: '/docs/',
+  // Served at the root of its own subdomain, docs.copperhead.chouhan.ai.
+  // The apex, copperhead.chouhan.ai, is a separate Cloudflare Worker (the
+  // copperhead-site repo), so Pages cannot own a path under it.
+  base: '/',
 
   head: [['meta', { name: 'theme-color', content: '#b87333' }]],
 
@@ -28,6 +29,8 @@ export default defineConfig({
           text: 'Guide',
           items: [
             { text: 'Getting started', link: '/guide/getting-started' },
+            { text: 'The two flows', link: '/guide/two-flows' },
+            { text: 'Simple demo', link: '/guide/simple-demo' },
             { text: 'How it works', link: '/guide/how-it-works' },
             { text: 'Docs as memory', link: '/guide/docs-as-memory' },
           ],

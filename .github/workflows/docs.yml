@@ -33,14 +33,14 @@ jobs:
       - run: npm ci
       - run: npm run docs:build
 
-      # Pages serves the artifact at the domain root, and the site is published
-      # under /docs, so the build output has to sit inside a docs/ folder.
-      # Nothing is placed at the root: that is copperhead.chouhan.ai, elsewhere.
+      # The docs own this subdomain outright, so the build output sits at the
+      # artifact root. The apex, copperhead.chouhan.ai, is served separately by
+      # the copperhead-site Cloudflare Worker and is not touched here.
       - name: Assemble Pages artifact
         run: |
-          mkdir -p _site/docs
-          cp -r docs/.vitepress/dist/. _site/docs/
-          echo 'copperhead.animeshchouhan.ai' > _site/CNAME
+          mkdir -p _site
+          cp -r docs/.vitepress/dist/. _site/
+          echo 'docs.copperhead.chouhan.ai' > _site/CNAME
 
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
