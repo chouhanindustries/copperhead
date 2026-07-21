@@ -7,7 +7,7 @@ import { runErc, runDrc, exportSvg, exportFab } from '../kicad/cli.js';
 import { formatViolations, type CheckReport } from '../kicad/report.js';
 import { listSymbols, listNets } from '../kicad/sexp.js';
 import { checkDrift } from '../memory/drift.js';
-import { saveConstraint } from '../memory/constraints.js';
+import { saveConstraint, classifyAffectsTarget, affectsTargetExists } from '../memory/constraints.js';
 import { openspecValidate } from '../openspec/cli.js';
 import { existsSync } from 'node:fs';
 import type { CopperheadConfig } from '../config.js';
@@ -99,7 +99,11 @@ export const TOOLS: ToolDef[] = [
     },
     requiresUnlock: false,
     handler: async (ctx, args) => {
-      const matches = await toolSearch(ctx.repoRoot, str(args, 'pattern'), args.glob as string | undefined);
+      const pattern = args.pattern;
+      if (typeof pattern !== 'string' || pattern.trim() === '') {
+        return 'error: search requires a non-empty regex in "pattern" (narrow by file with "glob", e.g. {"pattern": "GPIO", "glob": "**/*.md"}); to list files, use a broad pattern like "." with a glob';
+      }
+      const matches = await toolSearch(ctx.repoRoot, pattern, args.glob as string | undefined);
       if (!matches.length) return 'no matches';
       return matches.map((m) => `${m.file}:${m.line}: ${m.text}`).join('\n');
     },
@@ -250,7 +254,8 @@ export const TOOLS: ToolDef[] = [
     },
     requiresUnlock: false,
     handler: async (ctx) => {
-      if (!ctx.config.schematic) return 'no schematic configured';
+      if (!ctx.config.schematic)
+        return 'no schematic configured; ERC does not apply yet — skip it until a schematic exists and is set in .copperhead/config.json';
       const report = await runErc(path.join(ctx.repoRoot, ctx.config.schematic));
       ctx.lastErc = report;
       if (report.ok) ctx.ledger.clear('erc');
@@ -266,7 +271,8 @@ export const TOOLS: ToolDef[] = [
     },
     requiresUnlock: false,
     handler: async (ctx) => {
-      if (!ctx.config.board) return 'no board configured';
+      if (!ctx.config.board)
+        return 'no board configured; DRC does not apply yet — skip it until a board exists and is set in .copperhead/config.json';
       const report = await runDrc(path.join(ctx.repoRoot, ctx.config.board));
       ctx.lastDrc = report;
       if (report.ok) ctx.ledger.clear('drc');
@@ -366,6 +372,19 @@ export const TOOLS: ToolDef[] = [
     handler: async (ctx, args) => {
       const key = str(args, 'key');
       const affects = (args.affects as string[]) ?? [];
+      // An affects item whose target artifact is not built yet (no schematic or
+      // board configured, no BOM.md) has nothing to revisit; opening an
+      // obligation now only forces a ceremonial "not yet created" resolution.
+      // Defer it in the registry instead — reopenDeferredAffects re-opens it at
+      // the start of the first run where the artifact exists, which is when the
+      // revisit actually means something.
+      const deferred: string[] = [];
+      const openNow: string[] = [];
+      for (const item of affects) {
+        const target = classifyAffectsTarget(item);
+        if (target && !affectsTargetExists(target, ctx.repoRoot, ctx.config)) deferred.push(item);
+        else openNow.push(item);
+      }
       await saveConstraint(ctx.repoRoot, key, {
         ...(args.min !== undefined ? { min: args.min as number } : {}),
         ...(args.max !== undefined ? { max: args.max as number } : {}),
@@ -373,10 +392,18 @@ export const TOOLS: ToolDef[] = [
         ...(args.value !== undefined ? { value: args.value as string } : {}),
         source: str(args, 'source'),
         affects,
+        ...(deferred.length ? { deferred } : {}),
       });
-      ctx.ledger.onConstraintChange(key, affects);
+      ctx.ledger.onConstraintChange(key, openNow);
       ctx.ledger.clear('constraint-dual-write', key);
-      return `constraint ${key} recorded; revisit obligations opened for: ${affects.join(', ') || '(none)'}`;
+      const parts = [`constraint ${key} recorded`];
+      parts.push(`revisit obligations opened for: ${openNow.join(', ') || '(none)'}`);
+      if (deferred.length) {
+        parts.push(
+          `deferred until the target artifact exists (no resolve_affected needed now): ${deferred.join(', ')}`,
+        );
+      }
+      return parts.join('; ');
     },
   },
   {

@@ -6,7 +6,12 @@ import { loadConfig } from '../src/config.js';
 import { availableTools, dispatchTool, type RunContext } from '../src/agent/tools.js';
 import { ObligationsLedger } from '../src/agent/ledger.js';
 import { Transcript } from '../src/agent/transcript.js';
-import { saveConstraint } from '../src/memory/constraints.js';
+import {
+  saveConstraint,
+  loadConstraints,
+  classifyAffectsTarget,
+  reopenDeferredAffects,
+} from '../src/memory/constraints.js';
 import { syncVerify } from '../src/commands/sync.js';
 import { tempFixtureRepo } from './helpers.js';
 
@@ -183,6 +188,115 @@ describe('spec gating: structural edit lock (invariant 1)', () => {
       // The obligations stay open, and no decision is logged for a failed resolve.
       expect(ctx.ledger.openOfKind('affects-revisit')).toHaveLength(2);
       expect(ctx.decisions.some((d) => d.includes('CC1/CC2'))).toBe(false);
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it('record_constraint defers affects items whose artifact does not exist yet', async () => {
+    // Regression: during the docs-only create stages every affects item that
+    // targets the future schematic/board opened an obligation the model could
+    // only close with a ceremonial "no change needed: not yet created" call —
+    // 13 of them burned ~25 turns in a live spec-seed run.
+    const { repo, cleanup } = await tempFixtureRepo();
+    try {
+      await runInit({ repoRoot: repo });
+      const ctx = await makeCtx(repo);
+      ctx.editsUnlocked = true;
+      ctx.config = { ...ctx.config, schematic: null, board: null };
+      const res = await dispatchTool(ctx, 'record_constraint', {
+        key: 'manufacturing.copper_weight_oz',
+        value: '1',
+        source: 'brief',
+        affects: ['layout', 'stackup', 'R1'],
+      });
+      // R1 names a concrete part: opens now. layout/stackup wait for the board.
+      const open = ctx.ledger.openOfKind('affects-revisit').map((o) => o.detail);
+      expect(open).toEqual(['manufacturing.copper_weight_oz affects R1']);
+      expect(res).toContain('deferred until the target artifact exists');
+      expect(res).toContain('layout, stackup');
+      const registry = await loadConstraints(repo);
+      expect(registry['manufacturing.copper_weight_oz']!.deferred).toEqual(['layout', 'stackup']);
+      // the full affects list is preserved for propagation regardless
+      expect(registry['manufacturing.copper_weight_oz']!.affects).toEqual(['layout', 'stackup', 'R1']);
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it('deferred revisits re-open once their artifact exists, exactly once', async () => {
+    const { repo, cleanup } = await tempFixtureRepo();
+    try {
+      await runInit({ repoRoot: repo });
+      const ctx = await makeCtx(repo);
+      ctx.editsUnlocked = true;
+      ctx.config = { ...ctx.config, schematic: null, board: null };
+      await dispatchTool(ctx, 'record_constraint', {
+        key: 'mechanical.mounting_holes',
+        value: '24mm pitch',
+        source: 'brief',
+        affects: ['layout'],
+      });
+      expect(ctx.ledger.openOfKind('affects-revisit')).toHaveLength(0);
+
+      // board still absent: nothing re-opens, marker stays
+      const none = await reopenDeferredAffects(repo, ctx.config, () => {
+        throw new Error('should not open anything');
+      });
+      expect(none).toEqual([]);
+
+      // a later run has the board configured: the revisit re-opens in its ledger
+      const laterConfig = { ...ctx.config, board: 'hardware/x.kicad_pcb' };
+      const ledger = new ObligationsLedger();
+      const reopened = await reopenDeferredAffects(repo, laterConfig, (key, item) =>
+        ledger.add('affects-revisit', `${key} affects ${item}`, key),
+      );
+      expect(reopened).toEqual([{ key: 'mechanical.mounting_holes', item: 'layout' }]);
+      expect(ledger.openOfKind('affects-revisit').map((o) => o.detail)).toEqual([
+        'mechanical.mounting_holes affects layout',
+      ]);
+      // the marker is consumed: a third run re-opens nothing
+      expect((await loadConstraints(repo))['mechanical.mounting_holes']!.deferred).toBeUndefined();
+      expect(await reopenDeferredAffects(repo, laterConfig, () => {})).toEqual([]);
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it('classifies affects items by target artifact', () => {
+    expect(classifyAffectsTarget('layout')).toBe('board');
+    expect(classifyAffectsTarget('stackup')).toBe('board');
+    expect(classifyAffectsTarget('current-carrying traces')).toBe('board');
+    expect(classifyAffectsTarget('thermal')).toBe('board');
+    expect(classifyAffectsTarget('schematic')).toBe('schematic');
+    expect(classifyAffectsTarget('pin assignment')).toBe('schematic');
+    expect(classifyAffectsTarget('BOM')).toBe('bom');
+    // concrete refdes/nets are never deferrable
+    expect(classifyAffectsTarget('R1')).toBeNull();
+    expect(classifyAffectsTarget('U2 EN pullup')).toBeNull();
+  });
+
+  it('search rejects an empty pattern with a corrective message', async () => {
+    const { repo, cleanup } = await tempFixtureRepo();
+    try {
+      await runInit({ repoRoot: repo });
+      const ctx = await makeCtx(repo);
+      const res = await dispatchTool(ctx, 'search', { pattern: '' });
+      expect(res).toMatch(/^error:/);
+      expect(res).toContain('non-empty regex');
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it('run_erc without a schematic says ERC does not apply yet', async () => {
+    const { repo, cleanup } = await tempFixtureRepo();
+    try {
+      await runInit({ repoRoot: repo });
+      const ctx = await makeCtx(repo);
+      ctx.config = { ...ctx.config, schematic: null, board: null };
+      expect(await dispatchTool(ctx, 'run_erc', {})).toContain('does not apply yet');
+      expect(await dispatchTool(ctx, 'run_drc', {})).toContain('does not apply yet');
     } finally {
       await cleanup();
     }

@@ -21,7 +21,9 @@ const WORKFLOW = `Workflow for every run:
 4. Run run_erc after schematic edits (and run_drc after board edits). If violations: read them, fix, re-run.
 5. Run check_drift; update any doc that references a changed value/part/pin in the same run.
 6. Record every non-trivial decision with record_decision, and every stated/assumed/discovered constraint with record_constraint.
-7. Call finish with outcome "done" when everything is verified, or outcome "refuse" (citing the violated budget/constraint) if the request should not be done. finish will list any unmet obligations; resolve them and call it again.`;
+7. Call finish with outcome "done" when everything is verified, or outcome "refuse" (citing the violated budget/constraint) if the request should not be done. finish will list any unmet obligations; resolve them and call it again.
+
+Turns are the scarce resource, not tool calls: the run has a hard turn budget, and every tool call in one reply executes in the same turn. When calls are independent — multiple record_constraint or resolve_affected calls, several read_file calls — issue them together in a single reply instead of one per turn.`;
 
 export async function buildSystemPrompt(
   repoRoot: string,

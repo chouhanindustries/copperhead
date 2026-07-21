@@ -4,7 +4,7 @@ import { execa } from 'execa';
 import type { Msg, Provider, Turn } from './types.js';
 import { availableTools, dispatchTool, type RunContext } from './tools.js';
 import { buildSystemPrompt } from './prompts.js';
-import { loadConstraints } from '../memory/constraints.js';
+import { loadConstraints, reopenDeferredAffects } from '../memory/constraints.js';
 import { loadConfig, type CopperheadConfig } from '../config.js';
 import { Transcript } from './transcript.js';
 import { ObligationsLedger } from './ledger.js';
@@ -140,8 +140,29 @@ async function runWithMemory(opts: RunOptions, memory: SynapMemory | null): Prom
   };
 
   let provider = makeProvider(opts.model);
+  // Revisit obligations deferred while their artifact didn't exist re-open now
+  // if it does (must run before loadConstraints so the prompt sees the updated
+  // registry). They land in this run's fresh ledger, so finish gates on them.
+  const reopened = await reopenDeferredAffects(repoRoot, config, (key, item) =>
+    ctx.ledger.add('affects-revisit', `${key} affects ${item}`, key),
+  );
+  if (reopened.length) {
+    await transcript.event('deferred-affects-reopened', { reopened });
+    log(`re-opened ${reopened.length} deferred constraint revisit obligation(s)`);
+  }
   const constraints = await loadConstraints(repoRoot);
-  const basePrompt = await buildSystemPrompt(repoRoot, config, constraints);
+  let basePrompt = await buildSystemPrompt(repoRoot, config, constraints);
+  if (reopened.length) {
+    basePrompt += [
+      '',
+      '',
+      '## Reopened constraint revisits',
+      '',
+      'These constraints were recorded before their target artifact existed; the artifact now exists.',
+      'Revisit each against the design and close it with resolve_affected (batch the calls):',
+      ...reopened.map((r) => `- ${r.key} affects ${r.item}`),
+    ].join('\n');
+  }
   // Cross-run memory is appended after the repo's own docs and constraints so
   // that the in-repo sources of truth are what the model reads first.
   const recalled = memory ? await memory.recall(opts.request) : null;

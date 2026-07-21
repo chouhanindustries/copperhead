@@ -47,7 +47,7 @@ The system prompt SHALL include the verbatim rules of SPEC.md §4.3, the `budget
 - **THEN** the agent refuses or proposes an alternative, citing the budget from SPEC.md, and does not silently comply
 
 ### Requirement: Sync obligations block commit
-The loop SHALL maintain an obligations ledger fed by deterministic post-tool-call hooks: editing a KiCad file records ERC/DRC, drift-check, and changelog obligations; recording a constraint records dual-write verification and a revisit obligation for every item in its `affects[]`; a non-trivial decision records a `docs/DECISIONS.md` append obligation. The commit step SHALL refuse to run while any obligation is open, and the ledger's final state SHALL be written into the run's `summary.md`.
+The loop SHALL maintain an obligations ledger fed by deterministic post-tool-call hooks: editing a KiCad file records ERC/DRC, drift-check, and changelog obligations; recording a constraint records dual-write verification and a revisit obligation for every item in its `affects[]` whose target artifact exists — an item targeting a not-yet-built artifact (schematic, board, BOM before their pipeline stage) is marked `deferred` in the registry instead and re-opens at the start of the first run where the artifact exists; a non-trivial decision records a `docs/DECISIONS.md` append obligation. The commit step SHALL refuse to run while any obligation is open, and the ledger's final state SHALL be written into the run's `summary.md`.
 
 #### Scenario: Stale doc blocks commit
 - **WHEN** a run edits a schematic value referenced by BOM.md but has not yet updated the doc
@@ -56,6 +56,10 @@ The loop SHALL maintain an obligations ledger fed by deterministic post-tool-cal
 #### Scenario: Constraint change forces affects revisit
 - **WHEN** a constraint with `affects: ["U2", "R7-absent"]` is modified during a run
 - **THEN** the run cannot commit until each affected item is explicitly resolved as changed or "no change needed" with a reason
+
+#### Scenario: Deferred revisit for unbuilt artifacts
+- **WHEN** a docs-only stage records a constraint with `affects: ["layout", "R1"]` before any board exists
+- **THEN** only the R1 revisit obligation opens now; the layout item is marked deferred and its obligation re-opens automatically at the start of the first run where a board is configured
 
 #### Scenario: Aborted run shows open obligations
 - **WHEN** a run fails or is aborted with obligations open
