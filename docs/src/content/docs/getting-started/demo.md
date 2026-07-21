@@ -24,7 +24,7 @@ examples/simple/usb-c-breakout.md
 You can pass normal `create` flags after `--`:
 
 ```bash
-npm run demo:simple -- --model claude
+npm run demo:simple -- --model codex
 npm run demo:simple -- --interactive
 ```
 
@@ -40,4 +40,4 @@ The create pipeline is resumable. If the agent stops during a stage, rerun the s
 
 Run transcripts stay in `.copperhead/runs/` inside the demo repo. They are ignored by git, so failed attempts do not make the demo repo dirty.
 
-The demo still uses the real toolchain, so it requires the same things as a normal run: Node.js, `kicad-cli`, git, and either `OPENAI_API_KEY` or `ANTHROPIC_API_KEY`.
+The demo still uses the real toolchain, so it requires the same things as a normal run: Node.js, `kicad-cli`, git, and either an authenticated local Codex CLI or an OpenAI/Anthropic API key.

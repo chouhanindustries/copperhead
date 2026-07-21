@@ -61,6 +61,7 @@ The constraint registry: machine-readable counterparts to the constraints stated
 | `OPENAI_API_KEY` | OpenAI credentials. |
 | `ANTHROPIC_API_KEY` | Anthropic credentials. |
 | `COPPERHEAD_MODEL` | Default model. Overrides config, overridden by `--model`. |
+| `COPPERHEAD_CODEX_PATH` | Optional path to the local `codex` executable. Defaults to `codex` on `PATH`. |
 | `SYNAP_API_KEY` | Optional. Enables cross-run memory. Absent, copperhead behaves exactly as before and makes no Synap calls. |
 | `SYNAP_USER_ID` | Optional memory scope. Defaults to your `git config user.email`. |
 | `SYNAP_CUSTOMER_ID` | Optional memory scope. Defaults to `copperhead`; only matters on B2B Synap instances. |
@@ -78,7 +79,9 @@ Resolved in strict precedence order:
 3. `model` in `.copperhead/config.json`
 4. `gpt-5` if `OPENAI_API_KEY` is set, otherwise `claude` if `ANTHROPIC_API_KEY` is set
 
-If none of these produce a model, the command exits with an error telling you the four ways to set one. `check` never needs a model, since it makes no LLM calls at all.
+Set any of the first three to `codex` to use the installed Codex CLI and its saved ChatGPT login without a model API key. Plain `codex` uses your Codex default; `codex:<model-id>` selects an explicit Codex model. Run `codex login status` to verify authentication.
+
+If none of these produce a model, the command exits with an error telling you the available ways to set one. `check` never needs a model, since it makes no LLM calls at all.
 
 ## Files copperhead writes
 

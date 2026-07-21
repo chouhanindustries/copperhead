@@ -57,6 +57,7 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.39.0",
+    "@openai/codex-sdk": "^0.144.6",
     "commander": "^12.1.0",
     "execa": "^9.5.2",
     "openai": "^4.87.3"

@@ -101,7 +101,7 @@ program
   .command('do')
   .description('the core loop: propose, edit, verify, propagate, commit')
   .argument('<request>', 'the change request in natural language')
-  .option('--model <model>', 'gpt-5 | claude (or a full model id)')
+  .option('--model <model>', 'codex | gpt-5 | claude (or a provider-specific model id)')
   .option('--max-turns <n>', 'turn budget for this run')
   .option('--allow-dirty', 'allow a dirty tree (snapshot via git stash create)')
   .option('--dry-run', 'propose the diff, write nothing')
@@ -177,7 +177,7 @@ program
   .command('create')
   .description('Mode A: full pipeline from a product brief to the output package')
   .requiredOption('--brief <file>', 'product brief (markdown)')
-  .option('--model <model>', 'gpt-5 | claude')
+  .option('--model <model>', 'codex | gpt-5 | claude')
   .option('--interactive', 're-enable the human gates (spec approval, pre-export)')
   .action(async (opts: { brief: string; model?: string; interactive?: boolean }) => {
     const repo = repoOf(program.opts());

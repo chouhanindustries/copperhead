@@ -9,12 +9,16 @@ import { tempFixtureRepo } from './helpers.js';
 
 /**
  * Live agent-loop tests (AC-3.x). These call a real LLM: they run only when an
- * API key is present, and each asserts on repo state and the transcript.
- * Provider parity (AC-3.10): the suite runs for every provider with a key.
+ * provider is configured, and each asserts on repo state and the transcript.
+ * Provider parity (AC-3.10): the suite runs for every configured provider.
  */
 const providers: { model: string; key: string | undefined }[] = [
   { model: process.env.COPPERHEAD_TEST_OPENAI_MODEL ?? 'gpt-5', key: process.env.OPENAI_API_KEY },
   { model: process.env.COPPERHEAD_TEST_ANTHROPIC_MODEL ?? 'claude', key: process.env.ANTHROPIC_API_KEY },
+  {
+    model: process.env.COPPERHEAD_TEST_CODEX_MODEL ?? 'codex',
+    key: process.env.COPPERHEAD_TEST_CODEX === '1' ? 'saved-codex-login' : undefined,
+  },
 ];
 
 async function setupRepo(): Promise<{ repo: string; cleanup: () => Promise<void> }> {

@@ -16,6 +16,7 @@ import { openspecArchive } from '../openspec/cli.js';
 import { existsSync } from 'node:fs';
 import { OpenAIProvider } from './providers/openai.js';
 import { AnthropicProvider } from './providers/anthropic.js';
+import { CodexProvider } from './providers/codex.js';
 import { openSynapMemory, type RunRecord, type SynapMemory } from '../memory/synap.js';
 
 export interface RunOptions {
@@ -48,6 +49,11 @@ export interface RunResult {
 }
 
 export function makeProvider(model: string): Provider {
+  if (model === 'codex' || model.startsWith('codex:')) {
+    const codexModel = model.startsWith('codex:') ? model.slice('codex:'.length) : undefined;
+    if (codexModel === '') throw new Error('codex model override cannot be empty; use "codex" or "codex:<model-id>"');
+    return new CodexProvider({ ...(codexModel ? { model: codexModel } : {}) });
+  }
   if (model === 'claude' || model.startsWith('claude')) {
     return new AnthropicProvider(model === 'claude' ? undefined : model);
   }
