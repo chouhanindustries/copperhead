@@ -7,12 +7,15 @@
 - [x] 1.3 Constrain Codex to a read-only, no-approval, no-web reasoning thread.
 - [x] 1.4 Generate structured output from the currently exposed Copperhead tool catalog and validate returned calls.
 - [x] 1.5 Preserve one Codex thread across Copperhead loop turns and map token usage.
+- [x] 1.6 Retry one rejected structured turn with validation feedback before failing the run.
+- [x] 1.7 Allocate a unique temporary working directory per provider instance.
 
 ## 2. Selection and configuration
 
 - [x] 2.1 Route `codex` and `codex:<model-id>` in `makeProvider`.
 - [x] 2.2 Accept `--model codex` without an OpenAI or Anthropic API key.
 - [x] 2.3 Add `COPPERHEAD_CODEX_PATH` as an optional CLI path override.
+- [x] 2.4 Load the Codex SDK lazily as an optional peer dependency.
 
 ## 3. Tests and documentation
 

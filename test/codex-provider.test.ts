@@ -1,3 +1,4 @@
+import { rm } from 'node:fs/promises';
 import { describe, expect, it, vi } from 'vitest';
 import { CodexProvider } from '../src/agent/providers/codex.js';
 import { makeProvider } from '../src/agent/loop.js';
@@ -14,10 +15,35 @@ const readTool: ToolSchema = {
 };
 
 describe('CodexProvider', () => {
-  it('is selected by the codex model namespace without an API key', () => {
-    expect(makeProvider('codex').name).toBe('codex');
-    expect(makeProvider('codex:gpt-test').name).toBe('codex');
-    expect(() => makeProvider('codex:')).toThrow('codex model override cannot be empty');
+  it('is selected by the codex model namespace without an API key', async () => {
+    expect((await makeProvider('codex')).name).toBe('codex');
+    expect((await makeProvider('codex:gpt-test')).name).toBe('codex');
+    await expect(makeProvider('codex:')).rejects.toThrow('codex model override cannot be empty');
+  });
+
+  it('allocates a unique temporary working directory per provider instance', async () => {
+    const directories: string[] = [];
+    const client = {
+      startThread: (options?: { workingDirectory?: string }) => {
+        directories.push(options?.workingDirectory ?? '');
+        return {
+          run: async () => ({
+            finalResponse: JSON.stringify({ text: 'done', toolCalls: [] }),
+            usage: null,
+          }),
+        };
+      },
+    };
+
+    await Promise.all([
+      new CodexProvider({ client }).chat([{ role: 'user', content: 'first' }], [readTool]),
+      new CodexProvider({ client }).chat([{ role: 'user', content: 'second' }], [readTool]),
+    ]);
+
+    expect(directories).toHaveLength(2);
+    expect(directories[0]).not.toBe(directories[1]);
+    expect(directories.every((directory) => directory.includes('copperhead-codex-'))).toBe(true);
+    await Promise.all(directories.map((directory) => rm(directory, { recursive: true, force: true })));
   });
 
   it('uses a read-only Codex thread and maps structured tool calls', async () => {
@@ -107,46 +133,60 @@ describe('CodexProvider', () => {
     expect(run.mock.calls[1]![0]).not.toContain('<prior_assistant>');
   });
 
-  it('rejects a tool name outside the currently exposed catalog', async () => {
+  it('retries an unavailable tool with the validation error and unaccepted input', async () => {
+    const run = vi
+      .fn()
+      .mockResolvedValueOnce({
+        finalResponse: JSON.stringify({
+          text: '',
+          toolCalls: [{ id: 'call-1', name: 'edit_file', arguments: '{}' }],
+        }),
+        usage: { input_tokens: 10, output_tokens: 2 },
+      })
+      .mockResolvedValueOnce({
+        finalResponse: JSON.stringify({
+          text: 'I will inspect first.',
+          toolCalls: [{ id: 'call-2', name: 'read_file', arguments: '{"path":"docs/SPEC.md"}' }],
+        }),
+        usage: { input_tokens: 7, output_tokens: 3 },
+      });
     const provider = new CodexProvider({
       workingDirectory: process.cwd(),
-      client: {
-        startThread: () => ({
-          run: async () => ({
-            finalResponse: JSON.stringify({
-              text: '',
-              toolCalls: [{ id: 'call-1', name: 'edit_file', arguments: '{}' }],
-            }),
-            usage: null,
-          }),
-        }),
-      },
+      client: { startThread: () => ({ run }) },
     });
 
-    await expect(provider.chat([{ role: 'user', content: 'edit' }], [readTool])).rejects.toThrow(
-      'unavailable tool "edit_file"',
-    );
+    const turn = await provider.chat([{ role: 'user', content: 'edit' }], [readTool]);
+
+    expect(run).toHaveBeenCalledTimes(2);
+    expect(run.mock.calls[1]![0]).toContain('unavailable tool "edit_file"');
+    expect(run.mock.calls[1]![0]).toContain('<user_request>\nedit\n</user_request>');
+    expect(run.mock.calls[1]![0]).toContain('read_file');
+    expect(turn).toEqual({
+      text: 'I will inspect first.',
+      toolCalls: [{ id: 'call-2', name: 'read_file', args: { path: 'docs/SPEC.md' } }],
+      usage: { inputTokens: 17, outputTokens: 5 },
+    });
   });
 
   it('rejects malformed JSON tool arguments', async () => {
+    const run = vi.fn().mockResolvedValue({
+      finalResponse: JSON.stringify({
+        text: '',
+        toolCalls: [{ id: 'call-1', name: 'read_file', arguments: '{nope' }],
+      }),
+      usage: null,
+    });
     const provider = new CodexProvider({
       workingDirectory: process.cwd(),
-      client: {
-        startThread: () => ({
-          run: async () => ({
-            finalResponse: JSON.stringify({
-              text: '',
-              toolCalls: [{ id: 'call-1', name: 'read_file', arguments: '{nope' }],
-            }),
-            usage: null,
-          }),
-        }),
-      },
+      client: { startThread: () => ({ run }) },
     });
 
     await expect(provider.chat([{ role: 'user', content: 'read' }], [readTool])).rejects.toThrow(
       'invalid JSON arguments',
     );
+    expect(run).toHaveBeenCalledTimes(2);
+    expect(run.mock.calls[1]![0]).toContain('invalid JSON arguments');
+    expect(run.mock.calls[1]![0]).toContain('<user_request>\nread\n</user_request>');
   });
 
   it('preserves rate-limit status for the shared retry wrapper', async () => {

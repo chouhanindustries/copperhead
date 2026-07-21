@@ -1,7 +1,6 @@
-import { mkdir } from 'node:fs/promises';
+import { mkdir, mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { Codex, type ThreadOptions, type TurnOptions } from '@openai/codex-sdk';
 import type { ChatOpts, Msg, Provider, ToolCall, ToolSchema, Turn } from '../types.js';
 
 interface CodexUsage {
@@ -15,22 +14,28 @@ interface CodexTurnLike {
 }
 
 interface CodexThreadLike {
-  run(input: string, options?: TurnOptions): Promise<CodexTurnLike>;
+  run(input: string, options?: { outputSchema?: Record<string, unknown> }): Promise<CodexTurnLike>;
 }
 
-interface CodexClientLike {
-  startThread(options?: ThreadOptions): CodexThreadLike;
+export interface CodexClientLike {
+  startThread(options?: {
+    model?: string;
+    workingDirectory?: string;
+    skipGitRepoCheck?: boolean;
+    sandboxMode?: 'read-only';
+    approvalPolicy?: 'never';
+    networkAccessEnabled?: boolean;
+    webSearchMode?: 'disabled';
+  }): CodexThreadLike;
 }
 
 export interface CodexProviderOptions {
   /** Omit to use the model selected by the user's Codex configuration. */
   model?: string;
-  /** Defaults to `codex` on PATH; override with COPPERHEAD_CODEX_PATH. */
-  codexPath?: string;
-  /** Isolated from the target repo so Codex cannot bypass Copperhead's read tools. */
+  /** Defaults to a unique temporary directory; this is not a read-confinement boundary. */
   workingDirectory?: string;
-  /** Test seam; production uses the official Codex SDK. */
-  client?: CodexClientLike;
+  /** Production injects the lazily loaded official Codex SDK; tests use a fake. */
+  client: CodexClientLike;
 }
 
 interface StructuredTurn {
@@ -47,29 +52,23 @@ export class CodexProvider implements Provider {
   readonly name = 'codex';
 
   private readonly model: string | undefined;
-  private readonly workingDirectory: string;
+  private workingDirectory: string | null;
   private readonly client: CodexClientLike;
   private thread: CodexThreadLike | null = null;
   private messageCursor = 0;
 
-  constructor(options: CodexProviderOptions = {}) {
+  constructor(options: CodexProviderOptions) {
     this.model = options.model;
-    this.workingDirectory = options.workingDirectory ?? path.join(tmpdir(), 'copperhead-codex-provider');
-    this.client =
-      options.client ??
-      new Codex({
-        // Intentionally use the user's installed CLI, not an API key or the
-        // SDK's bundled binary. That is what reuses `codex login` state.
-        codexPathOverride: options.codexPath || process.env.COPPERHEAD_CODEX_PATH || 'codex',
-      });
+    this.workingDirectory = options.workingDirectory ?? null;
+    this.client = options.client;
   }
 
   async chat(messages: Msg[], tools: ToolSchema[], _opts: ChatOpts = {}): Promise<Turn> {
-    await mkdir(this.workingDirectory, { recursive: true });
+    const workingDirectory = await this.ensureWorkingDirectory();
     if (!this.thread) {
       this.thread = this.client.startThread({
         ...(this.model ? { model: this.model } : {}),
-        workingDirectory: this.workingDirectory,
+        workingDirectory,
         skipGitRepoCheck: true,
         sandboxMode: 'read-only',
         approvalPolicy: 'never',
@@ -78,10 +77,47 @@ export class CodexProvider implements Provider {
       });
     }
 
-    const prompt = renderTurnPrompt(messages, this.messageCursor, tools);
-    let result: CodexTurnLike;
+    const cursor = this.messageCursor;
+    const schema = turnSchema(tools);
+    const allowedTools = new Set(tools.map((tool) => tool.name));
+    const attempts: CodexTurnLike[] = [];
+    let result = await this.runThread(renderTurnPrompt(messages, cursor, tools), schema);
+    attempts.push(result);
+
+    let parsed: ReturnType<typeof parseStructuredTurn>;
     try {
-      result = await this.thread.run(prompt, { outputSchema: turnSchema(tools) });
+      parsed = parseStructuredTurn(result.finalResponse, allowedTools);
+    } catch (err) {
+      const validationError = (err as Error).message;
+      result = await this.runThread(renderCorrectionPrompt(messages, cursor, tools, validationError), schema);
+      attempts.push(result);
+      parsed = parseStructuredTurn(result.finalResponse, allowedTools);
+    }
+
+    // The input remains unseen until Copperhead accepts a structured turn.
+    this.messageCursor = messages.length;
+    return {
+      text: parsed.text.trim() || null,
+      toolCalls: parsed.toolCalls,
+      usage: {
+        inputTokens: attempts.reduce((sum, attempt) => sum + (attempt.usage?.input_tokens ?? 0), 0),
+        outputTokens: attempts.reduce((sum, attempt) => sum + (attempt.usage?.output_tokens ?? 0), 0),
+      },
+    };
+  }
+
+  private async ensureWorkingDirectory(): Promise<string> {
+    if (this.workingDirectory) {
+      await mkdir(this.workingDirectory, { recursive: true });
+      return this.workingDirectory;
+    }
+    this.workingDirectory = await mkdtemp(path.join(tmpdir(), 'copperhead-codex-'));
+    return this.workingDirectory;
+  }
+
+  private async runThread(prompt: string, outputSchema: Record<string, unknown>): Promise<CodexTurnLike> {
+    try {
+      return await this.thread!.run(prompt, { outputSchema });
     } catch (err) {
       const original = err as Error & { status?: number; statusCode?: number };
       const enhanced = new Error(
@@ -92,18 +128,6 @@ export class CodexProvider implements Provider {
       if (original.statusCode !== undefined) Object.assign(enhanced, { statusCode: original.statusCode });
       throw enhanced;
     }
-
-    // Advance only after a completed turn so a retry still receives the input.
-    this.messageCursor = messages.length;
-    const parsed = parseStructuredTurn(result.finalResponse, new Set(tools.map((tool) => tool.name)));
-    return {
-      text: parsed.text.trim() || null,
-      toolCalls: parsed.toolCalls,
-      usage: {
-        inputTokens: result.usage?.input_tokens ?? 0,
-        outputTokens: result.usage?.output_tokens ?? 0,
-      },
-    };
   }
 }
 
@@ -149,6 +173,16 @@ function renderInitialMessage(message: Msg): string {
     case 'tool':
       return `<tool_result call_id="${message.toolCallId}">\n${message.content}\n</tool_result>`;
   }
+}
+
+function renderCorrectionPrompt(messages: Msg[], cursor: number, tools: ToolSchema[], validationError: string): string {
+  return [
+    'Copperhead rejected your previous structured turn.',
+    `<validation_error>\n${validationError}\n</validation_error>`,
+    'Return one corrected replacement turn using only the current Copperhead tool catalog.',
+    'The original Copperhead input is repeated below because it has not been accepted yet:',
+    renderTurnPrompt(messages, cursor, tools),
+  ].join('\n\n');
 }
 
 function turnSchema(tools: ToolSchema[]): Record<string, unknown> {

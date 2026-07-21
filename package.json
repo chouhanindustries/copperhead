@@ -57,7 +57,6 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.39.0",
-    "@openai/codex-sdk": "^0.144.6",
     "commander": "^12.1.0",
     "execa": "^9.5.2",
     "openai": "^4.87.3"
@@ -66,10 +65,19 @@
     "@maximem/synap-js-sdk": "^0.3.0"
   },
   "devDependencies": {
+    "@openai/codex-sdk": "^0.144.6",
     "@types/node": "^22.13.10",
     "tsx": "^4.19.3",
     "typescript": "^5.8.2",
     "vitest": "^3.0.8"
+  },
+  "peerDependencies": {
+    "@openai/codex-sdk": "^0.144.6"
+  },
+  "peerDependenciesMeta": {
+    "@openai/codex-sdk": {
+      "optional": true
+    }
   },
   "allowScripts": {
     "esbuild@0.28.1": true,

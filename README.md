@@ -53,6 +53,7 @@ Starting from nothing instead? Write a product brief and run `copperhead create 
 No model API key is needed when Codex CLI is already authenticated:
 
 ```bash
+npm install -g @openai/codex-sdk   # optional adapter, loaded only for --model codex
 codex login status
 copperhead do "rename net KEY_DAH to KEY_DASH" --model codex
 ```

@@ -15,7 +15,7 @@ Copperhead currently requires a metered OpenAI or Anthropic API key for every ag
 
 ## Impact
 
-- New runtime dependency: `@openai/codex-sdk`.
+- New optional peer dependency: `@openai/codex-sdk`, loaded only when the Codex provider is selected.
 - New optional environment variable: `COPPERHEAD_CODEX_PATH` for installations where `codex` is not on `PATH`.
 - No change to `check`/`verify`: it remains LLM-free and network-free.
 - Direct OpenAI and Anthropic providers remain supported unchanged.

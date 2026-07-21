@@ -24,7 +24,7 @@ examples/simple/usb-c-breakout.md
 You can pass normal `create` flags after `--`:
 
 ```bash
-npm run demo:simple -- --model codex
+npm run demo:simple -- --model claude
 npm run demo:simple -- --interactive
 ```
 

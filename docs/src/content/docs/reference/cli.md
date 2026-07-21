@@ -151,4 +151,4 @@ These are npm scripts in a copperhead checkout, not installed CLI commands.
 | `npm run typecheck` | Type-checks without emitting. |
 | `npm run build` | Compiles to `dist/`. |
 
-Pass `create` flags through after `--`, for example `npm run demo:simple -- --model codex`. Override the target directory with `COPPERHEAD_DEMO_DIR`.
+Pass `create` flags through after `--`, for example `npm run demo:simple -- --model claude`. Override the target directory with `COPPERHEAD_DEMO_DIR`.

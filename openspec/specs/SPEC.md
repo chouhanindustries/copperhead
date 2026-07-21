@@ -352,7 +352,7 @@ interface Provider {
   "schematic": "hardware/open-telegraph.kicad_sch",
   "board": "hardware/open-telegraph.kicad_pcb",
   "docs": "docs/",
-  "model": "codex",
+  "model": "gpt-5",
   "maxTurns": 40,
   "budgets": { "sleep_current_uA": 25 }
 }
