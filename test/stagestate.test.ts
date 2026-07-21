@@ -146,6 +146,52 @@ describe('create-state records', () => {
     }
   });
 
+  it('a parseable record with a missing shape degrades to unrecorded, never a crash (AC-9.8)', async () => {
+    const { repo, cleanup } = await tempFixtureRepo();
+    try {
+      // hand edit / partial write: schematic's record lost its fields
+      await mkdir(path.join(repo, '.copperhead'), { recursive: true });
+      await writeFile(
+        createStatePath(repo),
+        JSON.stringify({
+          version: 1,
+          stages: {
+            schematic: {},
+            'part-selection': { completedAt: 't', runId: 'r', inputs: { spec: 'aaa' }, outputs: {} },
+          },
+        }),
+        'utf8',
+      );
+      const { state, warning } = await loadCreateState(repo);
+      expect(warning).toContain('schematic');
+      expect(state.stages['schematic']).toBeUndefined(); // demoted to unrecorded
+      expect(state.stages['part-selection']).toBeDefined(); // valid sibling survives
+
+      // classification must not throw on the malformed record (the reproduced TypeError)
+      const res = await classifyStages({
+        repoRoot: repo,
+        config: CONFIG,
+        stages: [{ name: 'schematic', consumes: ['bom'] as ArtifactName[], isComplete: () => true }],
+      });
+      expect(res.classifications[0]!.status).toBe('assumed-complete'); // probe decides, hashes never touched
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it('an unsupported version degrades to no records with a warning', async () => {
+    const { repo, cleanup } = await tempFixtureRepo();
+    try {
+      await mkdir(path.join(repo, '.copperhead'), { recursive: true });
+      await writeFile(createStatePath(repo), JSON.stringify({ version: 2, stages: {} }), 'utf8');
+      const { state, warning } = await loadCreateState(repo);
+      expect(state.stages).toEqual({});
+      expect(warning).toContain('version');
+    } finally {
+      await cleanup();
+    }
+  });
+
   it('a corrupt state file degrades to no records with a warning, never a throw', async () => {
     const { repo, cleanup } = await tempFixtureRepo();
     try {

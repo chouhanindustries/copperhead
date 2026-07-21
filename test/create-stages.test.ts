@@ -17,7 +17,8 @@ import { tempFixtureRepo } from './helpers.js';
  * runCheck shelling out to kicad-cli for ERC/DRC. These tests are about
  * pipeline record/staleness semantics, not KiCad itself, so a shim answers
  * with a clean JSON report — deterministic and hermetic on machines without
- * KiCad installed.
+ * KiCad installed. Mutating process.env.PATH here is safe only because vitest
+ * isolates test files in separate workers; the shim never leaks to other files.
  */
 let kicadShimDir: string;
 let realPath: string;
@@ -597,6 +598,87 @@ describe('create pipeline: records, staleness, targeted re-runs', () => {
       await cleanup();
     }
   }, 120_000);
+
+  it('--dry-run with --from prints the descendant plan and writes nothing', async () => {
+    const { repo, brief, cleanup } = await createFixture();
+    try {
+      const lines: string[] = [];
+      const res = await runCreate(createOpts(repo, brief, lines, { dryRun: true, from: 'layout-draft' }));
+      expect(res.ok).toBe(true);
+      expect(lines.join('\n')).toContain('would run (--from layout-draft): layout-draft → outputs → devplan');
+      expect(ranStages(lines)).toEqual([]);
+      const { stdout } = await execa('git', ['status', '--porcelain'], { cwd: repo });
+      expect(stdout).toBe('');
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it('a mid-cascade failure returns ok:false and the next default run re-derives the stale set', async () => {
+    const { repo, brief, cleanup } = await createFixture();
+    try {
+      await runCreate(createOpts(repo, brief, []));
+      await runCreate(createOpts(repo, brief, [], { stage: 'schematic', provider: finishOnlyProvider() }));
+
+      // part-selection revises the BOM, then the queued schematic reconcile refuses
+      const lines: string[] = [];
+      const res = await runCreate(
+        createOpts(repo, brief, lines, {
+          stage: 'part-selection',
+          provider: new StageScriptProvider({
+            'part-selection': editBomScript(),
+            schematic: [finishTurn('refuse')],
+          }),
+        }),
+      );
+      expect(res.ok).toBe(false);
+      expect(res.completed).toEqual(['part-selection']);
+      expect(lines.join('\n')).toContain('stage schematic did not complete (refused)');
+
+      // staleness is re-derived from records + working tree, not from the failed run
+      const lines2: string[] = [];
+      const res2 = await runCreate(createOpts(repo, brief, lines2, { provider: finishOnlyProvider() }));
+      expect(res2.ok).toBe(true);
+      expect(ranStages(lines2)).toEqual(['schematic', 'outputs']);
+    } finally {
+      await cleanup();
+    }
+  }, 120_000);
+
+  it('a --from failure mid-list stops with ok:false and the completed prefix', async () => {
+    const { repo, brief, cleanup } = await createFixture();
+    try {
+      await runCreate(createOpts(repo, brief, []));
+      const lines: string[] = [];
+      const res = await runCreate(
+        createOpts(repo, brief, lines, {
+          from: 'layout-draft',
+          provider: new StageScriptProvider({ outputs: [finishTurn('refuse')] }),
+        }),
+      );
+      expect(res.ok).toBe(false);
+      expect(res.completed).toEqual(['layout-draft']);
+      expect(lines.join('\n')).toContain(
+        'stage outputs did not complete (refused); a plain copperhead create resumes from here',
+      );
+    } finally {
+      await cleanup();
+    }
+  }, 120_000);
+
+  it('targeted modes warn when an upstream stage is incomplete', async () => {
+    const { repo, brief, cleanup } = await createFixture();
+    try {
+      // fresh fixture: firmware (devplan's only incomplete ancestor) has not run yet
+      const lines: string[] = [];
+      await runCreate(createOpts(repo, brief, lines, { dryRun: true, stage: 'devplan' }));
+      expect(lines).toContain(
+        'warning: upstream stage(s) firmware are incomplete; devplan may run against missing inputs',
+      );
+    } finally {
+      await cleanup();
+    }
+  });
 
   it('--dry-run with --stage prints the targeted plan and writes nothing', async () => {
     const { repo, brief, cleanup } = await createFixture();

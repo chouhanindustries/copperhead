@@ -43,7 +43,12 @@ const sha256 = (s: string | Buffer): string => createHash('sha256').update(s).di
 /** Never part of a design artifact; walking .git would also make a repo-root schematic pathological. */
 const SKIP_DIRS = new Set(['.git', 'node_modules', '.copperhead']);
 
-/** Every file under dir, recursively, as absolute paths (sorted for determinism). */
+/**
+ * Every file under dir, recursively, as absolute paths (sorted for
+ * determinism). No symlink-cycle guard is needed: Dirent.isDirectory() is
+ * false for symlinks, so a linked directory degrades to a skipped entry —
+ * do not "fix" this with stat(), which would follow the link and can loop.
+ */
 async function walkFiles(dir: string): Promise<string[]> {
   if (!existsSync(dir)) return [];
   const out: string[] = [];
@@ -166,9 +171,19 @@ export function createStatePath(repoRoot: string): string {
 
 const emptyState = (): CreateState => ({ version: 1, stages: {} });
 
+/** A record missing any field would crash classification; validate per record, not just the envelope. */
+function isValidRecord(rec: unknown): rec is StageRecord {
+  if (typeof rec !== 'object' || rec === null) return false;
+  const r = rec as Partial<StageRecord>;
+  const isMap = (v: unknown): boolean => typeof v === 'object' && v !== null && !Array.isArray(v);
+  return typeof r.completedAt === 'string' && typeof r.runId === 'string' && isMap(r.inputs) && isMap(r.outputs);
+}
+
 /**
- * A missing, corrupt, or unparseable state file degrades to "no records" with
- * a warning — the contract fallback probes then decide — never an abort.
+ * A missing, corrupt, unparseable, or wrong-version state file degrades to
+ * "no records" with a warning, and an individually malformed record (hand
+ * edit, partial write) degrades to "unrecorded" for that stage only — the
+ * completion probes then decide — never an abort (AC-9.8).
  */
 export async function loadCreateState(
   repoRoot: string,
@@ -177,10 +192,30 @@ export async function loadCreateState(
   if (!existsSync(p)) return { state: emptyState(), warning: null };
   try {
     const raw = JSON.parse(await readFile(p, 'utf8')) as Partial<CreateState>;
-    if (typeof raw !== 'object' || raw === null || typeof raw.stages !== 'object' || raw.stages === null) {
+    if (
+      typeof raw !== 'object' ||
+      raw === null ||
+      typeof raw.stages !== 'object' ||
+      raw.stages === null ||
+      Array.isArray(raw.stages)
+    ) {
       throw new Error('missing stages map');
     }
-    return { state: { version: 1, stages: raw.stages as CreateState['stages'] }, warning: null };
+    if (raw.version !== 1) {
+      throw new Error(`unsupported version ${JSON.stringify(raw.version ?? null)}`);
+    }
+    const stages: CreateState['stages'] = {};
+    const dropped: string[] = [];
+    for (const [name, rec] of Object.entries(raw.stages as Record<string, unknown>)) {
+      if (isValidRecord(rec)) stages[name] = rec;
+      else dropped.push(name);
+    }
+    return {
+      state: { version: 1, stages },
+      warning: dropped.length
+        ? `dropped malformed completion record(s) in ${path.relative(repoRoot, p)} for: ${dropped.join(', ')} (treated as unrecorded)`
+        : null,
+    };
   } catch (err) {
     return {
       state: emptyState(),

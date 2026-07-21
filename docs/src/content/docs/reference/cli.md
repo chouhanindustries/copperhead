@@ -122,14 +122,14 @@ copperhead create --brief brief.md --dry-run        # classify stages, write not
 | `--model <model>` | `gpt-5` or `claude`. |
 | `--interactive` | Re-enable the human gates: spec approval, a pause before export, and confirmation before stale stages reconcile. |
 | `--stage <name>` | Re-run exactly one stage against the existing artifacts (revise, not recreate), then reconcile every stage that consumes an output the re-run actually changed. Mutually exclusive with `--from`. |
-| `--from <name>` | Force-re-run the named stage and its graph descendants — the stages reachable through consumed artifacts, not simply every later stage. |
+| `--from <name>` | Force-re-run the named stage and its graph descendants: the stages reachable through consumed artifacts, not simply every later stage. |
 | `--dry-run` | Print each stage's classification (`fresh`, `stale` with the changed artifacts, `incomplete`, `assumed-complete`) and what the invocation would run, then exit without writing. |
 
 Exits 1 if any stage fails to complete, 0 when the pipeline finishes. Unknown stage names exit 1 and list the valid ones.
 
 ### Pipeline stages
 
-Each stage is a full `do` loop with its own prompt and gate, and declares which artifacts it consumes and produces — the stage dependency graph is data. When a stage completes, its commit records content hashes of those artifacts in `.copperhead/create-state.json`; a stage whose recorded inputs no longer match the working tree is *stale*. A plain `create` run re-runs stale and incomplete stages and skips fresh ones, so the pipeline is resumable and self-healing: rerun the same command after a failure — or after any edit that touched a stage's inputs — and exactly the affected stages run again.
+Each stage is a full `do` loop with its own prompt and gate, and declares which artifacts it consumes and produces, so the stage dependency graph is data. When a stage completes, its commit records content hashes of those artifacts in `.copperhead/create-state.json`; a stage whose recorded inputs no longer match the working tree is *stale*. A plain `create` run re-runs stale and incomplete stages and skips fresh ones, so the pipeline is resumable and self-healing: rerun the same command after a failure, or after any edit that touched a stage's inputs, and exactly the affected stages run again.
 
 | # | Stage | Consumes | Produces |
 | --- | --- | --- | --- |

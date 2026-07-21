@@ -47,6 +47,11 @@ async function docHasContent(repoRoot: string, rel: string, marker: string): Pro
   return (await readFile(p, 'utf8')).includes(marker);
 }
 
+/**
+ * The array order MUST remain a topological order of the produces→consumes
+ * graph: descendantsOf's single forward pass and the runner's queue ordering
+ * both depend on it. A test asserts this; re-check it when editing the table.
+ */
 export const STAGES: Stage[] = [
   {
     name: 'spec-seed',
@@ -258,6 +263,21 @@ export async function runCreate(opts: CreateOptions): Promise<{ ok: boolean; com
       .map((c) => c.stage);
   const plannedInitially = new Set(planned);
 
+  // A targeted re-run below an incomplete ancestor works against missing
+  // inputs; the probe gate would withhold the record afterwards anyway, but
+  // saying so up front saves the whole model run.
+  if (opts.stage || opts.from) {
+    const target = (opts.stage ?? opts.from)!;
+    const upstreamIncomplete = initial.classifications
+      .filter((c) => c.status === 'incomplete' && descendantsOf(c.stage).includes(target))
+      .map((c) => c.stage);
+    if (upstreamIncomplete.length) {
+      opts.log(
+        `warning: upstream stage(s) ${upstreamIncomplete.join(', ')} are incomplete; ${target} may run against missing inputs`,
+      );
+    }
+  }
+
   if (opts.dryRun) {
     opts.log('stage classification:');
     for (const c of initial.classifications) opts.log(classificationLine(c));
@@ -378,7 +398,9 @@ export async function runCreate(opts: CreateOptions): Promise<{ ok: boolean; com
       },
     });
     if (res.outcome !== 'success') {
-      opts.log(`stage ${name} did not complete (${res.outcome}); re-run copperhead create to resume here`);
+      opts.log(
+        `stage ${name} did not complete (${res.outcome}); a plain copperhead create resumes from here (repeating a --stage/--from command re-runs its requested stages too)`,
+      );
       return { ok: false, completed };
     }
     if (recordWithheld) {
