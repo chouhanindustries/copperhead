@@ -1,5 +1,6 @@
 import { defineConfig } from 'astro/config';
 import starlight from '@astrojs/starlight';
+import starlightLlmsTxt from 'starlight-llms-txt';
 
 const REPO = 'https://github.com/chouhanindustries/copperhead';
 
@@ -16,6 +17,45 @@ export default defineConfig({
       social: [{ icon: 'github', label: 'GitHub', href: REPO }],
       editLink: { baseUrl: `${REPO}/edit/main/docs/` },
       lastUpdated: true,
+      plugins: [
+        starlightLlmsTxt({
+          projectName: 'copperhead',
+          description:
+            'Cursor for circuit boards: an open-source (Apache-2.0) TypeScript CLI agent that designs, documents, and validates real PCBs from a prompt. It works directly on existing KiCad repositories, editing .kicad_sch / .kicad_pcb s-expression files, keeps markdown design docs as memory, and verifies every change by running kicad-cli ERC/DRC until the checks pass.',
+          details: [
+            'Key facts:',
+            '',
+            '- Install: `npm install -g copperhead` (Node.js >= 20, KiCad >= 8 with `kicad-cli` on PATH, `ANTHROPIC_API_KEY` or `OPENAI_API_KEY` in the environment).',
+            '- Commands: `copperhead init` (scaffold docs/ from a schematic, idempotent), `copperhead do "<change>"` (propose, edit, verify, propagate, commit), `copperhead check` (ERC + DRC + doc drift + spec validation, no LLM calls, CI-safe, alias: `verify`), `copperhead sync` (verify whole design state, resolve drift), `copperhead create --brief brief.md` (product brief to full output package).',
+            '- Two invariants: nothing starts without a validated change proposal (the edit tools are structurally unavailable until one exists), and nothing is "done" until ERC/DRC passes (failed verification rolls back to a git snapshot).',
+            '- It is not an autorouter, not a new editor (KiCad remains the editor), and not the engineer of record (a human signs off).',
+            `- Source: ${REPO}`,
+          ].join('\n'),
+          optionalLinks: [
+            {
+              label: 'Technical specification',
+              url: `${REPO}/blob/main/openspec/specs/SPEC.md`,
+              description:
+                'The complete spec, including architecture, tool schemas, safety rails, and binary acceptance criteria.',
+            },
+            {
+              label: 'README',
+              url: `${REPO}/blob/main/README.md`,
+              description: 'Project overview, install, maturity notes, and project layout.',
+            },
+            {
+              label: 'Contributing',
+              url: `${REPO}/blob/main/CONTRIBUTING.md`,
+              description: 'Setup, workflow, and the one-time CLA.',
+            },
+            {
+              label: 'Example briefs',
+              url: `${REPO}/tree/main/examples`,
+              description: 'Ready-made product briefs sorted by difficulty.',
+            },
+          ],
+        }),
+      ],
       customCss: ['./src/styles/custom.css'],
       head: [
         { tag: 'meta', attrs: { name: 'theme-color', content: '#b87333' } },
