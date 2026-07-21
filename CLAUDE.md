@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **copperhead** — "Cursor for circuit boards": a TypeScript CLI agent that designs and edits real KiCad projects (`.kicad_sch`/`.kicad_pcb` s-expression files), keeps markdown design docs as memory, and verifies its own work with `kicad-cli` ERC/DRC. Apache-2.0, Node ≥ 20.
 
-**Current state: Phase 1 implemented, pending live verification.** The CLI builds and runs (`init`, `check`/`verify`, `do`, `sync`, `create`), and the offline test suite is green (46 tests). What remains is live-LLM verification: the AC-3.x integration tests exist but skip without an API key, so the agent-loop acceptance criteria have not been observed passing. See the status note at the top of `openspec/changes/build-copperhead-phase-1/tasks.md` for the exact split.
+**Current state: Phase 1 implemented, pending live verification.** The CLI builds and runs (`init`, `check`/`verify`, `do`, `sync`, `create`), and the offline test suite is green. What remains is live-LLM verification: the AC-3.x integration tests exist but skip without an API key, so the agent-loop acceptance criteria have not been observed passing. See the status note at the top of `openspec/changes/build-copperhead-phase-1/tasks.md` for the exact split.
 
 ## Sources of truth
 

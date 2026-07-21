@@ -1,8 +1,18 @@
-# copperhead
+<p align="center">
+  <a href="https://copperhead.sh"><img src="https://raw.githubusercontent.com/chouhanindustries/copperhead/main/docs/branding/lockup-transparent.png" alt="copperhead" width="440"></a>
+</p>
+
+<p align="center">
+  <a href="https://www.npmjs.com/package/copperhead"><img src="https://img.shields.io/npm/v/copperhead?color=b87333" alt="npm"></a>
+  <a href="https://github.com/chouhanindustries/copperhead/actions/workflows/ci.yml"><img src="https://github.com/chouhanindustries/copperhead/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/npm/l/copperhead?color=15181c" alt="license"></a>
+</p>
 
 **Cursor for circuit boards.** An AI agent that designs, documents, and validates real PCBs from a prompt, working directly on existing KiCad repositories.
 
-> **Status: early (v0.1).** Phase 1 is implemented and the CLI runs. The [technical specification](openspec/specs/SPEC.md) is the source of truth; expect the surface to move before 1.0.
+> **Status: early.** Phase 1 is implemented and the CLI runs. The [technical specification](openspec/specs/SPEC.md) is the source of truth; expect the surface to move before 1.0.
+
+Full documentation lives at [docs.copperhead.sh](https://docs.copperhead.sh).
 
 ## What it is
 
@@ -12,6 +22,31 @@ An AI product-development agent for hardware: from a product brief to manufactur
 - **`copperhead do "<change>"`**: operates on an existing KiCad repo the way a coding agent operates on a codebase.
 
 It reads and edits real `.kicad_sch` / `.kicad_pcb` files (s-expression text), maintains markdown design docs as memory, propagates every change across all artifacts that reference it, and verifies its own work by running `kicad-cli` ERC/DRC until the checks pass.
+
+## Install
+
+```bash
+npm install -g copperhead   # or: npx copperhead check
+```
+
+### Requirements
+
+- Node.js ≥ 20
+- [KiCad](https://www.kicad.org/) ≥ 8 with `kicad-cli` on PATH
+- `ANTHROPIC_API_KEY` or `OPENAI_API_KEY` in the environment (env var only, never a config file), except for `check`, which never calls an LLM
+
+## Quick start
+
+In an existing KiCad repository:
+
+```bash
+export ANTHROPIC_API_KEY=...   # or OPENAI_API_KEY
+copperhead init                # scaffold docs/ from the schematic; idempotent
+copperhead do "add reverse-polarity protection on VIN"
+copperhead check               # ERC + DRC + doc drift; no LLM, CI-safe
+```
+
+Starting from nothing instead? Write a product brief and run `copperhead create --brief brief.md`. The [examples/](examples/) directory has ready-made briefs sorted by difficulty, plus a note on which one is designed to fail.
 
 ## How it works
 
@@ -51,12 +86,6 @@ Nothing is a black box: decisions land in an append-only `docs/DECISIONS.md`, ev
 - **Not a new editor.** No walled garden; your KiCad install remains the editor.
 - **Not the engineer of record.** A human signs off; the agent never claims a design is fab-ready beyond "ERC/DRC clean".
 
-## Install
-
-```bash
-npm install -g copperhead   # or: npx copperhead check
-```
-
 ## Simple demo
 
 From a checkout of this repo, run the smallest create-pipeline demo with the USB-C power breakout brief:
@@ -74,15 +103,11 @@ copperhead create --brief examples/simple/usb-c-breakout.md
 Pass normal create flags after `--`, for example `npm run demo:simple -- --model claude`.
 If a stage fails, rerun the same command; the demo repo keeps a baseline commit and ignores run transcripts so retries start from the last committed design state.
 
-### Requirements
-
-- Node.js ≥ 20
-- [KiCad](https://www.kicad.org/) ≥ 8 with `kicad-cli` on PATH
-- An OpenAI or Anthropic API key (env var only), except for `check`, which never calls an LLM
+More briefs, including medium and hard tiers, live in [examples/](examples/).
 
 ## Maturity
 
-Honest read of where v0.1 stands, so you can calibrate before pointing this at a board you care about:
+Honest read of where the current release stands, so you can calibrate before pointing this at a board you care about:
 
 - **Solid.** `init` and `check`/`verify` are deterministic, LLM-free, and covered by the offline test suite against a real KiCad fixture: scaffolding, ERC/DRC, the s-expression reader, drift detection, and fab export all run green in CI.
 - **Implemented, not yet proven.** The agent loop (`do`, `sync --resolve`, `create`) is complete and structurally gated, but its acceptance tests need a live model and have not been observed passing end to end. Expect rough edges.
@@ -91,6 +116,10 @@ Honest read of where v0.1 stands, so you can calibrate before pointing this at a
 ## Open source
 
 The entire tool (agent core, prompts, tools) is public under Apache-2.0, built on an open stack (KiCad, kicad-cli, [OpenSpec](https://github.com/Fission-AI/OpenSpec)). Everything it produces is plain markdown and JSON in your own repo: no proprietary formats, no lock-in. This is a Chouhan Industries project, and the same commitment that puts every hardware schematic in public applies to the tool that designs them.
+
+## Contributing
+
+Contributions are welcome; see [CONTRIBUTING.md](CONTRIBUTING.md) for setup and workflow. Note that your first pull request requires signing the [Contributor License Agreement](.github/cla/CLA.md); a bot posts instructions on the PR and signing is a one-time comment.
 
 ## Project layout
 
