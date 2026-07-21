@@ -168,7 +168,9 @@ brief.md
   → DEVPLAN.md
 ```
 
-Each stage is a `do`-loop run with a stage-specific prompt. State lives in the repo (docs + files), so `create` is resumable: kill it at any stage, re-run, it continues from the docs.
+Each stage is a `do`-loop run with a stage-specific prompt. State lives in the repo: each stage's completing commit records content hashes of the artifacts it consumed and produced in `.copperhead/create-state.json` (stages without a record fall back to repo-state probes), so `create` is resumable — kill it at any stage, re-run, it continues from the first stage that is not fresh.
+
+**Stage graph, re-runs, and invalidation.** Each stage declares the named artifacts it consumes and produces (brief → spec → subsystems → bom → schematic + pinout → board + layout-intent → outputs; pinout → firmware; schematic/firmware/layout-intent → devplan), making the dependency graph data. A completed stage whose recorded input hashes no longer match the working tree is *stale*: a default `create` run re-runs stale and incomplete stages and skips fresh ones, so drift introduced between runs (including by `do`) is reconciled rather than skipped past. `create --stage <name>` re-runs one stage against the existing artifacts (revise, not recreate), then reconciles — in dependency order — every stage that consumes an artifact the re-run actually changed; byte-identical outputs invalidate nothing. `create --from <name>` force-re-runs a stage and its graph descendants (never unrelated branches). `create --dry-run` prints each stage's classification (fresh / stale with the changed artifacts / incomplete / assumed-complete) and what would run, writing nothing. In `--interactive` mode the stale set is confirmed before reconciliation; autonomous mode reconciles automatically. Stale-stage prompts name exactly which upstream artifacts changed and lean on `check_drift` for the specific disagreements.
 
 ### First-draft layout (explicitly non-optimal, explicitly useful)
 
@@ -235,6 +237,9 @@ This kills the last "docs drift" failure mode: requirements (openspec) → budge
 
 ```
 copperhead create --brief brief.md   # Mode A: full pipeline (§2.5)
+    --stage <name>   re-run one stage, then propagate to consumers of changed outputs
+    --from <name>    re-run a stage and every stage downstream of it (graph descendants)
+    --dry-run        print each stage's classification and what would run; write nothing
 copperhead init [--path hardware/]
     Detect .kicad_sch/.kicad_pcb, parse symbols/footprints/nets,
     generate docs/ skeleton pre-filled with the real BOM and pinout
@@ -448,6 +453,18 @@ Format: Given / When / Then. "Fixture" = the open-telegraph repo (or the tiny te
 - **AC-8.8 (interactive on a TTY)** With stdout a TTY and neither `--json` nor `--plain`: a bottom-pinned status line redraws in place (spinner while a provider call is in flight, elapsed time, turn counter vs budget, cumulative tokens); assistant text and tool results scroll above it; the final outcome line replaces it; cursor and status line are restored/cleared on exit including Ctrl-C. A renderer reused across runs (the `create` pipeline) renders every stage: each outcome line releases the status line and the next stage re-establishes it.
 - **AC-8.9 (plain fallback)** With stdout piped, or `--json`, or the global `--plain` flag: output is line-oriented and contains zero ANSI escape sequences. With `--json`, progress lines go to stderr; stdout carries only the machine-readable result.
 - **AC-8.10 (redaction holds)** A string matching `sk-[A-Za-z0-9_-]+` planted in any metadata field appears redacted in both the persisted `run-start` event and `summary.md` (extends AC-4.1 to the new surfaces).
+
+### AC-9 · `create` stage re-runs and invalidation (change: rerun-create-stages)
+
+- **AC-9.1 (completion records)** Every completed stage's commit contains the updated `.copperhead/create-state.json` entry for that stage, with content hashes of its consumed artifacts (read at stage start) and produced artifacts (read at commit time) — but only when the stage's completion probe passes against the post-run state; a committed run whose probe fails stays unrecorded (and says so), so the stage re-runs next time. Refused, rolled-back, and dry runs record nothing.
+- **AC-9.2 (default run heals staleness)** With BOM.md edited after the schematic stage completed, a flagless `create` re-runs exactly the stages that consume `bom` (schematic, outputs), each prompted with the changed artifact by name; an immediately following `create` runs nothing.
+- **AC-9.3 (--stage propagation)** `create --stage part-selection` whose run changes BOM.md re-runs schematic and outputs in dependency order; a `--stage` re-run whose produced artifacts are byte-identical invalidates nothing downstream.
+- **AC-9.4 (--from descendants)** `create --from layout-draft` re-runs layout-draft, outputs, and devplan — and never firmware, which consumes only `pinout`.
+- **AC-9.5 (dry run)** `create --dry-run` prints every stage's classification (fresh / stale with changed artifacts / incomplete / assumed-complete) plus the would-run set, leaves `git status` unchanged, and needs neither an API key nor `kicad-cli`.
+- **AC-9.6 (flag validation)** An unknown `--stage`/`--from` name exits non-zero listing the valid stage names; combining `--stage` with `--from` is rejected before any run starts.
+- **AC-9.7 (observability)** A re-run stage's `run-start` event, `summary.md ## Environment`, and CLI header all carry the trigger (`requested`/`from`/`stale`) and, for stale runs, the changed upstream artifact names (extends AC-8).
+- **AC-9.8 (state resilience)** A corrupt or unparseable `create-state.json` degrades to probe-based classification with a printed warning; it never aborts a run.
+- **AC-9.9 (a record never outranks a failing probe)** Deleting a completed stage's produced artifact (e.g. `rm docs/SUBSYSTEMS.md`) makes the next `create` classify that stage incomplete and re-run it — a completion record is trust in a past verified commit, not in present existence.
 
 ### AC-5 · Viewer (Phase 2 — only if built)
 

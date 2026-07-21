@@ -7,7 +7,7 @@ import { loadConfig, resolveModel } from './config.js';
 import { runInit, InitError } from './memory/scaffold.js';
 import { runCheck } from './commands/check.js';
 import { syncVerify, syncResolve, formatSyncReport } from './commands/sync.js';
-import { runCreate } from './commands/create.js';
+import { runCreate, validateStageFlags } from './commands/create.js';
 import { runAgentLoop } from './agent/loop.js';
 import { makeRenderer } from './agent/render.js';
 import { kicadCliVersion } from './kicad/cli.js';
@@ -179,27 +179,58 @@ program
   .requiredOption('--brief <file>', 'product brief (markdown)')
   .option('--model <model>', 'gpt-5 | claude')
   .option('--interactive', 're-enable the human gates (spec approval, pre-export)')
-  .action(async (opts: { brief: string; model?: string; interactive?: boolean }) => {
-    const repo = repoOf(program.opts());
-    try {
-      const kicadVer = await kicadCliVersion();
-      const config = await loadConfig(repo);
-      const { model, source } = resolveModel(opts.model, config);
-      const res = await runCreate({
-        repoRoot: repo,
-        briefPath: opts.brief,
-        model,
-        interactive: opts.interactive ?? false,
-        log: (s) => console.log(s),
-        renderer: rendererOf(),
-        meta: { command: 'create', modelSource: source, version, kicadCliVersion: kicadVer },
-      });
-      process.exit(res.ok ? 0 : 1);
-    } catch (err) {
-      console.error((err as Error).message);
-      process.exit(1);
-    }
-  });
+  .option('--stage <name>', 're-run one pipeline stage, then propagate to consumers of changed outputs')
+  .option('--from <name>', 're-run a pipeline stage and every stage downstream of it')
+  .option('--dry-run', 'print stage classification and what would run; write nothing')
+  .action(
+    async (opts: {
+      brief: string;
+      model?: string;
+      interactive?: boolean;
+      stage?: string;
+      from?: string;
+      dryRun?: boolean;
+    }) => {
+      const repo = repoOf(program.opts());
+      try {
+        // Flag validation and --dry-run are deterministic: neither needs a
+        // model, an API key, or kicad-cli, so they must not be preempted by
+        // model resolution or the kicad preflight (AC-9.5/9.6).
+        validateStageFlags(opts.stage, opts.from);
+        if (opts.dryRun) {
+          const res = await runCreate({
+            repoRoot: repo,
+            briefPath: opts.brief,
+            model: 'none (dry run)',
+            ...(opts.stage ? { stage: opts.stage } : {}),
+            ...(opts.from ? { from: opts.from } : {}),
+            dryRun: true,
+            log: (s) => console.log(s),
+          });
+          process.exit(res.ok ? 0 : 1);
+        }
+        const kicadVer = await kicadCliVersion();
+        const config = await loadConfig(repo);
+        const { model, source } = resolveModel(opts.model, config);
+        const res = await runCreate({
+          repoRoot: repo,
+          briefPath: opts.brief,
+          model,
+          interactive: opts.interactive ?? false,
+          ...(opts.stage ? { stage: opts.stage } : {}),
+          ...(opts.from ? { from: opts.from } : {}),
+          confirm: confirmTty,
+          log: (s) => console.log(s),
+          renderer: rendererOf(),
+          meta: { command: 'create', modelSource: source, version, kicadCliVersion: kicadVer },
+        });
+        process.exit(res.ok ? 0 : 1);
+      } catch (err) {
+        console.error((err as Error).message);
+        process.exit(1);
+      }
+    },
+  );
 
 program.parseAsync().catch((err: Error) => {
   console.error(err.message);
