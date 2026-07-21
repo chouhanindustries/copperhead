@@ -3,11 +3,18 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { normalizeReport, type CheckReport } from './report.js';
+import { PreflightError } from '../util/preflight.js';
 
-export class KicadCliMissingError extends Error {
+export class KicadCliMissingError extends PreflightError {
   constructor() {
     super(
-      'kicad-cli not found on PATH. Install KiCad ≥ 8 (https://www.kicad.org/download/) and ensure kicad-cli is available.',
+      'kicad-cli not found on PATH',
+      'copperhead verifies every mutation with kicad-cli ERC/DRC; without it no edit can be checked, so no run can start',
+      [
+        'install KiCad ≥ 8: https://www.kicad.org/download/',
+        'ensure the kicad-cli binary is on PATH (on macOS it ships inside KiCad.app/Contents/MacOS)',
+        'confirm with "kicad-cli version", then rerun',
+      ],
     );
     this.name = 'KicadCliMissingError';
   }
