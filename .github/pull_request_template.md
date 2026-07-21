@@ -26,11 +26,35 @@ Reference files as clickable relative links, e.g. [loop.ts](src/agent/loop.ts).
 
 ## Testing
 
-<!-- What you ran and what it produced (real results, not assumed):
-     - new or changed tests, and pass/skip counts
-     - `npm run typecheck` / `npm run build` / `npm test` status
-     - any live-LLM verification, and how it was keyed
-     - known pre-existing failures unrelated to this PR -->
+<!-- Real results only, never assumed. Fill in the status table and the manual-test log below. -->
+
+### Automated test status
+
+<!-- Report what you actually ran. Use pass / fail / skip / n/a, with counts where it helps. -->
+
+| Check | Command | Status |
+| --- | --- | --- |
+| Typecheck | `npm run typecheck` | |
+| Build | `npm run build` | |
+| Unit + offline | `npm test` | |
+| Live-LLM (opt-in) | keyed on `<ENV_VAR>` | |
+
+<!-- New or changed tests, and known pre-existing failures unrelated to this PR: -->
+
+### Manual test log (required)
+
+<!-- Required for any change to CLI behavior, the agent loop, providers, or the KiCad layer.
+     Exercise the CLI by hand against the manual-tests sandbox (see manual-tests/README.md),
+     and paste the commands you ran with their outcome. Write "n/a" with a reason only for
+     changes that cannot be exercised at runtime (e.g. docs-only or CI-config-only). -->
+
+- Sandbox variant used (`create` / `edit`):
+- Commands run and outcome:
+
+```text
+$ <command>
+<result>
+```
 
 ## Docs
 
