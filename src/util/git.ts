@@ -94,6 +94,21 @@ export async function restore(repo: string, snap: GitSnapshot): Promise<void> {
   }
 }
 
+/** Current branch name, or "HEAD" when detached. Read-only metadata probe. */
+export async function branchName(repo: string): Promise<string> {
+  return git(repo, ['rev-parse', '--abbrev-ref', 'HEAD']);
+}
+
+export async function headCommit(repo: string): Promise<string> {
+  return git(repo, ['rev-parse', 'HEAD']);
+}
+
+/** Count of uncommitted paths (staged, unstaged, and untracked). */
+export async function uncommittedCount(repo: string): Promise<number> {
+  const status = await git(repo, ['status', '--porcelain']);
+  return status ? status.split('\n').length : 0;
+}
+
 export async function commitAll(repo: string, message: string): Promise<string> {
   await git(repo, ['add', '-A']);
   await git(repo, ['commit', '-m', message]);

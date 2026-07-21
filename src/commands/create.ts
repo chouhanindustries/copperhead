@@ -1,8 +1,11 @@
 import path from 'node:path';
 import { existsSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
 import { loadConfig } from '../config.js';
 import { runAgentLoop } from '../agent/loop.js';
+import type { RunMetaInput } from '../agent/runmeta.js';
+import type { ProgressRenderer } from '../agent/render.js';
 import { openspecInit } from '../openspec/cli.js';
 import { runCheck } from './check.js';
 
@@ -88,15 +91,21 @@ export interface CreateOptions {
   model: string;
   interactive?: boolean;
   log: (s: string) => void;
+  renderer?: ProgressRenderer;
+  /** Command-level metadata; stage and brief identity are filled in per stage. */
+  meta?: Omit<RunMetaInput, 'stage' | 'brief'>;
 }
 
 export async function runCreate(opts: CreateOptions): Promise<{ ok: boolean; completed: string[] }> {
   const brief = await readFile(path.resolve(opts.briefPath), 'utf8');
+  // Hashed from the content already in hand: a brief edited mid-pipeline shows
+  // up as a different sha256 in the next stage's metadata (AC-8.1).
+  const briefMeta = { path: opts.briefPath, sha256: createHash('sha256').update(brief).digest('hex') };
   const config = await loadConfig(opts.repoRoot);
   await openspecInit(opts.repoRoot);
   const completed: string[] = [];
 
-  for (const stage of STAGES) {
+  for (const [i, stage] of STAGES.entries()) {
     if (await stage.isComplete(opts.repoRoot, config.docs)) {
       opts.log(`stage ${stage.name}: already complete (resuming past it)`);
       completed.push(stage.name);
@@ -111,6 +120,13 @@ export async function runCreate(opts: CreateOptions): Promise<{ ok: boolean; com
       interactive: opts.interactive ?? false,
       allowDirty: true, // stages build on each other's uncommitted state within the pipeline
       log: opts.log,
+      ...(opts.renderer ? { renderer: opts.renderer } : {}),
+      meta: {
+        ...opts.meta,
+        command: 'create',
+        stage: { name: stage.name, index: i + 1, total: STAGES.length },
+        brief: briefMeta,
+      },
     });
     if (res.outcome !== 'success') {
       opts.log(`stage ${stage.name} did not complete (${res.outcome}); re-run copperhead create to resume here`);

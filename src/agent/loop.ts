@@ -6,7 +6,9 @@ import { availableTools, dispatchTool, type RunContext } from './tools.js';
 import { buildSystemPrompt } from './prompts.js';
 import { loadConstraints, reopenDeferredAffects } from '../memory/constraints.js';
 import { loadConfig, type CopperheadConfig } from '../config.js';
-import { Transcript } from './transcript.js';
+import { Transcript, type ExitPath, type RunStats } from './transcript.js';
+import { collectRunMeta, renderCliHeader, type RunMeta, type RunMetaInput } from './runmeta.js';
+import { plainRenderer, fmtDuration, fmtTokens, type ProgressRenderer } from './render.js';
 import { ObligationsLedger } from './ledger.js';
 import { gitPreflight, isDirty, snapshot, restore, commitAll, changedFiles } from '../util/git.js';
 import { withRetry, isRateLimit } from '../util/retry.js';
@@ -28,10 +30,17 @@ export interface RunOptions {
   /** Extra prompt appended for pipeline stages (Mode A). */
   stagePrompt?: string;
   log?: (line: string) => void;
+  /** Progress renderer; defaults to a plain line renderer over `log`. */
+  renderer?: ProgressRenderer;
+  /** Caller-known run identity for the metadata block (design D2). */
+  meta?: RunMetaInput;
+  /** Test seam: bypass makeProvider with a scripted provider. */
+  provider?: Provider;
 }
 
 export interface RunResult {
   outcome: 'success' | 'refused' | 'failure';
+  exitPath: ExitPath;
   summary: string;
   transcriptDir: string;
   filesTouched: string[];
@@ -100,7 +109,8 @@ export async function runAgentLoop(opts: RunOptions): Promise<RunResult> {
 }
 
 async function runWithMemory(opts: RunOptions, memory: SynapMemory | null): Promise<RunResult> {
-  const log = opts.log ?? ((l: string) => console.log(l));
+  const r = opts.renderer ?? plainRenderer(opts.log ?? ((l: string) => console.log(l)));
+  const log = (l: string): void => r.log(l);
   const repoRoot = opts.repoRoot;
   const config = await loadConfig(repoRoot);
   const maxTurns = opts.maxTurns ?? config.maxTurns;
@@ -129,7 +139,24 @@ async function runWithMemory(opts: RunOptions, memory: SynapMemory | null): Prom
     finishRequest: null,
   };
 
-  let provider = makeProvider(opts.model);
+  let provider = opts.provider ?? makeProvider(opts.model);
+
+  // Deterministic, LLM-free metadata block: collected once, rendered onto all
+  // three surfaces (run-start event, summary ## Environment, CLI header) so
+  // they can never disagree (design D1, AC-8.1/8.4).
+  const startMs = Date.now();
+  const meta: RunMeta = await collectRunMeta({
+    repoRoot,
+    config,
+    maxTurns,
+    runId: path.basename(transcript.dir),
+    request: opts.request,
+    model: opts.model,
+    provider: provider.name,
+    interactive: opts.interactive ?? false,
+    input: opts.meta,
+  });
+  for (const line of renderCliHeader(meta)) log(line);
   // Revisit obligations deferred while their artifact didn't exist re-open now
   // if it does (must run before loadConstraints so the prompt sees the updated
   // registry). They land in this run's fresh ledger, so finish gates on them.
@@ -165,7 +192,7 @@ async function runWithMemory(opts: RunOptions, memory: SynapMemory | null): Prom
     { role: 'system', content: system },
     { role: 'user', content: opts.stagePrompt ? `${opts.stagePrompt}\n\nRequest: ${opts.request}` : opts.request },
   ];
-  await transcript.event('run-start', { request: opts.request, model: opts.model, provider: provider.name });
+  await transcript.event('run-start', meta);
 
   /**
    * A memory write that fails is reported rather than swallowed, but it does
@@ -186,12 +213,39 @@ async function runWithMemory(opts: RunOptions, memory: SynapMemory | null): Prom
 
   let tokensIn = 0;
   let tokensOut = 0;
+  let turnsUsed = 0;
+  const perTurn: { turn: number; in: number; out: number }[] = [];
   let plan: string | null = null;
   let nudges = 0;
 
-  const fail = async (reason: string): Promise<RunResult> => {
-    await transcript.event('run-failed', { reason });
+  const stats = (exitPath: ExitPath): RunStats => ({
+    exitPath,
+    turnsUsed,
+    maxTurns,
+    repairCyclesUsed: ctx.repairCycles,
+    maxRepairCycles: config.maxRepairCycles,
+    tokensIn,
+    tokensOut,
+    perTurn,
+    durationMs: Date.now() - startMs,
+  });
+
+  /** One outcome line, printed last at every terminal branch (AC-8.5). */
+  const outcomeLine = (s: RunStats, extra?: string | null): string =>
+    [
+      s.exitPath,
+      ctx.lastErc ? `ERC ${ctx.lastErc.ok ? 'clean' : 'failing'}` : 'ERC not run',
+      ...(ctx.lastDrc ? [`DRC ${ctx.lastDrc.ok ? 'clean' : 'failing'}`] : []),
+      ...(extra ? [extra] : []),
+      fmtDuration(s.durationMs),
+      `${fmtTokens(s.tokensIn)} in / ${fmtTokens(s.tokensOut)} out`,
+    ].join(' · ');
+
+  const fail = async (reason: string, exitPath: ExitPath): Promise<RunResult> => {
+    await transcript.event('run-failed', { reason, exitPath });
     await restore(repoRoot, snap);
+    const runStats = stats(exitPath);
+    await transcript.event('run-end', runStats);
     const summaryPath = await transcript.writeSummary({
       request: opts.request,
       changeId: ctx.changeId,
@@ -205,13 +259,17 @@ async function runWithMemory(opts: RunOptions, memory: SynapMemory | null): Prom
       outcome: 'failure',
       openObligations: ctx.ledger.isClear ? null : ctx.ledger.describe(),
       detail: reason,
+      env: meta,
+      stats: runStats,
     });
     log(`run failed: ${reason}`);
     log(`working tree restored to pre-run snapshot`);
     log(`transcript: ${transcript.jsonlPath}`);
     log(`summary: ${summaryPath}`);
+    r.finish(outcomeLine(runStats));
     return {
       outcome: 'failure',
+      exitPath,
       summary: reason,
       transcriptDir: transcript.dir,
       filesTouched: [],
@@ -221,6 +279,8 @@ async function runWithMemory(opts: RunOptions, memory: SynapMemory | null): Prom
 
   for (let turn = 0; turn < maxTurns; turn++) {
     const tools = availableTools(ctx).map((t) => t.schema);
+    r.turnStart(turn + 1, maxTurns, tokensIn, tokensOut);
+    r.status('thinking');
     let res: Turn;
     try {
       res = await withRetry(() => provider.chat(messages, tools), {
@@ -237,10 +297,14 @@ async function runWithMemory(opts: RunOptions, memory: SynapMemory | null): Prom
           continue;
         }
       }
-      return fail(`provider error: ${(err as Error).message}`);
+      return fail(`provider error: ${(err as Error).message}`, 'provider-error');
+    } finally {
+      r.status(null);
     }
+    turnsUsed = turn + 1;
     tokensIn += res.usage.inputTokens;
     tokensOut += res.usage.outputTokens;
+    perTurn.push({ turn: turn + 1, in: res.usage.inputTokens, out: res.usage.outputTokens });
     await transcript.event('assistant', { text: res.text, toolCalls: res.toolCalls });
 
     if (res.text) {
@@ -250,7 +314,7 @@ async function runWithMemory(opts: RunOptions, memory: SynapMemory | null): Prom
     messages.push({ role: 'assistant', content: res.text, toolCalls: res.toolCalls });
 
     if (!res.toolCalls.length) {
-      if (nudges++ >= 2) return fail('model stopped calling tools without finishing');
+      if (nudges++ >= 2) return fail('model stopped calling tools without finishing', 'stalled');
       messages.push({
         role: 'user',
         content: 'Continue using tools, or call finish({outcome, summary}) to end the run.',
@@ -261,12 +325,12 @@ async function runWithMemory(opts: RunOptions, memory: SynapMemory | null): Prom
     for (const call of res.toolCalls) {
       const result = await dispatchTool(ctx, call.name, call.args);
       await transcript.event('tool', { name: call.name, args: call.args, result });
-      log(`  [${call.name}] ${result.split('\n')[0]}`);
+      r.toolResult(call.name, result.split('\n')[0] ?? '');
       messages.push({ role: 'tool', toolCallId: call.id, content: result });
     }
 
     if (ctx.repairCycles > config.maxRepairCycles) {
-      return fail(`repair cycles exhausted (${config.maxRepairCycles}); violations persist`);
+      return fail(`repair cycles exhausted (${config.maxRepairCycles}); violations persist`, 'repair-cycles-exhausted');
     }
 
     const remaining = maxTurns - turn - 1;
@@ -284,6 +348,8 @@ async function runWithMemory(opts: RunOptions, memory: SynapMemory | null): Prom
       if (outcome === 'refuse') {
         await restore(repoRoot, snap);
         await transcript.event('run-refused', { summary });
+        const runStats = stats('refused');
+        await transcript.event('run-end', runStats);
         await transcript.writeSummary({
           request: opts.request,
           changeId: ctx.changeId,
@@ -297,6 +363,8 @@ async function runWithMemory(opts: RunOptions, memory: SynapMemory | null): Prom
           outcome: 'aborted',
           openObligations: null,
           detail: `REFUSED: ${summary}`,
+          env: meta,
+          stats: runStats,
         });
         // Refusals are the most valuable thing to remember: they encode a budget
         // or constraint that this user's designs keep running into.
@@ -310,7 +378,15 @@ async function runWithMemory(opts: RunOptions, memory: SynapMemory | null): Prom
           verification: 'n/a (refused before verification)',
         });
         log(`refused: ${summary}`);
-        return { outcome: 'refused', summary, transcriptDir: transcript.dir, filesTouched: [], commit: null };
+        r.finish(outcomeLine(runStats));
+        return {
+          outcome: 'refused',
+          exitPath: 'refused',
+          summary,
+          transcriptDir: transcript.dir,
+          filesTouched: [],
+          commit: null,
+        };
       }
 
       const verification = [
@@ -329,6 +405,8 @@ async function runWithMemory(opts: RunOptions, memory: SynapMemory | null): Prom
         log(diff || '(no diff)');
         if (untracked) log(`new files:\n${untracked}`);
         await restore(repoRoot, snap);
+        const runStats = stats('done');
+        await transcript.event('run-end', runStats);
         await transcript.writeSummary({
           request: opts.request,
           changeId: ctx.changeId,
@@ -342,8 +420,18 @@ async function runWithMemory(opts: RunOptions, memory: SynapMemory | null): Prom
           outcome: 'success',
           openObligations: null,
           detail: 'dry run: changes reverted',
+          env: meta,
+          stats: runStats,
         });
-        return { outcome: 'success', summary, transcriptDir: transcript.dir, filesTouched: files, commit: null };
+        r.finish(outcomeLine(runStats, 'dry run: changes reverted'));
+        return {
+          outcome: 'success',
+          exitPath: 'done',
+          summary,
+          transcriptDir: transcript.dir,
+          filesTouched: files,
+          commit: null,
+        };
       }
 
       await appendChangelog(repoRoot, config, {
@@ -355,15 +443,33 @@ async function runWithMemory(opts: RunOptions, memory: SynapMemory | null): Prom
       ctx.ledger.clear('changelog');
 
       const commitMsg = `copperhead: ${opts.request}\n\n${summary}\n\nVerification: ${verification}`;
-      const commit = await commitAll(repoRoot, commitMsg);
+      // A git failure here (e.g. `git add -A` exiting 128 on an embedded repo)
+      // must land in summary.md as an outcome, not escape as a stack trace
+      // (AC-8.6): roll back per the snapshot contract and report commit-failed.
+      let commit: string;
+      try {
+        commit = await commitAll(repoRoot, commitMsg);
+      } catch (err) {
+        return fail(`commit failed: ${(err as Error).message}`, 'commit-failed');
+      }
       if (ctx.changeId && existsSync(path.join(repoRoot, 'openspec', 'config.yaml'))) {
-        const arch = await openspecArchive(repoRoot, ctx.changeId);
-        await transcript.event('openspec-archive', { changeId: ctx.changeId, ok: arch.ok });
-        if (arch.ok && (await isDirty(repoRoot))) {
-          await commitAll(repoRoot, `copperhead: archive change ${ctx.changeId}`);
+        // The verified commit already exists; discarding it because archive
+        // housekeeping failed would be the worse trade, so this is a warning.
+        try {
+          const arch = await openspecArchive(repoRoot, ctx.changeId);
+          await transcript.event('openspec-archive', { changeId: ctx.changeId, ok: arch.ok });
+          if (arch.ok && (await isDirty(repoRoot))) {
+            await commitAll(repoRoot, `copperhead: archive change ${ctx.changeId}`);
+          }
+        } catch (err) {
+          const message = (err as Error).message;
+          log(`warning: openspec archive failed (${message}); the run commit itself succeeded`);
+          await transcript.event('openspec-archive-failed', { changeId: ctx.changeId, error: message });
         }
       }
       await transcript.event('run-committed', { commit, files });
+      const runStats = stats('done');
+      await transcript.event('run-end', runStats);
       await transcript.writeSummary({
         request: opts.request,
         changeId: ctx.changeId,
@@ -376,6 +482,8 @@ async function runWithMemory(opts: RunOptions, memory: SynapMemory | null): Prom
         tokensOut,
         outcome: 'success',
         openObligations: null,
+        env: meta,
+        stats: runStats,
       });
       await remember({
         request: opts.request,
@@ -387,10 +495,21 @@ async function runWithMemory(opts: RunOptions, memory: SynapMemory | null): Prom
         verification,
       });
       log(`committed ${commit.slice(0, 10)} (${files.length} file(s))`);
-      return { outcome: 'success', summary, transcriptDir: transcript.dir, filesTouched: files, commit };
+      r.finish(outcomeLine(runStats, `committed ${commit.slice(0, 10)}`));
+      return {
+        outcome: 'success',
+        exitPath: 'done',
+        summary,
+        transcriptDir: transcript.dir,
+        filesTouched: files,
+        commit,
+      };
     }
   }
 
   const filesAfter = await changedFiles(repoRoot, snap.head);
-  return fail(`turn budget exhausted (${maxTurns} turns, ${filesAfter.length} files touched but unverified)`);
+  return fail(
+    `turn budget exhausted (${maxTurns} turns, ${filesAfter.length} files touched but unverified)`,
+    'turn-budget-exhausted',
+  );
 }

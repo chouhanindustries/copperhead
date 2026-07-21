@@ -1,6 +1,31 @@
 import { appendFile, mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { redactSecrets } from '../util/redact.js';
+import { renderEnvironmentSection, type RunMeta } from './runmeta.js';
+import { fmtDuration, fmtTokens } from './render.js';
+
+/** How a run terminated — the single most-queried triage fact (AC-8.5). */
+export type ExitPath =
+  | 'done'
+  | 'refused'
+  | 'turn-budget-exhausted'
+  | 'repair-cycles-exhausted'
+  | 'commit-failed'
+  | 'provider-error'
+  | 'stalled';
+
+/** Post-run addenda recorded at every terminal branch (AC-8.5). */
+export interface RunStats {
+  exitPath: ExitPath;
+  turnsUsed: number;
+  maxTurns: number;
+  repairCyclesUsed: number;
+  maxRepairCycles: number;
+  tokensIn: number;
+  tokensOut: number;
+  perTurn: { turn: number; in: number; out: number }[];
+  durationMs: number;
+}
 
 export interface RunSummaryData {
   request: string;
@@ -15,6 +40,23 @@ export interface RunSummaryData {
   outcome: 'success' | 'failure' | 'aborted';
   openObligations: string | null;
   detail?: string;
+  env?: RunMeta;
+  stats?: RunStats;
+}
+
+function renderRunStats(s: RunStats): string[] {
+  return [
+    `## Run stats`,
+    ``,
+    `- **Exit path:** ${s.exitPath}`,
+    `- **Turns:** ${s.turnsUsed} / ${s.maxTurns}`,
+    `- **Repair cycles:** ${s.repairCyclesUsed} / ${s.maxRepairCycles}`,
+    `- **Tokens:** ${fmtTokens(s.tokensIn)} in / ${fmtTokens(s.tokensOut)} out`,
+    `- **Duration:** ${fmtDuration(s.durationMs)}`,
+    ...(s.perTurn.length
+      ? [`- **Per turn:** ${s.perTurn.map((t) => `${t.turn}: ${t.in}/${t.out}`).join(' · ')}`]
+      : []),
+  ];
 }
 
 /**
@@ -50,6 +92,8 @@ export class Transcript {
       `- **OpenSpec change:** ${s.changeId ?? 'n/a'}`,
       `- **Tokens:** ${s.tokensIn} in / ${s.tokensOut} out`,
       ``,
+      ...(s.env ? [...renderEnvironmentSection(s.env), ``] : []),
+      ...(s.stats ? [...renderRunStats(s.stats), ``] : []),
       `## Plan`,
       ``,
       s.plan ?? '(no plan recorded)',

@@ -197,12 +197,21 @@ describe('fab export (create stage 6 tooling)', () => {
 describe('model selection precedence (task 4.6)', () => {
   const config = { schematic: null, board: null, ...DEFAULTS };
 
-  it('flag > env > config > available key', () => {
-    expect(resolveModel('claude', { ...config, model: 'gpt-5' }, { COPPERHEAD_MODEL: 'gpt-5' })).toBe('claude');
-    expect(resolveModel(undefined, { ...config, model: 'gpt-5' }, { COPPERHEAD_MODEL: 'claude' })).toBe('claude');
-    expect(resolveModel(undefined, { ...config, model: 'gpt-5' }, {})).toBe('gpt-5');
-    expect(resolveModel(undefined, config, { OPENAI_API_KEY: 'x' })).toBe('gpt-5');
-    expect(resolveModel(undefined, config, { ANTHROPIC_API_KEY: 'x' })).toBe('claude');
+  it('flag > env > config > available key, and reports the winning source', () => {
+    expect(resolveModel('claude', { ...config, model: 'gpt-5' }, { COPPERHEAD_MODEL: 'gpt-5' })).toEqual({
+      model: 'claude',
+      source: 'flag',
+    });
+    expect(resolveModel(undefined, { ...config, model: 'gpt-5' }, { COPPERHEAD_MODEL: 'claude' })).toEqual({
+      model: 'claude',
+      source: 'env',
+    });
+    expect(resolveModel(undefined, { ...config, model: 'gpt-5' }, {})).toEqual({ model: 'gpt-5', source: 'config' });
+    expect(resolveModel(undefined, config, { OPENAI_API_KEY: 'x' })).toEqual({ model: 'gpt-5', source: 'openai-key' });
+    expect(resolveModel(undefined, config, { ANTHROPIC_API_KEY: 'x' })).toEqual({
+      model: 'claude',
+      source: 'anthropic-key',
+    });
     expect(() => resolveModel(undefined, config, {})).toThrow(/no model configured/);
   });
 });

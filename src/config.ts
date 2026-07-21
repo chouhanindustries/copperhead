@@ -46,8 +46,18 @@ export async function loadConfig(repoRoot: string): Promise<CopperheadConfig> {
   };
 }
 
+/** Which level of the model-selection precedence chain won. */
+export type ModelSource = 'flag' | 'env' | 'config' | 'openai-key' | 'anthropic-key';
+
+export interface ResolvedModel {
+  model: string;
+  source: ModelSource;
+}
+
 /**
  * Model selection precedence: flag > COPPERHEAD_MODEL > config > available key.
+ * The winning source is returned alongside the model so run metadata can
+ * record why a run used the model it did (AC-8.1/8.2).
  *
  * Accepted values (same set for `--model`, COPPERHEAD_MODEL, and `model` in
  * .copperhead/config.json):
@@ -65,12 +75,12 @@ export async function loadConfig(repoRoot: string): Promise<CopperheadConfig> {
  * there. The chosen provider must have its key set: ANTHROPIC_API_KEY for
  * `claude*`, OPENAI_API_KEY otherwise.
  */
-export function resolveModel(flag: string | undefined, config: CopperheadConfig, env = process.env): string {
-  if (flag) return flag;
-  if (env.COPPERHEAD_MODEL) return env.COPPERHEAD_MODEL;
-  if (config.model) return config.model;
-  if (env.OPENAI_API_KEY) return 'gpt-5';
-  if (env.ANTHROPIC_API_KEY) return 'claude';
+export function resolveModel(flag: string | undefined, config: CopperheadConfig, env = process.env): ResolvedModel {
+  if (flag) return { model: flag, source: 'flag' };
+  if (env.COPPERHEAD_MODEL) return { model: env.COPPERHEAD_MODEL, source: 'env' };
+  if (config.model) return { model: config.model, source: 'config' };
+  if (env.OPENAI_API_KEY) return { model: 'gpt-5', source: 'openai-key' };
+  if (env.ANTHROPIC_API_KEY) return { model: 'claude', source: 'anthropic-key' };
   throw new Error(
     'no model configured: pass --model, set COPPERHEAD_MODEL, set model in .copperhead/config.json, or provide OPENAI_API_KEY/ANTHROPIC_API_KEY',
   );

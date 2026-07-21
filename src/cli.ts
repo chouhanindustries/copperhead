@@ -9,6 +9,7 @@ import { runCheck } from './commands/check.js';
 import { syncVerify, syncResolve, formatSyncReport } from './commands/sync.js';
 import { runCreate } from './commands/create.js';
 import { runAgentLoop } from './agent/loop.js';
+import { makeRenderer } from './agent/render.js';
 import { kicadCliVersion } from './kicad/cli.js';
 import { loadEnvFile } from './util/env.js';
 
@@ -40,7 +41,11 @@ program
   .description('Cursor for circuit boards: an AI agent for real KiCad repositories')
   .version(version)
   .option('--repo <path>', 'target repository (default: cwd)')
-  .option('--json', 'machine-readable output');
+  .option('--json', 'machine-readable output')
+  .option('--plain', 'plain log-style output (no interactive status line)');
+
+const rendererOf = () =>
+  makeRenderer({ json: Boolean(program.opts().json), plain: Boolean(program.opts().plain) });
 
 program
   .command('init')
@@ -108,9 +113,9 @@ program
     ) => {
       const repo = repoOf(program.opts());
       try {
-        await kicadCliVersion();
+        const kicadVer = await kicadCliVersion();
         const config = await loadConfig(repo);
-        const model = resolveModel(opts.model, config);
+        const { model, source } = resolveModel(opts.model, config);
         const res = await runAgentLoop({
           repoRoot: repo,
           request,
@@ -120,6 +125,8 @@ program
           dryRun: opts.dryRun ?? false,
           interactive: opts.interactive ?? false,
           confirm: confirmTty,
+          renderer: rendererOf(),
+          meta: { command: 'do', modelSource: source, version, kicadCliVersion: kicadVer },
         });
         if (program.opts().json) console.log(JSON.stringify(res, null, 2));
         process.exit(res.outcome === 'failure' ? 1 : 0);
@@ -138,7 +145,7 @@ program
   .action(async (opts: { model?: string; dryRun?: boolean }) => {
     const repo = repoOf(program.opts());
     try {
-      await kicadCliVersion();
+      const kicadVer = await kicadCliVersion();
       const report = await syncVerify(repo);
       const json = Boolean(program.opts().json);
       if (json) console.log(JSON.stringify(report, null, 2));
@@ -154,8 +161,11 @@ program
         process.exit(0);
       }
       const config = await loadConfig(repo);
-      const model = resolveModel(opts.model, config);
-      const res = await syncResolve(repo, report, model, json ? () => {} : (s) => console.log(s));
+      const { model, source } = resolveModel(opts.model, config);
+      const res = await syncResolve(repo, report, model, json ? () => {} : (s) => console.log(s), {
+        renderer: rendererOf(),
+        meta: { command: 'sync', modelSource: source, version, kicadCliVersion: kicadVer },
+      });
       process.exit(res.ok ? 0 : 1);
     } catch (err) {
       console.error((err as Error).message);
@@ -172,15 +182,17 @@ program
   .action(async (opts: { brief: string; model?: string; interactive?: boolean }) => {
     const repo = repoOf(program.opts());
     try {
-      await kicadCliVersion();
+      const kicadVer = await kicadCliVersion();
       const config = await loadConfig(repo);
-      const model = resolveModel(opts.model, config);
+      const { model, source } = resolveModel(opts.model, config);
       const res = await runCreate({
         repoRoot: repo,
         briefPath: opts.brief,
         model,
         interactive: opts.interactive ?? false,
         log: (s) => console.log(s),
+        renderer: rendererOf(),
+        meta: { command: 'create', modelSource: source, version, kicadCliVersion: kicadVer },
       });
       process.exit(res.ok ? 0 : 1);
     } catch (err) {
