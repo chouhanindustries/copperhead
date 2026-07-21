@@ -40,3 +40,4 @@ Everything else in the design follows from these. They are covered in depth in [
 - [Quickstart](/getting-started/quickstart/): install, set a key, make your first change
 - [The agent loop](/concepts/agent-loop/): what one run actually does
 - [CLI reference](/reference/cli/): every command and flag
+- [copperhead.sh](https://copperhead.sh): the project site

@@ -14,7 +14,10 @@ export default defineConfig({
       title: 'copperhead',
       description:
         'Cursor for circuit boards: an AI agent that designs, documents, and validates real PCBs on KiCad repositories',
-      social: [{ icon: 'github', label: 'GitHub', href: REPO }],
+      social: [
+        { icon: 'external', label: 'copperhead.sh', href: 'https://copperhead.sh' },
+        { icon: 'github', label: 'GitHub', href: REPO },
+      ],
       editLink: { baseUrl: `${REPO}/edit/main/docs/` },
       lastUpdated: true,
       plugins: [

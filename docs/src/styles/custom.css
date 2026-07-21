@@ -10,3 +10,14 @@
   --sl-color-accent: #9c5c22;
   --sl-color-accent-high: #4d2e10;
 }
+
+/* The external-link arrow on copperhead.sh links inherits a muted gray and is
+   easy to miss; render it in the copper accent. */
+a[href='https://copperhead.sh'] svg {
+  color: var(--sl-color-accent);
+}
+
+/* On the hero action, also bump it past the stock 1.5rem icon size. */
+.hero a[href='https://copperhead.sh'] svg {
+  font-size: 1.75rem;
+}
