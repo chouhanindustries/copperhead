@@ -234,14 +234,14 @@ This kills the last "docs drift" failure mode: requirements (openspec) → budge
 ## 3. CLI surface (Phase 1)
 
 ```
-copperhead create --brief brief.md   # Mode A: full pipeline (§2.5)
+copperhead create --brief brief.md [--keep-on-fail]   # Mode A: full pipeline (§2.5)
 copperhead init [--path hardware/]
     Detect .kicad_sch/.kicad_pcb, parse symbols/footprints/nets,
     generate docs/ skeleton pre-filled with the real BOM and pinout
     extracted from the schematic. Idempotent; never overwrites
     hand-edited docs without --force.
 
-copperhead do "<change request>" [--model gpt-5|claude] [--max-turns N]
+copperhead do "<change request>" [--model gpt-5|claude] [--max-turns N] [--keep-on-fail]
     The core loop. See §4.
 
 copperhead check          (alias: copperhead verify)
@@ -291,7 +291,7 @@ It's a loop, and it looks a lot like pair-programming, except the codebase is a 
 2. **Plan.** Agent states, in one short block: what will change, which files are affected, which constraints are at risk (e.g. sleep-current budget).
 3. **Edit.** Agent uses tools to modify KiCad files and docs. Edits to `.kicad_sch`/`.kicad_pcb` are **text edits on the s-expression source** (search/replace with context anchors) — no full-file regeneration, ever. Same net names and refdes everywhere.
 4. **Verify.** Agent runs `run_erc` (always) and `run_drc` (if the .kicad_pcb changed). Parses violations.
-5. **Repair.** If violations: fix and re-run, up to `maxRepairCycles` (default 5). If still failing: revert to the pre-run snapshot and report failure with the violation list.
+5. **Repair.** If violations: fix and re-run, up to `maxRepairCycles` (default 5). If still failing: revert to the pre-run snapshot and report failure with the violation list. With the explicit debugging flag `--keep-on-fail`, skip only that restore/clean step, leave the failed tree for inspection, and print the snapshot refs plus the exact manual recovery command; the run still fails and cannot commit.
 6. **Propagate.** Agent runs `check_drift`; any doc that references a changed value/part/pin must be updated in the same run.
 7. **Rationale.** Every non-trivial decision gets a one-line "why" written into the relevant doc.
 8. **Commit.** `git commit` with a structured message (`copperhead: <request>\n\n<summary of edits + verification result>`). Requires clean working tree at start (§7 safety).
@@ -338,7 +338,7 @@ interface Provider {
 ### 4.5 Budgets & failure modes
 
 - `maxTurns` default 40; `maxRepairCycles` 5; per-run token budget logged
-- On any unrecoverable failure: `git checkout` the snapshot, print the transcript path, exit 1
+- On any unrecoverable failure: restore the git snapshot, print the transcript path, exit 1. With `--keep-on-fail`, leave the failed tree dirty instead, record the skipped rollback in `summary.md`, and print the pre-run HEAD (plus the `git stash create` object for an `--allow-dirty` start) and a manual reset/clean/stash-apply command; exit status and commit gating are unchanged.
 - Rate-limit (429): exponential backoff ×3, then fail over to the other provider if a key exists
 
 ---
@@ -374,7 +374,7 @@ Acceptance: type "add a second RGB LED on an RTC-capable pin" → watch schemati
 
 ## 7. Safety rails
 
-- Refuse to run `do` on a dirty git tree (offer `--allow-dirty` with snapshot via `git stash create`)
+- Refuse to run `do` on a dirty git tree (offer `--allow-dirty` with snapshot via `git stash create`). `--keep-on-fail` does not weaken this preflight: a later run still refuses the intentionally preserved dirty state unless `--allow-dirty` is supplied.
 - All file tools sandboxed to repo root; no network tools in Phase 1
 - `.env` in `.gitignore` from first commit; keys only via env vars — never written to any file, transcript, or commit
 - Transcripts in `.copperhead/runs/` redact anything matching `sk-[A-Za-z0-9_-]+`
@@ -421,6 +421,7 @@ Format: Given / When / Then. "Fixture" = the open-telegraph repo (or the tiny te
 - **AC-3.8 (dirty tree)** With uncommitted changes and no `--allow-dirty`: refuses to start.
 - **AC-3.9 (dry run)** `--dry-run` prints the proposed diff and writes nothing.
 - **AC-3.10 (provider parity)** AC-3.1 passes with both `--model gpt-5` and `--model claude`.
+- **AC-3.11 (keep failed tree for debugging)** Given a run started with `--keep-on-fail`, when any unrecoverable failure path is reached, then no commit is created, the agent's failed files remain exactly in place, the CLI prominently reports the pre-run snapshot and a manual recovery command, and `summary.md` records that rollback was skipped. Without the flag, AC-3.6 remains unchanged. With `--allow-dirty`, the warning and summary also name the stash snapshot and the recovery command reapplies it.
 
 ### AC-4 · Safety
 

@@ -90,6 +90,7 @@ export interface CreateOptions {
   briefPath: string;
   model: string;
   interactive?: boolean;
+  keepOnFail?: boolean;
   log: (s: string) => void;
   renderer?: ProgressRenderer;
   /** Command-level metadata; stage and brief identity are filled in per stage. */
@@ -119,6 +120,7 @@ export async function runCreate(opts: CreateOptions): Promise<{ ok: boolean; com
       stagePrompt: stage.prompt(brief),
       interactive: opts.interactive ?? false,
       allowDirty: true, // stages build on each other's uncommitted state within the pipeline
+      keepOnFail: opts.keepOnFail ?? false,
       log: opts.log,
       ...(opts.renderer ? { renderer: opts.renderer } : {}),
       meta: {

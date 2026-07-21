@@ -10,6 +10,23 @@ export interface GitSnapshot {
   stash: string | null;
 }
 
+function shellQuote(value: string): string {
+  return `'${value.replace(/'/g, `'"'"'`)}'`;
+}
+
+/**
+ * Print the exact manual equivalent of restore(). Snapshot refs are quoted so
+ * this remains safe even when a test double or future git implementation uses
+ * something other than a hexadecimal object id.
+ */
+export function recoveryCommand(snap: GitSnapshot): string {
+  return [
+    `git reset --hard ${shellQuote(snap.head)}`,
+    'git clean -fd -e .copperhead/runs',
+    ...(snap.stash ? [`git stash apply ${shellQuote(snap.stash)}`] : []),
+  ].join(' && ');
+}
+
 async function git(repo: string, args: string[]): Promise<string> {
   const { stdout } = await execa('git', args, { cwd: repo });
   return stdout.trim();

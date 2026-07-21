@@ -20,6 +20,10 @@ Once started, `create` SHALL always finish with the complete output package: gat
 - **WHEN** `create` runs without `--interactive`
 - **THEN** no stage blocks on human input and the run ends with all artifacts on disk
 
+#### Scenario: Failed stage retained for debugging
+- **WHEN** a stage fails during `create --keep-on-fail`
+- **THEN** the pipeline stops with a non-zero result, creates no failure commit, leaves that stage's failed tree in place, and prints the snapshot refs and manual recovery command
+
 ### Requirement: Resumability from repo state
 Pipeline state SHALL live in the repo (docs + files + gate results), so a killed `create` re-run SHALL continue from the first incomplete stage without redoing completed ones.
 

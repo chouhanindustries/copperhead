@@ -51,7 +51,7 @@ Tools are defined once as `{ name, description, jsonSchema, handler }` in `src/a
 
 ### D6 — Run lifecycle: git snapshot, transcript, structured commit
 
-`do` refuses a dirty tree unless `--allow-dirty` (which takes a `git stash create` snapshot; clean trees snapshot via the current HEAD). Every run writes a JSONL transcript to `.copperhead/runs/<timestamp>/`, with a redaction pass (`sk-[A-Za-z0-9_-]+` and generic bearer-token patterns) applied at write time, not post-hoc (AC-4.1). Success path: single `git commit` with the structured message; failure path: hard restore to snapshot, print transcript path, exit 1.
+`do` refuses a dirty tree unless `--allow-dirty` (which takes a `git stash create` snapshot; clean trees snapshot via the current HEAD). Every run writes a JSONL transcript to `.copperhead/runs/<timestamp>/`, with a redaction pass (`sk-[A-Za-z0-9_-]+` and generic bearer-token patterns) applied at write time, not post-hoc (AC-4.1). Success path: single `git commit` with the structured message. Failure path defaults to a hard restore to the snapshot, prints the transcript path, and exits 1. `--keep-on-fail` is a debugging-only exception to the cleanup action: the same failure path skips restore, never commits, records rollback as skipped in `summary.md`, and prints a shell-safe recovery recipe using the pre-run HEAD and, when present, the dirty-tree stash object. The normal dirty-tree preflight remains in force for the next run.
 
 ### D7 — Spec-gating: OpenSpec as subprocess, proposal-as-plan
 

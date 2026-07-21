@@ -104,12 +104,20 @@ program
   .option('--model <model>', 'gpt-5 | claude (or a full model id)')
   .option('--max-turns <n>', 'turn budget for this run')
   .option('--allow-dirty', 'allow a dirty tree (snapshot via git stash create)')
+  .option('--keep-on-fail', 'leave failed edits in place for debugging (prints recovery command)')
   .option('--dry-run', 'propose the diff, write nothing')
   .option('--interactive', 'pause for approval after the proposal validates')
   .action(
     async (
       request: string,
-      opts: { model?: string; maxTurns?: string; allowDirty?: boolean; dryRun?: boolean; interactive?: boolean },
+      opts: {
+        model?: string;
+        maxTurns?: string;
+        allowDirty?: boolean;
+        keepOnFail?: boolean;
+        dryRun?: boolean;
+        interactive?: boolean;
+      },
     ) => {
       const repo = repoOf(program.opts());
       try {
@@ -122,6 +130,7 @@ program
           model,
           ...(opts.maxTurns ? { maxTurns: parseInt(opts.maxTurns, 10) } : {}),
           allowDirty: opts.allowDirty ?? false,
+          keepOnFail: opts.keepOnFail ?? false,
           dryRun: opts.dryRun ?? false,
           interactive: opts.interactive ?? false,
           confirm: confirmTty,
@@ -179,7 +188,8 @@ program
   .requiredOption('--brief <file>', 'product brief (markdown)')
   .option('--model <model>', 'gpt-5 | claude')
   .option('--interactive', 're-enable the human gates (spec approval, pre-export)')
-  .action(async (opts: { brief: string; model?: string; interactive?: boolean }) => {
+  .option('--keep-on-fail', 'leave failed-stage edits in place for debugging (prints recovery command)')
+  .action(async (opts: { brief: string; model?: string; interactive?: boolean; keepOnFail?: boolean }) => {
     const repo = repoOf(program.opts());
     try {
       const kicadVer = await kicadCliVersion();
@@ -190,6 +200,7 @@ program
         briefPath: opts.brief,
         model,
         interactive: opts.interactive ?? false,
+        keepOnFail: opts.keepOnFail ?? false,
         log: (s) => console.log(s),
         renderer: rendererOf(),
         meta: { command: 'create', modelSource: source, version, kicadCliVersion: kicadVer },

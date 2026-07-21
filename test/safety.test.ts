@@ -7,7 +7,7 @@ import { redactSecrets } from '../src/util/redact.js';
 import { withRetry } from '../src/util/retry.js';
 import { toolWriteFile, toolEditFile, toolSearch } from '../src/agent/filetools.js';
 import { Transcript } from '../src/agent/transcript.js';
-import { isDirty, hasCommits, snapshot, restore } from '../src/util/git.js';
+import { isDirty, hasCommits, snapshot, restore, recoveryCommand } from '../src/util/git.js';
 import { tempFixtureRepo } from './helpers.js';
 import { execa } from 'execa';
 
@@ -165,6 +165,12 @@ describe('retry', () => {
 });
 
 describe('git guard (AC-3.8, AC-3.6)', () => {
+  it('shell-quotes every snapshot ref in manual recovery commands', () => {
+    expect(recoveryCommand({ head: "head'with-quote", stash: "stash'with-quote" })).toBe(
+      `git reset --hard 'head'"'"'with-quote' && git clean -fd -e .copperhead/runs && git stash apply 'stash'"'"'with-quote'`,
+    );
+  });
+
   it('hasCommits distinguishes an unborn HEAD from a committed repo', async () => {
     const dir = await mkdtemp(path.join(tmpdir(), 'ch-'));
     expect(await hasCommits(dir)).toBe(false); // not a repo at all

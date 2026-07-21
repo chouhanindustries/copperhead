@@ -60,6 +60,7 @@ copperhead do "<change request>" [options]
 | `--model <model>` | `gpt-5`, `claude`, or a full model id. |
 | `--max-turns <n>` | Turn budget for this run. Overrides `maxTurns` from config. |
 | `--allow-dirty` | Permit a dirty working tree. The snapshot is taken with `git stash create`. |
+| `--keep-on-fail` | Debugging only: skip rollback after failure, leave the tree dirty, and print HEAD/stash recovery instructions. Failure still exits 1 and never commits. |
 | `--dry-run` | Propose the diff and write nothing. |
 | `--interactive` | Pause for approval once the proposal validates. |
 
@@ -110,7 +111,7 @@ Exit code 2 is the important one. A requirement violation means the as-built des
 The full pipeline from a product brief to the output package.
 
 ```bash
-copperhead create --brief brief.md [--model <model>] [--interactive]
+copperhead create --brief brief.md [--model <model>] [--interactive] [--keep-on-fail]
 ```
 
 | Option | Description |
@@ -118,6 +119,7 @@ copperhead create --brief brief.md [--model <model>] [--interactive]
 | `--brief <file>` | **Required.** The product brief, in markdown. |
 | `--model <model>` | `gpt-5` or `claude`. |
 | `--interactive` | Re-enable the human gates: spec approval, and a pause before export. |
+| `--keep-on-fail` | Debugging only: preserve the failed stage's tree and print the snapshot plus manual recovery command. |
 
 Exits 1 if any stage fails to complete, 0 when the pipeline finishes.
 

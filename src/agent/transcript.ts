@@ -39,6 +39,12 @@ export interface RunSummaryData {
   tokensOut: number;
   outcome: 'success' | 'failure' | 'aborted';
   openObligations: string | null;
+  rollback?: {
+    status: 'completed' | 'skipped' | 'failed';
+    head: string;
+    stash: string | null;
+    recoveryCommand: string;
+  };
   detail?: string;
   env?: RunMeta;
   stats?: RunStats;
@@ -114,6 +120,17 @@ export class Transcript {
     ];
     if (s.openObligations) {
       lines.push('', '## Open sync obligations (unmet at run end)', '', s.openObligations);
+    }
+    if (s.rollback) {
+      lines.push(
+        '',
+        '## Rollback',
+        '',
+        `- **Status:** ${s.rollback.status}${s.rollback.status === 'skipped' ? ' (--keep-on-fail)' : ''}`,
+        `- **Pre-run HEAD:** ${s.rollback.head}`,
+        `- **Dirty-tree stash:** ${s.rollback.stash ?? 'n/a'}`,
+        `- **Manual recovery:** \`${s.rollback.recoveryCommand}\``,
+      );
     }
     if (s.detail) lines.push('', '## Detail', '', s.detail);
     const out = path.join(this.dir, 'summary.md');

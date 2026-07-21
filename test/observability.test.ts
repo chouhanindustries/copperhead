@@ -5,6 +5,7 @@ import { execa } from 'execa';
 import { runAgentLoop, type RunOptions } from '../src/agent/loop.js';
 import type { Provider, Turn } from '../src/agent/types.js';
 import { InteractiveRenderer, makeRenderer } from '../src/agent/render.js';
+import { gitPreflight } from '../src/util/git.js';
 import { tempFixtureRepo } from './helpers.js';
 
 /** Replays a fixed script of turns; the last turn repeats forever. */
@@ -160,6 +161,112 @@ describe('exit paths and run-end addenda (task 4.6)', () => {
       // rolled back per the snapshot contract
       const { stdout: status } = await execa('git', ['status', '--porcelain'], { cwd: repo });
       expect(status).toBe('');
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it('keeps default rollback behavior when a provider fails after writing a file', async () => {
+    const { repo, cleanup } = await tempFixtureRepo();
+    try {
+      const debugFile = path.join(repo, 'debug-output.txt');
+      const provider: Provider = {
+        name: 'scripted',
+        chat: async () => {
+          await writeFile(debugFile, 'partial agent output\n', 'utf8');
+          throw new Error('provider exploded');
+        },
+      };
+
+      const res = await runAgentLoop(loopOpts(repo, provider, [], { maxTurns: 2 }));
+
+      expect(res.outcome).toBe('failure');
+      await expect(readFile(debugFile, 'utf8')).rejects.toThrow();
+      const summary = await readFile(path.join(res.transcriptDir, 'summary.md'), 'utf8');
+      expect(summary).toContain('**Status:** completed');
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it('--keep-on-fail preserves failed output and records a manual recovery command', async () => {
+    const { repo, cleanup } = await tempFixtureRepo();
+    try {
+      const lines: string[] = [];
+      const debugFile = path.join(repo, 'debug-output.txt');
+      const { stdout: beforeHead } = await execa('git', ['rev-parse', 'HEAD'], { cwd: repo });
+      const provider: Provider = {
+        name: 'scripted',
+        chat: async () => {
+          await writeFile(debugFile, 'partial agent output\n', 'utf8');
+          throw new Error('provider exploded');
+        },
+      };
+
+      const res = await runAgentLoop(
+        loopOpts(repo, provider, lines, { maxTurns: 2, keepOnFail: true }),
+      );
+
+      expect(res.outcome).toBe('failure');
+      expect(res.commit).toBeNull();
+      expect(await readFile(debugFile, 'utf8')).toBe('partial agent output\n');
+      expect(lines).toContain('WARNING: run failed; tree left dirty for inspection (--keep-on-fail)');
+      expect(lines.join('\n')).toContain(`pre-run snapshot: HEAD ${beforeHead}`);
+      expect(lines.join('\n')).toContain(`git reset --hard '${beforeHead}' && git clean -fd -e .copperhead/runs`);
+
+      const { stdout: afterHead } = await execa('git', ['rev-parse', 'HEAD'], { cwd: repo });
+      expect(afterHead).toBe(beforeHead);
+      const summary = await readFile(path.join(res.transcriptDir, 'summary.md'), 'utf8');
+      expect(summary).toContain('## Rollback');
+      expect(summary).toContain('**Status:** skipped (--keep-on-fail)');
+      expect(summary).toContain(`**Pre-run HEAD:** ${beforeHead}`);
+      const events = await transcriptEvents(res.transcriptDir);
+      expect(events.some((event) => event.type === 'rollback-skipped')).toBe(true);
+      await expect(gitPreflight(repo)).rejects.toThrow(/working tree is dirty/);
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it('--allow-dirty + --keep-on-fail reports the stash ref and restores it with the printed recipe', async () => {
+    const { repo, cleanup } = await tempFixtureRepo();
+    try {
+      const lines: string[] = [];
+      const userFile = path.join(repo, 'hardware', 'open-key.kicad_sch');
+      const committed = await readFile(userFile, 'utf8');
+      const userVersion = committed.replace('KEY_DAH', 'KEY_USER_EDIT');
+      await writeFile(userFile, userVersion, 'utf8');
+      const debugFile = path.join(repo, 'debug-output.txt');
+      const provider: Provider = {
+        name: 'scripted',
+        chat: async () => {
+          await writeFile(debugFile, 'partial agent output\n', 'utf8');
+          throw new Error('provider exploded');
+        },
+      };
+
+      const res = await runAgentLoop(
+        loopOpts(repo, provider, lines, { maxTurns: 2, allowDirty: true, keepOnFail: true }),
+      );
+
+      expect(await readFile(userFile, 'utf8')).toBe(userVersion);
+      expect(await readFile(debugFile, 'utf8')).toBe('partial agent output\n');
+      const output = lines.join('\n');
+      const snapshot = output.match(/pre-run snapshot: HEAD ([0-9a-f]+); dirty-tree stash ([0-9a-f]+)/);
+      expect(snapshot).not.toBeNull();
+      const [, head, stash] = snapshot!;
+      expect(output).toContain(`git stash apply '${stash}'`);
+
+      // Exercise the exact recovery sequence printed by copperhead.
+      await execa('git', ['reset', '--hard', head!], { cwd: repo });
+      await execa('git', ['clean', '-fd', '-e', '.copperhead/runs'], { cwd: repo });
+      await execa('git', ['stash', 'apply', stash!], { cwd: repo });
+      expect(await readFile(userFile, 'utf8')).toBe(userVersion);
+      await expect(readFile(debugFile, 'utf8')).rejects.toThrow();
+
+      const summary = await readFile(path.join(res.transcriptDir, 'summary.md'), 'utf8');
+      expect(summary).toContain(`**Dirty-tree stash:** ${stash}`);
+      expect(summary).toContain(`git stash apply '${stash}'`);
     } finally {
       await cleanup();
     }

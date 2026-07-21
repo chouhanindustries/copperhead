@@ -71,3 +71,14 @@ The active provider/model SHALL be resolved as: `--model` flag, then `COPPERHEAD
 #### Scenario: Flag overrides config
 - **WHEN** config.json says `"model": "gpt-5"` and the user runs `do --model claude`
 - **THEN** the Anthropic provider is used for that run
+
+### Requirement: Failed-run inspection flag
+The `do` and `create` commands SHALL expose `--keep-on-fail` and forward it to every applicable agent-loop run. The option SHALL affect failed-run cleanup only; it SHALL NOT bypass dirty-tree preflight, verification, obligations, failure exit status, or the no-commit rule.
+
+#### Scenario: Flag is available on both agent commands
+- **WHEN** `copperhead do --help` and `copperhead create --help` are run
+- **THEN** both list `--keep-on-fail` as a debugging option that leaves failed edits in place and prints recovery instructions
+
+#### Scenario: Create forwards the flag to a failed stage
+- **WHEN** `create --keep-on-fail` reaches a stage that fails
+- **THEN** that stage leaves its failed files for inspection and the pipeline exits non-zero without advancing to another stage

@@ -10,7 +10,15 @@ import { Transcript, type ExitPath, type RunStats } from './transcript.js';
 import { collectRunMeta, renderCliHeader, type RunMeta, type RunMetaInput } from './runmeta.js';
 import { plainRenderer, fmtDuration, fmtTokens, type ProgressRenderer } from './render.js';
 import { ObligationsLedger } from './ledger.js';
-import { gitPreflight, isDirty, snapshot, restore, commitAll, changedFiles } from '../util/git.js';
+import {
+  gitPreflight,
+  isDirty,
+  snapshot,
+  restore,
+  recoveryCommand,
+  commitAll,
+  changedFiles,
+} from '../util/git.js';
 import { withRetry, isRateLimit } from '../util/retry.js';
 import { openspecArchive } from '../openspec/cli.js';
 import { existsSync } from 'node:fs';
@@ -24,6 +32,8 @@ export interface RunOptions {
   model: string;
   maxTurns?: number;
   allowDirty?: boolean;
+  /** Leave failed edits in place for inspection instead of restoring the snapshot. */
+  keepOnFail?: boolean;
   dryRun?: boolean;
   interactive?: boolean;
   confirm?: (q: string) => Promise<boolean>;
@@ -242,16 +252,26 @@ async function runWithMemory(opts: RunOptions, memory: SynapMemory | null): Prom
     ].join(' · ');
 
   const fail = async (reason: string, exitPath: ExitPath): Promise<RunResult> => {
-    await transcript.event('run-failed', { reason, exitPath });
+    const keepOnFail = opts.keepOnFail ?? false;
+    const manualRecovery = recoveryCommand(snap);
+    await transcript.event('run-failed', { reason, exitPath, keepOnFail });
     // The rollback itself can fail (git in a bad state). That must not become
     // an unhandled throw that skips run-end and summary.md — the summary is
     // most valuable exactly when the tree is left in an unknown state.
     let restoreError: string | null = null;
-    try {
-      await restore(repoRoot, snap);
-    } catch (err) {
-      restoreError = (err as Error).message;
-      await transcript.event('restore-failed', { error: restoreError });
+    if (keepOnFail) {
+      await transcript.event('rollback-skipped', {
+        head: snap.head,
+        stash: snap.stash,
+        recoveryCommand: manualRecovery,
+      });
+    } else {
+      try {
+        await restore(repoRoot, snap);
+      } catch (err) {
+        restoreError = (err as Error).message;
+        await transcript.event('restore-failed', { error: restoreError });
+      }
     }
     const runStats = stats(exitPath);
     await transcript.event('run-end', runStats);
@@ -267,12 +287,24 @@ async function runWithMemory(opts: RunOptions, memory: SynapMemory | null): Prom
       tokensOut,
       outcome: 'failure',
       openObligations: ctx.ledger.isClear ? null : ctx.ledger.describe(),
-      detail: restoreError ? `${reason}\n\nROLLBACK FAILED: ${restoreError} — the working tree may be in a partial state; inspect it with git status/git diff before rerunning` : reason,
+      rollback: {
+        status: keepOnFail ? 'skipped' : restoreError ? 'failed' : 'completed',
+        head: snap.head,
+        stash: snap.stash,
+        recoveryCommand: manualRecovery,
+      },
+      detail: restoreError
+        ? `${reason}\n\nROLLBACK FAILED: ${restoreError} — the working tree may be in a partial state; inspect it with git status/git diff before rerunning`
+        : reason,
       env: meta,
       stats: runStats,
     });
     log(`run failed: ${reason}`);
-    if (restoreError) {
+    if (keepOnFail) {
+      log('WARNING: run failed; tree left dirty for inspection (--keep-on-fail)');
+      log(`pre-run snapshot: HEAD ${snap.head}${snap.stash ? `; dirty-tree stash ${snap.stash}` : ''}`);
+      log(`to roll back: ${manualRecovery}`);
+    } else if (restoreError) {
       log(`WARNING: rollback failed (${restoreError}); the working tree may be in a partial state`);
     } else {
       log(`working tree restored to pre-run snapshot`);
@@ -285,7 +317,7 @@ async function runWithMemory(opts: RunOptions, memory: SynapMemory | null): Prom
       exitPath,
       summary: reason,
       transcriptDir: transcript.dir,
-      filesTouched: [],
+      filesTouched: keepOnFail ? [...ctx.filesTouched] : [],
       commit: null,
     };
   };

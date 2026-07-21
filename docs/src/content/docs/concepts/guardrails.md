@@ -15,6 +15,8 @@ The agent cannot touch a KiCad file until a validated OpenSpec proposal for the 
 
 No file mutation counts as done until `kicad-cli` ERC passes, plus DRC if the board changed. On failure the agent reads the normalized report back and repairs, up to `maxRepairCycles` attempts. If it still cannot get clean, the run rolls back to the git snapshot taken before the first edit.
 
+For debugging, `do` and `create` accept `--keep-on-fail`. It skips only the failed-run restore and clean, leaving the agent's exact output for inspection. The run still fails, creates no commit, and retains every unmet obligation. Copperhead prints the pre-run HEAD, the stash object too when `--allow-dirty` was used, and the exact reset/clean/stash-apply command; `summary.md` records that rollback was skipped. Because the normal clean-tree preflight is unchanged, the next run refuses this dirty tree unless you recover it or explicitly pass `--allow-dirty`.
+
 Spec-gated in, verification-gated out: the design cannot drift from its requirements, because drift is a build failure.
 
 ## The sync-obligations ledger
