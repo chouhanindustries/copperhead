@@ -1,4 +1,8 @@
 import { execa } from 'execa';
+import { cp, mkdir, mkdtemp, rm } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 
 export interface GitSnapshot {
   head: string;
@@ -43,10 +47,49 @@ export async function snapshot(repo: string): Promise<GitSnapshot> {
  * (.copperhead/runs/) survives rollback: it is the evidence of what failed.
  */
 export async function restore(repo: string, snap: GitSnapshot): Promise<void> {
-  await git(repo, ['reset', '--hard', snap.head]);
-  await git(repo, ['clean', '-fd', '-e', '.copperhead/runs']);
-  if (snap.stash) {
-    await git(repo, ['stash', 'apply', snap.stash]);
+  // `git clean -e` only protects untracked paths. A run directory can become
+  // staged (for example while preserving failed work), and `reset --hard`
+  // deletes such paths before clean runs. Copy it outside the repository so
+  // the audit trail survives regardless of its index state.
+  const runs = path.join(repo, '.copperhead', 'runs');
+  let backupRoot: string | null = null;
+  let backup: string | null = null;
+  try {
+    try {
+      backupRoot = await mkdtemp(path.join(tmpdir(), 'copperhead-runs-'));
+      backup = path.join(backupRoot, 'runs');
+      if (existsSync(runs)) await cp(runs, backup, { recursive: true });
+    } catch (err) {
+      backup = null;
+      console.warn(`warning: could not preserve failed-run audit trail before rollback: ${(err as Error).message}`);
+    }
+
+    try {
+      await git(repo, ['reset', '--hard', snap.head]);
+      await git(repo, ['clean', '-fd', '-e', '.copperhead/runs']);
+      if (snap.stash) {
+        await git(repo, ['stash', 'apply', snap.stash]);
+      }
+    } finally {
+      if (backup && existsSync(backup)) {
+        try {
+          await mkdir(path.dirname(runs), { recursive: true });
+          // Restored runs are intentionally untracked; their audit contents
+          // are ignored by the target-repository convention.
+          await cp(backup, runs, { recursive: true, force: true });
+        } catch (err) {
+          console.warn(`warning: could not restore failed-run audit trail: ${(err as Error).message}`);
+        }
+      }
+    }
+  } finally {
+    if (backupRoot) {
+      try {
+        await rm(backupRoot, { recursive: true, force: true });
+      } catch (err) {
+        console.warn(`warning: could not clean failed-run audit backup: ${(err as Error).message}`);
+      }
+    }
   }
 }
 
