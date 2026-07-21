@@ -1,0 +1,14 @@
+# cli-surface — Delta Spec
+
+## ADDED Requirements
+
+### Requirement: `mcp` command
+The CLI SHALL provide `copperhead mcp [--repo <path>]`, which starts the stdio MCP server defined by the mcp-server capability and runs until the host closes the transport. The command SHALL exit non-zero with a clear message (no stack trace) when the target repo does not exist.
+
+#### Scenario: Server starts on stdio
+- **WHEN** `copperhead mcp` is spawned by an MCP host
+- **THEN** the process serves the MCP protocol over stdio and lists the four pipeline tools
+
+#### Scenario: Bad repo path fails clearly
+- **WHEN** `copperhead mcp --repo /nonexistent` is run
+- **THEN** the process exits non-zero with a message naming the path, without a stack trace
