@@ -8,17 +8,20 @@ import type { RunMetaInput } from '../agent/runmeta.js';
 import type { ProgressRenderer } from '../agent/render.js';
 import { openspecInit } from '../openspec/cli.js';
 import { runCheck } from './check.js';
+import { children, isList, listSymbols, parseSexp } from '../kicad/sexp.js';
+import { checkDrift } from '../memory/drift.js';
 
 /**
  * Mode A (`copperhead create`, SPEC §2.5): staged pipeline, each stage a
- * do-loop run with a stage prompt and gate. Stage completion is inferred from
- * repo state, which makes the pipeline resumable for free (design D10).
+ * do-loop run with a stage prompt and contract. Stage contracts are checked
+ * both before a resume skip and after a successful run, so the pipeline cannot
+ * advance past partial work (design D10).
  * Run-to-completion: gates are quality checks the agent must satisfy, not
  * stops that wait for a human (unless --interactive).
  */
 interface Stage {
   name: string;
-  /** true when repo state shows the stage is already done (resume support). */
+  /** true when repo state satisfies the stage contract (resume and acceptance). */
   isComplete: (repoRoot: string, docs: string) => Promise<boolean> | boolean;
   prompt: (brief: string) => string;
 }
@@ -29,6 +32,38 @@ async function docHasContent(repoRoot: string, rel: string, marker: string): Pro
   const p = path.join(repoRoot, rel);
   if (!existsSync(p)) return false;
   return (await readFile(p, 'utf8')).includes(marker);
+}
+
+async function docHasFilledSection(repoRoot: string, rel: string, heading: string): Promise<boolean> {
+  const p = path.join(repoRoot, rel);
+  if (!existsSync(p)) return false;
+  const lines = (await readFile(p, 'utf8')).split('\n');
+  const headingAt = lines.findIndex((line) => line.trim() === heading);
+  if (headingAt < 0) return false;
+  const nextHeading = lines.slice(headingAt + 1).findIndex((line) => /^##\s/.test(line));
+  const section = lines.slice(headingAt + 1, nextHeading < 0 ? undefined : headingAt + 1 + nextHeading).join('\n');
+  return section.replace(/<!--[\s\S]*?-->/g, '').trim().length > 0;
+}
+
+async function schematicIsComplete(repoRoot: string, docs: string): Promise<boolean> {
+  try {
+    const config = await loadConfig(repoRoot);
+    if (!config.schematic || !existsSync(path.join(repoRoot, config.schematic))) return false;
+    if (!(await listSymbols(path.join(repoRoot, config.schematic))).length) return false;
+    return (await checkDrift(repoRoot, docs, config.schematic)).length === 0;
+  } catch {
+    return false;
+  }
+}
+
+async function layoutIsComplete(repoRoot: string, docs: string): Promise<boolean> {
+  const config = await loadConfig(repoRoot);
+  if (!config.board) return false;
+  const board = path.join(repoRoot, config.board);
+  if (!existsSync(board)) return false;
+  const root = parseSexp(await readFile(board, 'utf8'))[0];
+  const hasFootprint = !!root && isList(root) && children(root, 'footprint').length > 0;
+  return hasFootprint && (await docHasFilledSection(repoRoot, path.join(docs, 'LAYOUT.md'), '## Draft quality'));
 }
 
 export const STAGES: Stage[] = [
@@ -52,16 +87,13 @@ export const STAGES: Stage[] = [
   },
   {
     name: 'schematic',
-    isComplete: async (root) => {
-      const config = await loadConfig(root);
-      return !!config.schematic && existsSync(path.join(root, config.schematic));
-    },
+    isComplete: schematicIsComplete,
     prompt: () =>
       'Stage 4: schematic. Build the schematic sheet by sheet from BOM.md and SUBSYSTEMS.md. After each sheet, run run_erc and fix violations before moving on. Same net names and refdes everywhere. Update PINOUT.md as you assign pins; check the strapping table first.',
   },
   {
     name: 'layout-draft',
-    isComplete: (root, docs) => docHasContent(root, path.join(docs, 'LAYOUT.md'), '## Draft quality'),
+    isComplete: layoutIsComplete,
     prompt: () =>
       'Stage 5: first-draft layout. Rule-driven placement written as real coordinates: connectors on edges, decoupling at IC pins, ESD at connectors, keepouts honored. Route power and short critical nets; leave the rest as ratsnest. Every routed net must pass run_drc. Then write the "## Draft quality" section in LAYOUT.md: exactly what is fine and what a human or specialist tool should redo. Non-optimal is acceptable; unlabeled non-optimal is not.',
   },
@@ -130,6 +162,12 @@ export async function runCreate(opts: CreateOptions): Promise<{ ok: boolean; com
     });
     if (res.outcome !== 'success') {
       opts.log(`stage ${stage.name} did not complete (${res.outcome}); re-run copperhead create to resume here`);
+      return { ok: false, completed };
+    }
+    if (!(await stage.isComplete(opts.repoRoot, config.docs))) {
+      opts.log(
+        `stage ${stage.name} ran successfully but the stage contract is not met yet (partial work committed); re-run copperhead create to continue this stage`,
+      );
       return { ok: false, completed };
     }
     completed.push(stage.name);
