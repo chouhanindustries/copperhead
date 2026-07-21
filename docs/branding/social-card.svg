@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 630" font-family="Fira Mono, DejaVu Sans Mono, monospace">
+  <rect width="1200" height="630" fill="#15181c"/>
+  <g stroke="#b87333" stroke-width="10" fill="none">
+    <circle cx="298" cy="315" r="23.5"/>
+    <path d="M298 269v22.5M298 338.5v22.5M252 315h22.5M321.5 315h22.5"/>
+  </g>
+  <text x="376" y="347" font-size="92" font-weight="500" fill="#b87333">copperhead</text>
+</svg>

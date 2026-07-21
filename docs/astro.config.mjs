@@ -19,6 +19,12 @@ export default defineConfig({
       customCss: ['./src/styles/custom.css'],
       head: [
         { tag: 'meta', attrs: { name: 'theme-color', content: '#b87333' } },
+        { tag: 'link', attrs: { rel: 'icon', href: '/favicon.ico', sizes: '32x32' } },
+        { tag: 'link', attrs: { rel: 'apple-touch-icon', href: '/apple-touch-icon.png' } },
+        { tag: 'link', attrs: { rel: 'manifest', href: '/site.webmanifest' } },
+        { tag: 'meta', attrs: { property: 'og:image', content: 'https://docs.copperhead.sh/og.png' } },
+        { tag: 'meta', attrs: { name: 'twitter:card', content: 'summary_large_image' } },
+        { tag: 'meta', attrs: { name: 'twitter:image', content: 'https://docs.copperhead.sh/og.png' } },
       ],
       sidebar: [
         {
