@@ -18,6 +18,8 @@ import { openSynapMemory, type RunRecord, type SynapMemory } from '../memory/syn
 
 /** What the user sees at the moment they decide whether to keep going. */
 export interface BudgetExhaustedStats {
+  /** The run's original turn budget, before any extensions. */
+  maxTurns: number;
   turnsUsed: number;
   tokensIn: number;
   tokensOut: number;
@@ -233,13 +235,24 @@ async function runWithMemory(opts: RunOptions, memory: SynapMemory | null): Prom
       // Budget exhausted. In an attended run this is a user decision made with
       // the cost visible, not an unconditional rollback (issue #15).
       const stats: BudgetExhaustedStats = {
+        maxTurns,
         turnsUsed: turn,
         tokensIn,
         tokensOut,
         filesTouched: [...ctx.filesTouched],
         openObligations: ctx.ledger.openObligations.length,
       };
-      const extra = opts.onBudgetExhausted ? Math.floor(await opts.onBudgetExhausted(stats)) : 0;
+      let extra = 0;
+      if (opts.onBudgetExhausted) {
+        try {
+          extra = Math.floor(await opts.onBudgetExhausted(stats));
+        } catch {
+          // A broken prompt (stdin closed mid-question, dying terminal) must
+          // read as "declined" and take the preserve-and-restore path below,
+          // not propagate past it and skip the rollback entirely.
+          extra = 0;
+        }
+      }
       if (!Number.isFinite(extra) || extra <= 0) break;
       budget += extra;
       await transcript.event('budget-extended', { extraTurns: extra, budget, ...stats });

@@ -62,6 +62,19 @@ const str = (args: Record<string, unknown>, key: string): string => {
 const KNOWN_DOCS = ['BOM', 'PINOUT', 'SPEC', 'SUBSYSTEMS', 'LAYOUT', 'DEVPLAN', 'DECISIONS', 'CHANGELOG'];
 
 function missingArtifactReason(ctx: RunContext, item: string): string | null {
+  // Docs are scaffolded with uppercase basenames; accept any casing in the
+  // affects item ("bom.md" must find BOM.md on a case-sensitive filesystem).
+  const docReason = (docName: string): string | null => {
+    const candidates = [...new Set([docName, docName.toUpperCase()])].flatMap((n) => [
+      path.join(ctx.repoRoot, ctx.config.docs, `${n}.md`),
+      path.join(ctx.repoRoot, `${n}.md`),
+    ]);
+    return candidates.some((p) => existsSync(p)) ? null : `${docName}.md does not exist yet`;
+  };
+  // An explicit .md filename is a doc reference even when its basename is a
+  // board-ish word (LAYOUT.md), so it is classified before the keyword checks.
+  const md = /^([\w-]+)\.md$/i.exec(item.trim());
+  if (md) return docReason(md[1]!);
   const l = item.toLowerCase();
   if (/\.kicad_sch\b/.test(l) || /\bschematic\b/.test(l)) {
     return ctx.config.schematic ? null : 'no schematic configured yet';
@@ -69,15 +82,8 @@ function missingArtifactReason(ctx: RunContext, item: string): string | null {
   if (/\.kicad_pcb\b/.test(l) || /\b(layout|board|pcb)\b/.test(l)) {
     return ctx.config.board ? null : 'no board configured yet';
   }
-  const md = /^([\w-]+)\.md$/i.exec(item.trim());
-  const docName = md ? md[1]! : KNOWN_DOCS.find((d) => item.trim().toUpperCase() === d);
-  if (docName) {
-    const candidates = [
-      path.join(ctx.repoRoot, ctx.config.docs, `${docName}.md`),
-      path.join(ctx.repoRoot, `${docName}.md`),
-    ];
-    return candidates.some((p) => existsSync(p)) ? null : `${docName}.md does not exist yet`;
-  }
+  const bare = KNOWN_DOCS.find((d) => item.trim().toUpperCase() === d);
+  if (bare) return docReason(bare);
   return null;
 }
 

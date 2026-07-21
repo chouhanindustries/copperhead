@@ -42,7 +42,9 @@ async function confirmTty(question: string): Promise<boolean> {
 function budgetContinuePrompt(): ((stats: BudgetExhaustedStats) => Promise<number>) | undefined {
   if (!process.stdin.isTTY || !process.stdout.isTTY) return undefined;
   return async (stats) => {
-    const extra = Math.ceil(stats.turnsUsed / 2);
+    // ceil of the ORIGINAL budget (design D1), so repeat extensions offer the
+    // same increment instead of escalating with the extended turn count.
+    const extra = Math.ceil(stats.maxTurns / 2);
     const k = (n: number) => `${(n / 1000).toFixed(1)}k`;
     const q = `Turn budget exhausted (${stats.turnsUsed} turns, ${k(stats.tokensIn)} in / ${k(stats.tokensOut)} out, ${stats.filesTouched.length} file(s) touched, ${stats.openObligations} open obligation(s)). Continue with ${extra} more turns?`;
     return (await confirmTty(q)) ? extra : 0;

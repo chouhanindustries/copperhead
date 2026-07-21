@@ -92,6 +92,8 @@ describe('turn-budget exhaustion (AC-15.1..15.4)', () => {
       expect(res.outcome).toBe('success');
       expect(calls).toHaveLength(1);
       expect(calls[0]!.turnsUsed).toBe(2);
+      // the ORIGINAL budget, so the CLI can offer a constant increment
+      expect(calls[0]!.maxTurns).toBe(2);
       // AC-15.4: token usage visible at the decision point (2 turns x 100/10)
       expect(calls[0]!.tokensIn).toBe(200);
       expect(calls[0]!.tokensOut).toBe(20);
@@ -157,6 +159,40 @@ describe('turn-budget exhaustion (AC-15.1..15.4)', () => {
       expect(res.outcome).toBe('failure');
       const { stdout: stashes } = await execa('git', ['stash', 'list'], { cwd: repo });
       expect(stashes).toBe('');
+    } finally {
+      await cleanup();
+    }
+  }, 60_000);
+
+  it('a throwing callback reads as declined: the run still restores instead of crashing past rollback', async () => {
+    const { repo, cleanup } = await tempFixtureRepo();
+    try {
+      const provider = scriptedProvider([
+        {
+          toolCalls: [
+            { name: 'propose_change', args: { id: 'c1', why: 'w', what_changes: '- x', tasks: '- [ ] t' } },
+            { name: 'validate_change', args: {} },
+          ],
+        },
+        { toolCalls: [{ name: 'write_file', args: { path: 'NOTES.md', content: 'work\n' } }] },
+      ]);
+      const res = await runAgentLoop({
+        repoRoot: repo,
+        request: 'noop',
+        model: 'gpt-5',
+        provider,
+        maxTurns: 2,
+        onBudgetExhausted: async () => {
+          throw new Error('stdin closed');
+        },
+        log: () => {},
+      });
+      expect(res.outcome).toBe('failure');
+      expect(res.summary).toContain('turn budget exhausted');
+      const { stdout: status } = await execa('git', ['status', '--porcelain'], { cwd: repo });
+      expect(status).toBe('');
+      const { stdout: stashes } = await execa('git', ['stash', 'list'], { cwd: repo });
+      expect(stashes).toContain('copperhead failed run');
     } finally {
       await cleanup();
     }
@@ -255,6 +291,33 @@ describe('deferred revisit obligations (AC-15.7, AC-15.8)', () => {
       });
       expect(ctx.ledger.openOfKind('affects-revisit')).toHaveLength(2);
       expect(ctx.ledger.deferredObligations).toHaveLength(0);
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it('doc matching is case-insensitive and .md names beat board keywords (bom.md, LAYOUT.md)', async () => {
+    const { repo, cleanup } = await tempFixtureRepo();
+    try {
+      const { mkdir } = await import('node:fs/promises');
+      await mkdir(path.join(repo, 'docs'), { recursive: true });
+      await writeFile(path.join(repo, 'docs', 'BOM.md'), '# bom\n', 'utf8');
+      await writeFile(path.join(repo, 'docs', 'LAYOUT.md'), '# layout\n', 'utf8');
+      const ctx = await makeCtx(repo);
+      expect(ctx.config.board).toBeNull();
+      await dispatchTool(ctx, 'record_constraint', {
+        key: 'power.sleep_current_uA',
+        max: 25,
+        source: 'brief',
+        // bom.md exists as BOM.md (case); LAYOUT.md exists but contains the
+        // board-ish word "layout"; notes.md does not exist at all
+        affects: ['bom.md', 'LAYOUT.md', 'notes.md'],
+      });
+      const open = ctx.ledger.openOfKind('affects-revisit').map((o) => o.detail);
+      expect(open).toContain('power.sleep_current_uA affects bom.md');
+      expect(open).toContain('power.sleep_current_uA affects LAYOUT.md');
+      expect(ctx.ledger.deferredObligations).toHaveLength(1);
+      expect(ctx.ledger.deferredObligations[0]!.detail).toContain('notes.md');
     } finally {
       await cleanup();
     }
@@ -421,7 +484,9 @@ describe('per-stage turn budgets (AC-15.18, AC-15.19)', () => {
       await mkdir(path.join(repo, '.copperhead'), { recursive: true });
       await writeFile(
         path.join(repo, '.copperhead', 'config.json'),
-        JSON.stringify({ maxTurns: 40, stageMaxTurns: { 'spec-seed': 60 } }),
+        // zero/negative/non-integer entries are config typos: dropped on load
+        // so a stage cannot start with an already-exhausted budget
+        JSON.stringify({ maxTurns: 40, stageMaxTurns: { 'spec-seed': 60, architecture: 0, layout: -5, docs: 1.5 } }),
         'utf8',
       );
       const config = await loadConfig(repo);

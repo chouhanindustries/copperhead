@@ -26,7 +26,7 @@ Current mechanics involved: the turn loop and `fail()` in `src/agent/loop.ts`, t
 
 ### D1: Continue prompt as an injected callback, not TTY logic in the loop
 
-`RunOptions` gains `onBudgetExhausted?: (stats) => Promise<number>`: it receives `{turnsUsed, tokensIn, tokensOut, filesTouched, openObligations}` and returns the number of extra turns (0 means fail as today). The CLI wires it to a readline prompt only when stdin and stdout are TTYs; `create` passes the same wiring per stage. The loop stays testable with a fake callback and CI behavior is unchanged by construction (no TTY, no callback firing).
+`RunOptions` gains `onBudgetExhausted?: (stats) => Promise<number>`: it receives `{maxTurns, turnsUsed, tokensIn, tokensOut, filesTouched, openObligations}` (`maxTurns` is the original budget, so the CLI can offer a constant increment across repeat extensions) and returns the number of extra turns (0 means fail as today). A callback that throws (stdin closed mid-prompt) is treated as declining, so the preserve-and-restore path still runs. The CLI wires it to a readline prompt only when stdin and stdout are TTYs; `create` passes the same wiring per stage. The loop stays testable with a fake callback and CI behavior is unchanged by construction (no TTY, no callback firing).
 
 The prompt offers `ceil(maxTurns / 2)` extra turns and shows token usage in thousands (`247.3k in / 9.5k out`). The callback can fire again at the next exhaustion; each extension is a fresh decision with fresh numbers. Alternative considered: a `--continue-turns` flag that pre-authorizes extensions, rejected because the whole point is a human decision at the moment the cost is known.
 
