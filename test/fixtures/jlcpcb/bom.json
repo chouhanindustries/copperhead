@@ -1,0 +1,10 @@
+[
+  { "refdes": "C10", "value": "100nF, 16V", "footprint": "Capacitor_SMD:C_0603_1608Metric", "mpn": "CC0603ZRY5V8BB104", "lcsc": "C14663", "quantity": 99 },
+  { "refdes": "C2", "value": "100nF, 16V", "footprint": "Capacitor_SMD:C_0603_1608Metric", "mpn": "CC0603ZRY5V8BB104", "lcsc": "C14663", "quantity": 1 },
+  { "refdes": "R10", "value": "10k", "footprint": "Resistor_SMD:R_0603_1608Metric", "mpn": "RC0603FR-0710KL", "lcsc": "C25804" },
+  { "refdes": "R2", "value": "10k", "footprint": "Resistor_SMD:R_0603_1608Metric", "mpn": "RC0603FR-0710KL", "lcsc": "C25804" },
+  { "refdes": "R3", "value": "10k", "footprint": "Resistor_SMD:R_0805_2012Metric", "mpn": "RC0805FR-0710KL", "lcsc": "" },
+  { "refdes": "D1", "value": "LED", "footprint": "LED_SMD:LED_0603_1608Metric", "mpn": "LTST-C190KRKT", "status": "UNVERIFIED", "lcsc": "C2286" },
+  { "refdes": "U1", "value": "prototype", "footprint": "Package_SO:SOIC-8", "mpn": "", "lcsc": "C1234" },
+  { "refdes": "C1", "value": "1uF", "footprint": "Capacitor_SMD:C_0603_1608Metric", "mpn": "CL10A105KP8NNNC", "lcsc": null, "status": "UNVERIFIED" }
+]
