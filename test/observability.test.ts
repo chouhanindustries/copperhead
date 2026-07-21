@@ -1,10 +1,10 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { mkdir, readFile, writeFile, chmod } from 'node:fs/promises';
 import path from 'node:path';
 import { execa } from 'execa';
 import { runAgentLoop, type RunOptions } from '../src/agent/loop.js';
 import type { Provider, Turn } from '../src/agent/types.js';
-import { InteractiveRenderer } from '../src/agent/render.js';
+import { InteractiveRenderer, makeRenderer } from '../src/agent/render.js';
 import { tempFixtureRepo } from './helpers.js';
 
 /** Replays a fixed script of turns; the last turn repeats forever. */
@@ -210,8 +210,56 @@ describe('interactive renderer (task 5.7)', () => {
     expect(written).toContain('done · 1s\n');
     expect(written).toContain('\x1b[?25h'); // cursor restored (also the Ctrl-C path)
 
-    const before = written;
-    r.log('after finish is dropped');
-    expect(written).toBe(before);
+    // between runs the renderer is idle: log lines pass through, no status line
+    written = '';
+    r.log('between stages');
+    expect(written).toBe('between stages\n');
+
+    // the next stage of a create pipeline re-arms it (AC-8.8)
+    r.turnStart(1, 40, 0, 0);
+    expect(written).toContain('\x1b[?25l');
+    expect(written).toContain('turn 1/40');
+    r.finish('stage done');
+    expect(written).toContain('stage done\n');
+    expect(written.endsWith('\x1b[?25h')).toBe(true); // cursor restored again
+  });
+
+  it('a renderer reused across two runs keeps rendering the second (create pipeline)', async () => {
+    const { repo, cleanup } = await tempFixtureRepo();
+    try {
+      let written = '';
+      const fake = { write: (c: string) => (written += c), columns: 200 };
+      const r = new InteractiveRenderer(fake);
+      const opts = (): RunOptions =>
+        loopOpts(repo, new ScriptedProvider([spin('a')]), [], { maxTurns: 1, renderer: r });
+      await runAgentLoop(opts());
+      const afterFirst = written.length;
+      await runAgentLoop(opts());
+      const second = written.slice(afterFirst);
+      expect(second).toContain('copperhead v9.9.9'); // header still renders
+      expect(second).toContain('turn 1/1'); // status line still renders
+      expect(second).toContain('turn-budget-exhausted'); // outcome line still renders
+    } finally {
+      await cleanup();
+    }
+  });
+});
+
+describe('--json routes progress to stderr (AC-2.4/8.9)', () => {
+  it('a --json renderer never writes progress to stdout', () => {
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      const r = makeRenderer({ json: true, plain: false });
+      r.log('progress line');
+      r.turnStart(1, 2, 0, 0);
+      r.finish('done');
+      expect(err).toHaveBeenCalledWith('progress line');
+      expect(err).toHaveBeenCalledWith('done');
+      expect(log).not.toHaveBeenCalled();
+    } finally {
+      err.mockRestore();
+      log.mockRestore();
+    }
   });
 });

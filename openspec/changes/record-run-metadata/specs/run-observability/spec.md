@@ -74,7 +74,7 @@ During the loop the CLI SHALL surface, continuously, the current turn number, th
 
 ### Requirement: Output is interactive on a TTY and plain otherwise
 
-When stdout is a TTY and neither `--json` nor `--plain` is set, the CLI SHALL render progress interactively: a persistent status line pinned to the bottom of the terminal, redrawn in place, showing a spinner while a provider call is in flight plus elapsed time, turn counter vs budget, and cumulative tokens; assistant text and tool results SHALL print above it so the scrollback remains a complete log, and the final outcome line SHALL replace the status line. When stdout is not a TTY, or `--json` is set, or the global `--plain` flag is passed, the CLI SHALL emit plain line-oriented output containing no ANSI escape codes. The interactive renderer SHALL restore the cursor and clear its status line on exit, including on SIGINT.
+When stdout is a TTY and neither `--json` nor `--plain` is set, the CLI SHALL render progress interactively: a persistent status line pinned to the bottom of the terminal, redrawn in place, showing a spinner while a provider call is in flight plus elapsed time, turn counter vs budget, and cumulative tokens; assistant text and tool results SHALL print above it so the scrollback remains a complete log, and the final outcome line SHALL replace the status line. A renderer SHALL survive its run's end: each run's outcome line releases the status line and restores the cursor, and a later run reusing the same renderer (the `create` pipeline's next stage) re-establishes it, so every stage of a multi-run command renders. When stdout is not a TTY, or `--json` is set, or the global `--plain` flag is passed, the CLI SHALL emit plain line-oriented output containing no ANSI escape codes; with `--json`, progress SHALL go to stderr so stdout carries only the machine-readable result. The interactive renderer SHALL restore the cursor and clear its status line on exit, including on SIGINT.
 
 #### Scenario: Interactive status line on a TTY
 
@@ -85,6 +85,16 @@ When stdout is a TTY and neither `--json` nor `--plain` is set, the CLI SHALL re
 
 - **WHEN** a run's stdout is piped (not a TTY) or `--json` is set
 - **THEN** the output is line-oriented with per-turn `[turn k/N · …]` markers and contains no ANSI escape sequences
+
+#### Scenario: --json keeps stdout machine-readable
+
+- **WHEN** a command runs with `--json` and its loop emits progress (header, turn markers, tool results, outcome line)
+- **THEN** all progress lines are written to stderr and stdout contains only the command's JSON output
+
+#### Scenario: A reused renderer renders every pipeline stage
+
+- **WHEN** `create` runs interactively and its first stage ends with an outcome line
+- **THEN** the second stage's header, status line, and outcome line still render through the same renderer
 
 #### Scenario: --plain forces log-style output on a TTY
 

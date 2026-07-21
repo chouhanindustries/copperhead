@@ -63,7 +63,7 @@ export interface TtyLike {
  */
 export class InteractiveRenderer implements ProgressRenderer {
   private readonly out: TtyLike;
-  private readonly startMs = Date.now();
+  private startMs = Date.now();
   private turn = 0;
   private maxTurns = 0;
   private tokensIn = 0;
@@ -72,7 +72,13 @@ export class InteractiveRenderer implements ProgressRenderer {
   private frame = 0;
   private timer: ReturnType<typeof setInterval> | null = null;
   private statusShown = false;
-  private done = false;
+  /**
+   * True between runs: no status line is owned and log lines pass straight
+   * through. finish() suspends rather than destroys, because a multi-stage
+   * `create` pipeline reuses one renderer across its stages; the next
+   * turnStart() re-arms it.
+   */
+  private idle = true;
   private readonly cleanup = (): void => this.teardown();
   private readonly onSigint = (): void => {
     this.teardown();
@@ -99,7 +105,7 @@ export class InteractiveRenderer implements ProgressRenderer {
   }
 
   private redraw(): void {
-    if (this.done) return;
+    if (this.idle) return;
     if (!this.statusShown) {
       this.out.write(HIDE_CURSOR);
       this.statusShown = true;
@@ -118,13 +124,16 @@ export class InteractiveRenderer implements ProgressRenderer {
 
   /** Print above the status line: clear it, write, redraw it. */
   log(line: string): void {
-    if (this.done) return;
     if (this.statusShown) this.out.write(CLEAR_LINE);
     this.out.write(line + '\n');
     this.redraw();
   }
 
   turnStart(turn: number, maxTurns: number, tokensIn: number, tokensOut: number): void {
+    if (this.idle) {
+      this.idle = false;
+      this.startMs = Date.now(); // elapsed time is per run, not per renderer
+    }
     this.turn = turn;
     this.maxTurns = maxTurns;
     this.tokensIn = tokensIn;
@@ -139,22 +148,34 @@ export class InteractiveRenderer implements ProgressRenderer {
 
   status(text: string | null): void {
     this.busy = text;
-    if (text) this.ensureTimer();
+    if (text && !this.idle) this.ensureTimer();
     this.redraw();
   }
 
   finish(line: string): void {
-    if (this.done) return;
     if (this.statusShown) this.out.write(CLEAR_LINE);
     this.out.write(line + '\n');
-    this.teardown();
+    this.suspend();
   }
 
+  /** Release the status line (stop the spinner, restore the cursor) but stay usable. */
+  private suspend(): void {
+    if (this.timer) {
+      clearInterval(this.timer);
+      this.timer = null;
+    }
+    if (this.statusShown) {
+      this.out.write(CLEAR_LINE + SHOW_CURSOR);
+      this.statusShown = false;
+    }
+    this.busy = null;
+    this.frame = 0;
+    this.idle = true;
+  }
+
+  /** Process is going away (exit/SIGINT): suspend and drop the listeners. */
   private teardown(): void {
-    if (this.done) return;
-    this.done = true;
-    if (this.timer) clearInterval(this.timer);
-    if (this.statusShown) this.out.write(CLEAR_LINE + SHOW_CURSOR);
+    this.suspend();
     process.removeListener('exit', this.cleanup);
     process.removeListener('SIGINT', this.onSigint);
   }
@@ -163,8 +184,11 @@ export class InteractiveRenderer implements ProgressRenderer {
 /**
  * Pick the renderer for a CLI invocation: interactive only on a real TTY with
  * neither --json nor --plain (AC-8.8/8.9); plain mode is the safe fallback.
+ * Under --json, progress goes to stderr so stdout stays machine-parseable
+ * (AC-2.4): the only thing a --json invocation writes to stdout is its JSON.
  */
 export function makeRenderer(opts: { json: boolean; plain: boolean }): ProgressRenderer {
-  if (!opts.json && !opts.plain && process.stdout.isTTY) return new InteractiveRenderer();
+  if (opts.json) return plainRenderer((line) => console.error(line));
+  if (!opts.plain && process.stdout.isTTY) return new InteractiveRenderer();
   return plainRenderer((line) => console.log(line));
 }
