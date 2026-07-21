@@ -110,7 +110,7 @@ Exit code 2 is the important one. A requirement violation means the as-built des
 The full pipeline from a product brief to the output package.
 
 ```bash
-copperhead create --brief brief.md [--model <model>] [--interactive]
+copperhead create --brief brief.md [--model <model>] [--interactive] [--stage <stage>] [--from <stage>]
 ```
 
 | Option | Description |
@@ -118,6 +118,8 @@ copperhead create --brief brief.md [--model <model>] [--interactive]
 | `--brief <file>` | **Required.** The product brief, in markdown. |
 | `--model <model>` | `gpt-5` or `claude`. |
 | `--interactive` | Re-enable the human gates: spec approval, and a pause before export. |
+| `--stage <stage>` | Run a single named stage against existing artifacts. |
+| `--from <stage>` | Re-run the named stage and invalidate all downstream stages. |
 
 Exits 1 if any stage fails to complete, 0 when the pipeline finishes.
 

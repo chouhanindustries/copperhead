@@ -179,7 +179,9 @@ program
   .requiredOption('--brief <file>', 'product brief (markdown)')
   .option('--model <model>', 'gpt-5 | claude')
   .option('--interactive', 're-enable the human gates (spec approval, pre-export)')
-  .action(async (opts: { brief: string; model?: string; interactive?: boolean }) => {
+  .option('--stage <stage>', 'run one named stage, using existing artifacts if present')
+  .option('--from <stage>', 're-run the named stage and invalidate all downstream stages')
+  .action(async (opts: { brief: string; model?: string; interactive?: boolean; stage?: string; from?: string }) => {
     const repo = repoOf(program.opts());
     try {
       const kicadVer = await kicadCliVersion();
@@ -190,6 +192,8 @@ program
         briefPath: opts.brief,
         model,
         interactive: opts.interactive ?? false,
+        stage: opts.stage,
+        from: opts.from,
         log: (s) => console.log(s),
         renderer: rendererOf(),
         meta: { command: 'create', modelSource: source, version, kicadCliVersion: kicadVer },
