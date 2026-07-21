@@ -28,12 +28,25 @@ It reads and edits real `.kicad_sch` / `.kicad_pcb` files (s-expression text), m
 ```bash
 npm install -g copperhead   # or: npx copperhead check
 ```
+Verify the installation:
+
+```bash
+copperhead --version
+```
+
 
 ### Requirements
 
 - Node.js ≥ 20
 - [KiCad](https://www.kicad.org/) ≥ 8 with `kicad-cli` on PATH
 - `ANTHROPIC_API_KEY` or `OPENAI_API_KEY` in the environment (env var only, never a config file), except for `check`, which never calls an LLM
+
+Verify your installation:
+
+```bash
+node --version
+kicad-cli version
+```
 
 ## Quick start
 
