@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { mkdtemp, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { resolveInRepo, SandboxError, isKicadFile } from '../src/util/paths.js';
@@ -9,6 +9,7 @@ import { toolWriteFile, toolEditFile, toolSearch } from '../src/agent/filetools.
 import { Transcript } from '../src/agent/transcript.js';
 import { isDirty, snapshot, restore } from '../src/util/git.js';
 import { tempFixtureRepo } from './helpers.js';
+import { execa } from 'execa';
 
 describe('path sandbox (AC-4.2)', () => {
   it('rejects traversal outside the repo root', () => {
@@ -70,6 +71,31 @@ describe('secret redaction (AC-4.1)', () => {
     const summary = await readFile(summaryPath, 'utf8');
     expect(jsonl).not.toMatch(/sk-[A-Za-z0-9_-]{20,}/);
     expect(summary).not.toMatch(/sk-[A-Za-z0-9_-]{20,}/);
+  });
+
+  it('recreates its audit directory when rollback removed it', async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), 'ch-'));
+    const t = new Transcript(dir);
+    await t.init();
+    await rm(t.dir, { recursive: true, force: true });
+
+    await t.event('run-failed', { reason: 'repair budget exhausted' });
+    const summaryPath = await t.writeSummary({
+      request: 'test rollback recovery',
+      changeId: null,
+      plan: null,
+      filesTouched: [],
+      ercResult: null,
+      drcResult: null,
+      decisions: [],
+      tokensIn: 0,
+      tokensOut: 0,
+      outcome: 'failure',
+      openObligations: null,
+    });
+
+    expect(await readFile(t.jsonlPath, 'utf8')).toContain('run-failed');
+    expect(await readFile(summaryPath, 'utf8')).toContain('# Run summary');
   });
 });
 
@@ -153,6 +179,59 @@ describe('git guard (AC-3.8, AC-3.6)', () => {
       expect(await isDirty(repo)).toBe(false);
       expect(await readFile(sch, 'utf8')).toBe(before);
     } finally {
+      await cleanup();
+    }
+  });
+
+  it('preserves a staged in-flight audit trail during rollback', async () => {
+    const { repo, cleanup } = await tempFixtureRepo();
+    try {
+      const snap = await snapshot(repo);
+      const runFile = path.join(repo, '.copperhead', 'runs', 'in-flight', 'transcript.jsonl');
+      await mkdir(path.dirname(runFile), { recursive: true });
+      await writeFile(runFile, '{"type":"run-start"}\n', 'utf8');
+      await execa('git', ['add', '-f', '.copperhead/runs/in-flight/transcript.jsonl'], { cwd: repo });
+
+      await restore(repo, snap);
+
+      expect(await readFile(runFile, 'utf8')).toBe('{"type":"run-start"}\n');
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it('preserves the audit trail even when rollback fails', async () => {
+    const { repo, cleanup } = await tempFixtureRepo();
+    try {
+      const snap = await snapshot(repo);
+      const runFile = path.join(repo, '.copperhead', 'runs', 'in-flight', 'transcript.jsonl');
+      await mkdir(path.dirname(runFile), { recursive: true });
+      await writeFile(runFile, '{"type":"run-start"}\n', 'utf8');
+      await execa('git', ['add', '-f', '.copperhead/runs/in-flight/transcript.jsonl'], { cwd: repo });
+
+      await expect(restore(repo, { ...snap, stash: 'not-a-stash' })).rejects.toThrow();
+
+      expect(await readFile(runFile, 'utf8')).toBe('{"type":"run-start"}\n');
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it('still rolls back when temporary audit backup storage is unavailable', async () => {
+    const { repo, cleanup } = await tempFixtureRepo();
+    const originalTmpDir = process.env.TMPDIR;
+    try {
+      const snap = await snapshot(repo);
+      const sch = path.join(repo, 'hardware', 'open-key.kicad_sch');
+      const before = await readFile(sch, 'utf8');
+      await writeFile(sch, before.replace('KEY_DAH', 'KEY_RUINED'), 'utf8');
+      process.env.TMPDIR = path.join(repo, 'missing-temp-directory');
+
+      await expect(restore(repo, snap)).resolves.toBeUndefined();
+
+      expect(await readFile(sch, 'utf8')).toBe(before);
+    } finally {
+      process.env.TMPDIR = originalTmpDir;
       await cleanup();
     }
   });
