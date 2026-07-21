@@ -25,4 +25,4 @@ jobs:
           path-to-signatures: 'signatures/cla.json'
           path-to-document: 'https://github.com/chouhanindustries/copperhead/blob/main/.github/cla/CLA.md'
           branch: 'cla-signatures'
-          allowlist: 'animesh-chouhan,dependabot[bot],*[bot]'
+          allowlist: 'animesh-chouhan,claude,dependabot[bot],*[bot]'
