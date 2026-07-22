@@ -34,6 +34,7 @@
   },
   "files": [
     "dist",
+    "!dist/**/*.map",
     "src",
     "LICENSE",
     "NOTICE",
@@ -57,10 +58,10 @@
     "docs:preview": "npm --prefix docs run preview"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.39.0",
+    "@anthropic-ai/sdk": "^0.112.5",
     "commander": "^12.1.0",
     "execa": "^9.5.2",
-    "openai": "^4.87.3"
+    "openai": "^6.48.0"
   },
   "optionalDependencies": {
     "@maximem/synap-js-sdk": "^0.3.0"
