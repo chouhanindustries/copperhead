@@ -165,6 +165,32 @@ describe('copperhead_do result mapping (design D6: outcomes are results)', () =>
   });
 });
 
+describe('progress notifications (design D5: long runs do not time out)', () => {
+  it('copperhead_do forwards each loop log line to the host as a progress notification', async () => {
+    // The injected loop stands in for a real run: every line it logs must reach
+    // the host as an MCP progress notification (and never leak onto stdout).
+    const runAgentLoop: McpDeps['runAgentLoop'] = async (opts) => {
+      opts.log?.('proposing change');
+      opts.log?.('running ERC');
+      return runResult('success', 'abc1234');
+    };
+    await withServer(
+      { loadConfig: async () => config, resolveModel: okModel, runAgentLoop },
+      async (client) => {
+        const seen: { progress: number; message?: string }[] = [];
+        await client.callTool(
+          { name: 'copperhead_do', arguments: { request: 'do a thing' } },
+          undefined,
+          { onprogress: (p) => seen.push(p) },
+        );
+        expect(seen.map((p) => p.message)).toEqual(['proposing change', 'running ERC']);
+        // Monotonic counter so a host can order notifications and advance a bar.
+        expect(seen.map((p) => p.progress)).toEqual([1, 2]);
+      },
+    );
+  });
+});
+
 describe('key handling and honest degradation', () => {
   it('copperhead_do returns a typed error naming the env vars and starts no run when keyless', async () => {
     const runAgentLoop = vi.fn();
