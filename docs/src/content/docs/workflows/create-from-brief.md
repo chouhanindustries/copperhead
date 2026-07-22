@@ -80,7 +80,7 @@ Eight stages, each one a full `do` loop with its own prompt and gate. A stage th
 | 3. Parts | `docs/BOM.md`, MPNs flagged `UNVERIFIED` with justification |
 | 4. Schematic | The `.kicad_sch`, sheet by sheet, ERC clean after each |
 | 5. Layout | First-draft placement and critical routing, DRC clean |
-| 6. Outputs | `outputs/`: gerbers, drill, DXF, STEP, SVG, `BOM.csv` |
+| 6. Outputs | `outputs/`: gerbers, drill, DXF, STEP, SVG, `BOM.csv`, and a JLCPCB assembly BOM (`outputs/jlcpcb-bom.csv`) |
 | 7. Firmware | `firmware/` scaffold with `pins.h` generated from `PINOUT.md` |
 | 8. Dev plan | `docs/DEVPLAN.md`: bring-up order, test points, risks |
 
@@ -99,5 +99,6 @@ Then read `docs/DECISIONS.md` for what was decided and why, and `docs/SPEC.md` f
 ## Next
 
 - [Edit an existing board](/workflows/edit-existing-board/): every change after the first
+- [Order the parts](/reference/cli/#copperhead-export-bom): turn `docs/BOM.md` into a DigiKey, Mouser, or JLCPCB file with `copperhead export bom`
 - [Simple demo](/getting-started/demo/): this flow end to end, one command
 - [`copperhead create`](/reference/cli/#copperhead-create): flags and stage reference

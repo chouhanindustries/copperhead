@@ -20,6 +20,7 @@ Every command probes `kicad-cli` before doing anything and exits 1 if it is not 
 | `do` | [Edit an existing board](/workflows/edit-existing-board/) | Yes | One change: propose, edit, verify, propagate, commit. |
 | `create` | [Design from a brief](/workflows/create-from-brief/) | Yes | Full pipeline from a markdown brief to an output package. |
 | `sync` | Either | Verify phase no, resolve phase yes | Reconciles docs, files, and constraints. |
+| `export bom` | Ordering | No | Writes a supplier-format BOM from `docs/BOM.md`. Deterministic, no network. |
 
 ## Global options
 
@@ -132,11 +133,37 @@ Each stage is a full `do` loop with its own prompt and gate. Stage completion is
 | 3 | `parts` | `docs/BOM.md`, MPNs flagged `UNVERIFIED` |
 | 4 | `schematic` | The `.kicad_sch`, ERC clean after each sheet |
 | 5 | `layout` | Draft placement and critical routing, DRC clean, plus a `## Draft quality` section in `LAYOUT.md` |
-| 6 | `outputs` | `outputs/`: gerbers, drill, DXF, STEP, SVG, `BOM.csv` |
+| 6 | `outputs` | `outputs/`: gerbers, drill, DXF, STEP, SVG, `BOM.csv`, and a JLCPCB assembly BOM (`outputs/jlcpcb-bom.csv`, as [`export bom`](#copperhead-export-bom) writes) |
 | 7 | `firmware` | `firmware/` scaffold, `pins.h` generated from `PINOUT.md` |
 | 8 | `devplan` | `docs/DEVPLAN.md` |
 
 Stages build on each other's uncommitted state, so `create` runs them as if `--allow-dirty` were set.
+
+## `copperhead export bom`
+
+Turns the drift-checked `docs/BOM.md` into a file a supplier accepts without hand-editing. Deterministic, LLM-free, and network-free, so it is safe anywhere `check` is. It reads `BOM.md` (never the schematic), so it inherits the drift guarantee and refuses to export while `BOM.md` disagrees with the schematic.
+
+```bash
+copperhead export bom --supplier <name> [--boards <n>] [--spares <percent>] [--include-unverified]
+```
+
+| Option | Description |
+| --- | --- |
+| `--supplier <name>` | **Required.** `jlcpcb`, `digikey`, or `mouser`. JLCPCB gets the assembly-service format (Comment, Designator, Footprint, LCSC Part #, designators grouped per line); DigiKey and Mouser get cart-upload lists (MPN, manufacturer, quantity, customer reference). |
+| `--boards <n>` | Order quantity in boards. Default `1`. |
+| `--spares <percent>` | Spare-parts percentage. Default `10`. |
+| `--include-unverified` | Opt `UNVERIFIED` rows that carry an MPN back in. Never includes MPN-less rows. |
+
+Writes `outputs/<supplier>-bom.csv` and prints the path plus the included/excluded counts. Per-line quantity is `ceil(perBoardCount × boards × (1 + spares/100))`, raised to `perBoardCount × boards + 2` for passive lines (footprints `R_`/`C_`/`L_`), because percentage-only spares under-order low-count passives.
+
+Rows without an MPN, and rows still flagged `UNVERIFIED`, are excluded from the supplier file and named in a warnings footer on stderr (stdout stays clean for `> file` redirects).
+
+`docs/BOM.md` may carry optional `Manufacturer` and `LCSC` columns beyond the base `Refdes | Value | Footprint | MPN | Rationale`; the exporter matches columns by header, so add them when you want them populated. Only *appending* columns is safe: keep `Refdes | Value | Footprint` first and in that order, because the drift check reads those three by position.
+
+| Exit code | Meaning |
+| --- | --- |
+| `0` | The supplier file was written. |
+| `1` | A bad flag, a missing `BOM.md`, or drift between `BOM.md` and the schematic. |
 
 ## Repo scripts
 
