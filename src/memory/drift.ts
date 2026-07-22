@@ -2,6 +2,7 @@ import { readFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { listSymbols, pinNets, type SchematicSymbol } from '../kicad/sexp.js';
+import { parseMarkdownTables, isHeader } from './bom-table.js';
 
 /**
  * Doc-vs-schematic drift check (AC-2.3). BOM.md and PINOUT.md use fixed table
@@ -12,28 +13,6 @@ export interface DriftMismatch {
   claim: string;
   actual: string;
 }
-
-export interface TableRow {
-  cells: string[];
-}
-
-export function parseMarkdownTables(md: string): TableRow[] {
-  const rows: TableRow[] = [];
-  for (const line of md.split('\n')) {
-    const t = line.trim();
-    if (!t.startsWith('|')) continue;
-    const cells = t
-      .split('|')
-      .slice(1, -1)
-      .map((c) => c.trim());
-    if (cells.every((c) => /^:?-+:?$/.test(c))) continue; // separator row
-    rows.push({ cells });
-  }
-  return rows;
-}
-
-const isHeader = (row: TableRow): boolean =>
-  row.cells.some((c) => /^(refdes|pin)$/i.test(c));
 
 /**
  * The zero-symbol carve-out in checkDrift is right for the create pipeline,

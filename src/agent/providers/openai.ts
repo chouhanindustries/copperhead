@@ -1,9 +1,4 @@
-import type { ChatOpts, Msg, Provider, ToolSchema, Turn } from '../types.js';
-
-interface OpenAIToolCall {
-  id: string;
-  function: { name: string; arguments: string };
-}
+import type { ChatOpts, Msg, Provider, ToolSchema, Turn, ToolCall } from '../types.js';
 
 export class OpenAIProvider implements Provider {
   readonly name = 'openai';
@@ -33,11 +28,7 @@ export class OpenAIProvider implements Provider {
               content: m.content,
               ...(m.toolCalls?.length
                 ? {
-                    tool_calls: m.toolCalls.map((t) => ({
-                      id: t.id,
-                      type: 'function' as const,
-                      function: { name: t.name, arguments: JSON.stringify(t.args) },
-                    })),
+                    tool_calls: m.toolCalls.map(serializeToolCall),
                   }
                 : {}),
             };
@@ -55,11 +46,10 @@ export class OpenAIProvider implements Provider {
         : {}),
     });
     const choice = res.choices[0];
-    const toolCalls = ((choice?.message.tool_calls ?? []) as OpenAIToolCall[]).map((t) => ({
-      id: t.id,
-      name: t.function.name,
-      args: safeParse(t.function.arguments),
-    }));
+    // Capture any non-standard properties returned by the API (e.g. Gemini thought
+    // signatures) so they can be echoed back on subsequent turns. Dropping them
+    // causes reasoning-model backends to reject the follow-up request with 400.
+    const toolCalls = ((choice?.message.tool_calls ?? []) as unknown as Record<string, unknown>[]).map(parseToolCall);
     return {
       text: choice?.message.content ?? null,
       toolCalls,
@@ -77,4 +67,31 @@ function safeParse(s: string): Record<string, unknown> {
   } catch {
     return { _raw: s };
   }
+}
+
+export function serializeToolCall(t: ToolCall) {
+  return {
+    id: t.id,
+    type: 'function' as const,
+    function: { name: t.name, arguments: JSON.stringify(t.args) },
+    // Preserve vendor-specific tool-call fields (e.g. Gemini thought signatures).
+    // Dropping them makes the next turn's request 400.
+    ...(t.extra || {}),
+  };
+}
+
+export function parseToolCall(t: Record<string, unknown>): ToolCall {
+  const extra: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(t)) {
+    if (k !== 'id' && k !== 'type' && k !== 'function') {
+      extra[k] = v;
+    }
+  }
+  const fn = t.function as { name: string; arguments: string };
+  return {
+    id: t.id as string,
+    name: fn.name,
+    args: safeParse(fn.arguments),
+    ...(Object.keys(extra).length ? { extra } : {}),
+  };
 }
