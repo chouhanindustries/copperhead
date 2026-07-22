@@ -2,6 +2,13 @@ import { readFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 
+export interface StageCompletionRecord {
+  inputs: Record<string, string>;
+  outputs: Record<string, string>;
+  completedAt: string;
+  runId?: string | null;
+}
+
 export interface CopperheadConfig {
   schematic: string | null;
   board: string | null;
@@ -14,6 +21,8 @@ export interface CopperheadConfig {
   budgets: Record<string, number>;
   /** Content hashes of generated docs, for init idempotency (AC-1.4). */
   generatedHashes?: Record<string, string>;
+  /** Recorded completion metadata for create pipeline stages. */
+  stageCompletion?: Record<string, StageCompletionRecord>;
   /**
    * How the repo was bootstrapped. `"create"` marks a Mode A pipeline repo
    * (fab gate requires DEVPLAN.md). Written by `copperhead create`; absent on
@@ -57,6 +66,7 @@ export async function loadConfig(repoRoot: string): Promise<CopperheadConfig> {
     maxRepairCycles: raw.maxRepairCycles ?? DEFAULTS.maxRepairCycles,
     budgets: raw.budgets ?? {},
     ...(raw.generatedHashes ? { generatedHashes: raw.generatedHashes } : {}),
+    ...(raw.stageCompletion ? { stageCompletion: raw.stageCompletion } : {}),
     ...(raw.origin === 'create' || raw.origin === 'init' ? { origin: raw.origin } : {}),
   };
 }

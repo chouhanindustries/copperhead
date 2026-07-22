@@ -1,6 +1,6 @@
 import path from 'node:path';
 import { existsSync } from 'node:fs';
-import { readFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { loadConfig } from '../config.js';
 import { listSymbols } from '../kicad/sexp.js';
@@ -121,6 +121,15 @@ export interface CreateOptions {
   renderer?: ProgressRenderer;
   /** Command-level metadata; stage and brief identity are filled in per stage. */
   meta?: Omit<RunMetaInput, 'stage' | 'brief'>;
+  /** Explicit stage name to run; if omitted, resume from the first incomplete stage. */
+  stage?: string;
+  /** Re-run from this stage and invalidate later stages. */
+  from?: string;
+}
+
+async function writeConfig(repoRoot: string, config: unknown): Promise<void> {
+  await mkdir(path.join(repoRoot, '.copperhead'), { recursive: true });
+  await writeFile(path.join(repoRoot, '.copperhead', 'config.json'), JSON.stringify(config, null, 2) + '\n', 'utf8');
 }
 
 /**
@@ -144,13 +153,63 @@ export async function runCreate(opts: CreateOptions): Promise<{ ok: boolean; com
   await openspecInit(opts.repoRoot);
   const completed: string[] = [];
 
+  const stageNames = STAGES.map((stage) => stage.name);
+  if (opts.stage && opts.from) {
+    throw new Error('cannot use both --stage and --from');
+  }
+  const startIndex = (() => {
+    if (opts.stage) {
+      const index = stageNames.indexOf(opts.stage);
+      if (index === -1) throw new Error(`unknown stage: ${opts.stage}`);
+      return index;
+    }
+    if (opts.from) {
+      const index = stageNames.indexOf(opts.from);
+      if (index === -1) throw new Error(`unknown stage: ${opts.from}`);
+      return index;
+    }
+    return 0;
+  })();
+
+  const selectedStage = STAGES[startIndex];
+  if (!selectedStage) {
+    throw new Error(`invalid stage index ${startIndex}`);
+  }
+  const runStages = opts.stage ? [selectedStage] : STAGES.slice(startIndex);
+
+  if (opts.from) {
+    const invalidated = stageNames.slice(startIndex);
+    opts.log(`create pipeline: invalidating downstream stages: ${invalidated.join(', ')}`);
+    config.stageCompletion = config.stageCompletion ?? {};
+    for (const stageName of invalidated) {
+      delete config.stageCompletion[stageName];
+    }
+    await writeConfig(opts.repoRoot, config);
+  }
+
   for (const [i, stage] of STAGES.entries()) {
-    if (await stage.isComplete(opts.repoRoot, config.docs)) {
+    if (i < startIndex) {
+      if (await stage.isComplete(opts.repoRoot, config.docs)) {
+        opts.log(`stage ${stage.name}: already complete (resuming past it)`);
+        completed.push(stage.name);
+        continue;
+      }
+      throw new Error(`dependency stage ${stage.name} is incomplete; run from an earlier stage or rerun ${stage.name}`);
+    }
+  }
+
+  for (const [offset, stage] of runStages.entries()) {
+    const absoluteIndex = startIndex + offset;
+    const stageComplete = await stage.isComplete(opts.repoRoot, config.docs);
+    if (!opts.stage && !opts.from && stageComplete) {
       opts.log(`stage ${stage.name}: already complete (resuming past it)`);
       completed.push(stage.name);
       await emitJlcpcbAfterOutputs(stage.name, opts);
       continue;
     }
+
+    const verb = opts.stage || opts.from ? 're-running' : stageComplete ? 'rerunning selected stage' : 'running';
+    opts.log(`stage ${stage.name}: ${verb}`);
     opts.log(`stage ${stage.name}: running`);
     const stageTurns = config.stageMaxTurns?.[stage.name];
     const res = await runAgentLoop({
@@ -167,7 +226,7 @@ export async function runCreate(opts: CreateOptions): Promise<{ ok: boolean; com
       meta: {
         ...opts.meta,
         command: 'create',
-        stage: { name: stage.name, index: i + 1, total: STAGES.length },
+        stage: { name: stage.name, index: absoluteIndex + 1, total: STAGES.length },
         brief: briefMeta,
       },
     });
@@ -175,6 +234,15 @@ export async function runCreate(opts: CreateOptions): Promise<{ ok: boolean; com
       opts.log(`stage ${stage.name} did not complete (${res.outcome}); re-run copperhead create to resume here`);
       return { ok: false, completed };
     }
+
+    config.stageCompletion = config.stageCompletion ?? {};
+    config.stageCompletion[stage.name] = {
+      inputs: { brief: briefMeta.sha256 },
+      outputs: {},
+      completedAt: new Date().toISOString(),
+      runId: res.transcriptDir ? path.basename(res.transcriptDir) : null,
+    };
+    await writeConfig(opts.repoRoot, config);
     // A successful run is not the same as a completed stage: an agent can
     // finish "done" with all gates green having only planned the work (seen
     // with the schematic stage: one header edit, ERC "clean" on an empty
@@ -188,10 +256,19 @@ export async function runCreate(opts: CreateOptions): Promise<{ ok: boolean; com
       return { ok: false, completed };
     }
     completed.push(stage.name);
+
+    if (opts.stage) {
+      break;
+    }
+  }
+
+  if (!opts.stage) {
+    const check = await runCheck(opts.repoRoot, opts.log);
+    opts.log(check.ok ? 'create pipeline complete; all checks green' : 'create pipeline complete with check failures');
+    return { ok: check.ok, completed };
     await emitJlcpcbAfterOutputs(stage.name, opts);
   }
 
-  const check = await runCheck(opts.repoRoot, opts.log);
-  opts.log(check.ok ? 'create pipeline complete; all checks green' : 'create pipeline complete with check failures');
-  return { ok: check.ok, completed };
+  opts.log('create stage complete');
+  return { ok: true, completed };
 }
