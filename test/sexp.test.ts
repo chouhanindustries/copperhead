@@ -1,9 +1,11 @@
 import { describe, it, expect } from 'vitest';
 import path from 'node:path';
-import { listSymbols, listNets, pinNets, parseSexp } from '../src/kicad/sexp.js';
+import { listSymbols, listNets, pinNets, parseSexp ,listFootprints} from '../src/kicad/sexp.js';
 import { FIXTURE } from './helpers.js';
 
+
 const SCH = path.join(FIXTURE, 'hardware', 'open-key.kicad_sch');
+const PCB = path.join(FIXTURE, '..', 'footprint-enumerator/board-with-footprints.kicad_pcb');
 
 describe('sexp parser', () => {
   it('parses quoted strings with escapes', () => {
@@ -24,6 +26,20 @@ describe('sexp parser', () => {
   it('lists nets from labels', async () => {
     const nets = await listNets(SCH);
     expect(nets).toEqual(['3V3', 'EN', 'GND', 'KEY_DAH']);
+  });
+
+  it("lists board footprints", async () => {
+    const footprints = await listFootprints(PCB);
+
+    expect(footprints).toHaveLength(2);
+
+    const r1 = footprints.find((footprint) => footprint.ref === "R1");
+    expect(r1?.footprint).toBe("Resistor_SMD:R_0603_1608Metric");
+    expect(r1?.side).toBe("front");
+
+    const missingRef = footprints.find((footprint) => footprint.ref === "?");
+    expect(missingRef?.footprint).toBe("Capacitor_SMD:C_0603_1608Metric");
+    expect(missingRef?.side).toBe("back");
   });
 
   it('maps pins to nets geometrically (AC-1.3 source)', async () => {

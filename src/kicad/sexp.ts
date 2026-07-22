@@ -103,6 +103,13 @@ interface ParsedSheet {
   root: SexpNode[];
 }
 
+export interface BoardFootprint {
+  ref: string;
+  footprint: string;
+  at: { x: number; y: number; rot: number };
+  side: 'front' | 'back' | 'unknown';
+}
+
 async function loadSheets(rootSch: string): Promise<ParsedSheet[]> {
   const seen = new Set<string>();
   const out: ParsedSheet[] = [];
@@ -236,6 +243,36 @@ export async function listSymbols(rootSch: string): Promise<SchematicSymbol[]> {
     }
   }
   return out.sort((a, b) => a.ref.localeCompare(b.ref, undefined, { numeric: true }));
+}
+/** Reads a KiCad PCB file and returns each placed footprint's reference, footprint name, and placement information. */
+export async function listFootprints(boardPath: string): Promise<BoardFootprint[]> {
+  const text = await readFile(boardPath, 'utf8');
+  const root = parseSexp(text)[0];
+  if (root === undefined || !isList(root)) {
+    throw new Error(`not a KiCad s-expression file: ${boardPath}`);
+  }
+  const footprints: BoardFootprint[] = [];
+
+  for (const footprintNode of children(root, 'footprint')) {
+    const footprintId = atomAt(footprintNode, 1) ?? '';
+    const ref = property(footprintNode, 'Reference') ?? '?';
+    const at = child(footprintNode, 'at');
+    const layer = atomAt(child(footprintNode, 'layer'), 1);
+    let side: BoardFootprint['side'] = 'unknown';
+    if (layer === 'F.Cu') side = 'front';
+    if (layer === 'B.Cu') side = 'back';
+    footprints.push({
+      ref,
+      footprint: footprintId,
+      at: {
+        x: parseFloat(atomAt(at, 1) ?? '0'),
+        y: parseFloat(atomAt(at, 2) ?? '0'),
+        rot: parseFloat(atomAt(at, 3) ?? '0'),
+      },
+      side,
+    });
+  }
+  return footprints.sort((a, b) => a.ref.localeCompare(b.ref, undefined, { numeric: true }));
 }
 
 /** All net names visible via labels and power symbols, across all sheets. */
