@@ -8,6 +8,14 @@ import { runInit, InitError } from './memory/scaffold.js';
 import { runCheck } from './commands/check.js';
 import { syncVerify, syncResolve, formatSyncReport } from './commands/sync.js';
 import { runCreate } from './commands/create.js';
+import {
+  runExportBom,
+  parseSupplier,
+  parseBoards,
+  parseSpares,
+  ExportError,
+} from './commands/export.js';
+import { DEFAULT_BOARDS, DEFAULT_SPARES } from './kicad/bom-export.js';
 import { runAgentLoop, type BudgetExhaustedStats } from './agent/loop.js';
 import { makeRenderer } from './agent/render.js';
 import { kicadCliVersion } from './kicad/cli.js';
@@ -217,6 +225,48 @@ program
       process.exit(res.ok ? 0 : 1);
     } catch (err) {
       console.error((err as Error).message);
+      process.exit(1);
+    }
+  });
+
+const exportCmd = program
+  .command('export')
+  .description('emit supplier-ready files from repo state (deterministic; no LLM, no network)');
+
+exportCmd
+  .command('bom')
+  .description('write a supplier-format BOM (jlcpcb | digikey | mouser) from docs/BOM.md')
+  .requiredOption('--supplier <name>', 'jlcpcb | digikey | mouser')
+  .option('--boards <n>', 'number of boards to order', String(DEFAULT_BOARDS))
+  .option('--spares <percent>', 'spare parts percentage', String(DEFAULT_SPARES))
+  .option('--include-unverified', 'include UNVERIFIED rows that carry an MPN (never MPN-less rows)')
+  .action(async (opts: { supplier: string; boards: string; spares: string; includeUnverified?: boolean }) => {
+    const repo = repoOf(program.opts());
+    const json = Boolean(program.opts().json);
+    try {
+      const supplier = parseSupplier(opts.supplier);
+      const boards = parseBoards(opts.boards);
+      const spares = parseSpares(opts.spares);
+      const res = await runExportBom({
+        repoRoot: repo,
+        supplier,
+        boards,
+        spares,
+        includeUnverified: opts.includeUnverified ?? false,
+      });
+      // Warnings go to stderr so a `> file` redirect of stdout stays clean and
+      // the excluded-rows report is still seen.
+      for (const w of res.warnings) console.error(w);
+      if (json) {
+        console.log(JSON.stringify(res, null, 2));
+      } else {
+        console.log(`wrote ${res.outPath} (${res.included.length} part(s), ${res.excluded.length} excluded)`);
+      }
+      process.exit(0);
+    } catch (err) {
+      // ExportError carries an actionable message (bad flag, missing BOM, drift);
+      // anything else is unexpected. Both exit non-zero with no stack trace.
+      console.error(err instanceof ExportError ? err.message : (err as Error).message);
       process.exit(1);
     }
   });

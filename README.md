@@ -90,9 +90,26 @@ copperhead do "<change request>"     # the core loop: propose, edit, verify, pro
 copperhead check                     # ERC + DRC + doc-drift + spec validation; no LLM calls (alias: verify)
 copperhead sync [--dry-run]          # verify the whole design state, resolve drift
 copperhead create --brief brief.md   # brief → full output package
+copperhead export bom --supplier jlcpcb   # supplier-ready ordering file from docs/BOM.md
 ```
 
 Global flags: `--repo <path>` (default: cwd) and `--json` for machine-readable output. `do` and `create` take `--model` and `--interactive`; `do` also takes `--dry-run`, `--max-turns`, and `--allow-dirty`.
+
+### Ordering (`export bom`)
+
+`copperhead export bom` turns the drift-checked `docs/BOM.md` into a file a supplier accepts without hand-editing. It is deterministic, LLM-free, and network-free — safe anywhere `check` is, and it reads `BOM.md` (never the schematic) so it inherits the drift guarantee; it refuses to export while `BOM.md` disagrees with the schematic.
+
+```bash
+copperhead export bom --supplier jlcpcb                 # JLCPCB assembly CSV → outputs/jlcpcb-bom.csv
+copperhead export bom --supplier digikey --boards 25    # DigiKey cart CSV, quantities for 25 boards
+copperhead export bom --supplier mouser --spares 15     # Mouser cart CSV, 15% spare parts
+```
+
+- `--supplier <jlcpcb|digikey|mouser>` (required). JLCPCB gets the assembly-service format (Comment, Designator, Footprint, LCSC Part #, designators grouped per line); DigiKey and Mouser get cart-upload lists (MPN, manufacturer, quantity, customer reference).
+- `--boards <n>` (default 1) and `--spares <percent>` (default 10) set the order quantity: `ceil(perBoardCount × boards × (1 + spares/100))`, raised to `perBoardCount × boards + 2` for passive lines (footprints `R_`/`C_`/`L_`) — losing a couple of 0402s to tweezers is the norm, and percentage-only spares under-order low-count passives.
+- Rows without an MPN, and rows still flagged `UNVERIFIED`, are excluded from the supplier file and named in a warnings footer on stderr. `--include-unverified` opts the flagged-but-MPN'd rows back in (it never includes MPN-less rows). `create` stage 6 also emits `outputs/jlcpcb-bom.csv` automatically.
+
+`docs/BOM.md` may carry optional `Manufacturer` and `LCSC` columns beyond the base `Refdes | Value | Footprint | MPN | Rationale` — the exporter matches columns by header, so add them when you want them populated in supplier files; `init` scaffolds the base columns only. Only *appending* columns is safe: keep `Refdes | Value | Footprint` first and in that order, because the drift check (`check`/`sync`, which the exporter gates on) reads those three by position — reordering them makes it compare the wrong cells and refuse the export with a spurious drift message.
 
 Nothing is a black box: decisions land in an append-only `docs/DECISIONS.md`, every run writes a human-readable summary next to its transcript, and a per-run `docs/CHANGELOG.md` narrates the design history.
 
