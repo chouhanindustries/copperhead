@@ -8,7 +8,7 @@ export interface ToolCall {
   id: string;
   name: string;
   args: Record<string, unknown>;
-  extra?: Record<string, any>;
+  extra?: Record<string, unknown>;
 }
 
 export type Msg =

@@ -1,10 +1,5 @@
 import type { ChatOpts, Msg, Provider, ToolSchema, Turn } from '../types.js';
 
-interface OpenAIToolCall {
-  id: string;
-  function: { name: string; arguments: string };
-}
-
 export class OpenAIProvider implements Provider {
   readonly name = 'openai';
 
@@ -56,17 +51,18 @@ export class OpenAIProvider implements Provider {
         : {}),
     });
     const choice = res.choices[0];
-    const toolCalls = ((choice?.message.tool_calls ?? []) as any[]).map((t) => {
-      const extra: Record<string, any> = {};
+    const toolCalls = ((choice?.message.tool_calls ?? []) as unknown as Record<string, unknown>[]).map((t: Record<string, unknown>) => {
+      const extra: Record<string, unknown> = {};
       for (const [k, v] of Object.entries(t)) {
         if (k !== 'id' && k !== 'type' && k !== 'function') {
           extra[k] = v;
         }
       }
+      const fn = t.function as { name: string; arguments: string };
       return {
-        id: t.id,
-        name: t.function.name,
-        args: safeParse(t.function.arguments),
+        id: t.id as string,
+        name: fn.name,
+        args: safeParse(fn.arguments),
         ...(Object.keys(extra).length ? { extra } : {}),
       };
     });
