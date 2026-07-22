@@ -62,6 +62,24 @@ export interface RunResult {
   transcriptDir: string;
   filesTouched: string[];
   commit: string | null;
+  /**
+   * One-line ERC/DRC verification state at run end (e.g. "ERC clean, DRC clean"),
+   * or null when no check ran. Lets programmatic callers (the MCP server) report
+   * verification without parsing summary.md prose.
+   */
+  verification: string | null;
+}
+
+/**
+ * One-line ERC/DRC verification state for RunResult, from the last checks the
+ * run performed. Null when neither ran.
+ */
+function verificationState(ctx: RunContext): string | null {
+  const parts = [
+    ctx.lastErc ? `ERC ${ctx.lastErc.ok ? 'clean' : 'FAILING'}` : null,
+    ctx.lastDrc ? `DRC ${ctx.lastDrc.ok ? 'clean' : 'FAILING'}` : null,
+  ].filter(Boolean);
+  return parts.length ? parts.join(', ') : null;
 }
 
 export async function makeProvider(model: string): Promise<Provider> {
@@ -343,6 +361,7 @@ async function runWithMemory(
       transcriptDir: transcript.dir,
       filesTouched: [],
       commit: null,
+      verification: verificationState(ctx),
     };
   };
 
@@ -489,6 +508,7 @@ async function runWithMemory(
           transcriptDir: transcript.dir,
           filesTouched: [],
           commit: null,
+          verification: verificationState(ctx),
         };
       }
 
@@ -534,6 +554,7 @@ async function runWithMemory(
           transcriptDir: transcript.dir,
           filesTouched: files,
           commit: null,
+          verification: verificationState(ctx),
         };
       }
 
@@ -606,6 +627,7 @@ async function runWithMemory(
         transcriptDir: transcript.dir,
         filesTouched: files,
         commit,
+        verification: verificationState(ctx),
       };
     }
   }
