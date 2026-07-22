@@ -57,7 +57,7 @@ copperhead do "<change request>" [options]
 
 | Option | Description |
 | --- | --- |
-| `--model <model>` | `gpt-5`, `claude`, or a full model id. |
+| `--model <model>` | `codex`, `gpt-5`, `claude`, or a provider-specific model id. `codex` uses the saved local Codex login. |
 | `--max-turns <n>` | Turn budget for this run. Overrides `maxTurns` from config. |
 | `--allow-dirty` | Permit a dirty working tree. The snapshot is taken with `git stash create`. |
 | `--keep-on-fail` | Debugging only: skip rollback after an unrecoverable failure, leave the tree dirty, and print HEAD/stash recovery instructions. Constraint refusals still roll back; failure still exits 1 and never commits. |
@@ -117,7 +117,7 @@ copperhead create --brief brief.md [--model <model>] [--interactive] [--keep-on-
 | Option | Description |
 | --- | --- |
 | `--brief <file>` | **Required.** The product brief, in markdown. |
-| `--model <model>` | `gpt-5` or `claude`. |
+| `--model <model>` | `codex`, `gpt-5`, or `claude`. |
 | `--interactive` | Re-enable the human gates: spec approval, and a pause before export. |
 | `--keep-on-fail` | Debugging only: preserve an unrecoverable failed stage's tree and print the snapshot plus manual recovery command. Recover to a clean tree before rerunning `create`; refusals still roll back. |
 
@@ -149,7 +149,7 @@ These are npm scripts in a copperhead checkout, not installed CLI commands.
 | `npm run demo:simple` | Runs the create pipeline against `examples/simple/usb-c-breakout.md` in `demo-runs/usb-c-breakout/`. See [Simple demo](/getting-started/demo/). |
 | `npm run docs:dev` | Serves this documentation locally. |
 | `npm run docs:build` | Builds the documentation site. |
-| `npm test` | Runs the vitest suite. LLM-touching tests skip without an API key. |
+| `npm test` | Runs the vitest suite. LLM-touching tests skip unless their provider is explicitly configured. |
 | `npm run typecheck` | Type-checks without emitting. |
 | `npm run build` | Compiles to `dist/`. |
 

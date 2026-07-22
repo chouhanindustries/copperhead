@@ -47,7 +47,7 @@ Spec-gated in, verification-gated out: the design can't drift from its requireme
 ┌────────────┐   prompt    ┌─────────────────────────────┐
 │  CLI (cmd)  ├────────────►│        Agent core           │
 └────────────┘             │  provider-agnostic LLM loop │
-                           │  (OpenAI GPT-5 / Claude)    │
+                           │ (OpenAI / Claude / Codex)  │
                            └──────┬──────────────────────┘
                                   │ tool calls
               ┌───────────────────┼───────────────────────┐
@@ -72,7 +72,8 @@ copperhead/
 │   │   ├── loop.ts         # tool-use loop, turn budget, retry
 │   │   ├── providers/
 │   │   │   ├── openai.ts   # GPT-5 via OpenAI SDK (tool calling)
-│   │   │   └── anthropic.ts# Claude via Anthropic SDK
+│   │   │   ├── anthropic.ts# Claude via Anthropic SDK
+│   │   │   └── codex.ts    # local Codex CLI via official SDK + saved login
 │   │   ├── prompts.ts      # system prompt + task templates
 │   │   └── tools.ts        # tool schemas + dispatch
 │   ├── kicad/
@@ -241,7 +242,7 @@ copperhead init [--path hardware/]
     extracted from the schematic. Idempotent; never overwrites
     hand-edited docs without --force.
 
-copperhead do "<change request>" [--model gpt-5|claude] [--max-turns N] [--keep-on-fail]
+copperhead do "<change request>" [--model codex|gpt-5|claude] [--max-turns N] [--keep-on-fail]
     The core loop. See §4.
 
 copperhead check          (alias: copperhead verify)
@@ -332,8 +333,9 @@ interface Provider {
 
 - `openai.ts`: GPT-5 via chat completions + tool calling (hackathon shared key)
 - `anthropic.ts`: Claude via messages API + tool use
+- `codex.ts`: locally installed Codex CLI via the official SDK and saved `codex login` authentication; Codex runs read-only and returns structured Copperhead tool requests
 - Selection: `--model` flag > `COPPERHEAD_MODEL` env > config.json > default (whichever key is present)
-- Both providers must pass the same integration test on the fixture repo
+- All configured providers must pass the same integration test on the fixture repo
 
 ### 4.5 Budgets & failure modes
 
@@ -381,6 +383,7 @@ Acceptance: type "add a second RGB LED on an RTC-capable pin" → watch schemati
 - All file tools sandboxed to repo root; no network tools in Phase 1
 - `.env` in `.gitignore` from first commit; keys only via env vars — never written to any file, transcript, or commit
 - Transcripts in `.copperhead/runs/` redact anything matching `sk-[A-Za-z0-9_-]+`
+- The Codex CLI's native read access and `~/.codex/sessions/` logs are outside Copperhead's enforcement/redaction boundary; the Codex path documents this host-local exposure explicitly
 - The agent never invents MPNs: any new part must come with a datasheet-verifiable justification in BOM.md, flagged `UNVERIFIED` for human review
 
 ## 8. Phase 3 — Integrations (post-hackathon roadmap; document, don't build)
@@ -423,7 +426,7 @@ Format: Given / When / Then. "Fixture" = the open-telegraph repo (or the tiny te
 - **AC-3.7 (surgical edits)** For every run above: the `.kicad_sch` diff touches only the s-expressions relevant to the change — file not regenerated (assert: < 5% of lines changed for AC-3.1).
 - **AC-3.8 (dirty tree)** With uncommitted changes and no `--allow-dirty`: refuses to start.
 - **AC-3.9 (dry run)** `--dry-run` prints the proposed diff and writes nothing.
-- **AC-3.10 (provider parity)** AC-3.1 passes with both `--model gpt-5` and `--model claude`.
+- **AC-3.10 (provider parity)** AC-3.1 passes with `--model codex`, `--model gpt-5`, and `--model claude` when each provider is configured.
 - **AC-3.11 (keep failed tree for debugging)** Given a run started with `--keep-on-fail`, when any unrecoverable failure path is reached, then no commit is created, the agent's failed index/files remain in place, the CLI prominently reports the pre-run snapshot and an audit-preserving manual recovery command, `filesTouched` reflects the actual on-disk diff, and `summary.md` records that rollback was skipped. Without the flag, AC-3.6 plus named-stash preservation remains unchanged. With `--allow-dirty`, the warning and summary also name the stash snapshot and the recovery command reapplies it. Constraint refusals still restore; `--dry-run --keep-on-fail` is rejected before provider execution. A `create` rerun against the kept dirty state refuses before stage-completion detection.
 
 ### AC-4 · Safety

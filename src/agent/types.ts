@@ -29,4 +29,5 @@ export interface ChatOpts {
 export interface Provider {
   readonly name: string;
   chat(messages: Msg[], tools: ToolSchema[], opts?: ChatOpts): Promise<Turn>;
+  close?(): Promise<void>;
 }
