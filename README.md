@@ -35,6 +35,14 @@ npm install -g copperhead   # or: npx copperhead check
 - [KiCad](https://www.kicad.org/) ≥ 8 with `kicad-cli` on PATH
 - One model backend: a locally installed, ChatGPT-authenticated [Codex CLI](https://learn.chatgpt.com/docs/codex/cli), or `ANTHROPIC_API_KEY`/`OPENAI_API_KEY` in the environment. `check` never calls an LLM.
 
+Verify your installation:
+
+```bash
+node --version
+kicad-cli version
+copperhead --version
+```
+
 ## Quick start
 
 In an existing KiCad repository:

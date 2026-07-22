@@ -18,6 +18,12 @@ The offline test suite runs without any credentials. Integration tests that call
 
 ## Manual testing
 
+Before following the manual testing guide, verify that the required tools are available:
+
+- `node` is available.
+- `kicad-cli` is installed and available on your `PATH`.
+- `copperhead --version` succeeds if using a globally installed CLI.
+
 For exercising the CLI by hand against a real repository, see [manual-tests/README.md](manual-tests/README.md). It provides two sandbox variants: `create` (full pipeline from a product brief) and `edit` (`init`, `check`, and the `do` loop on an existing KiCad project).
 
 Any change to CLI behavior, the agent loop, providers, or the KiCad layer must be exercised by hand in this sandbox before you open a PR, and the commands you ran plus their outcome go in the PR's manual-test log (see below).
