@@ -4,6 +4,7 @@ import path from 'node:path';
 import { execa } from 'execa';
 import { runAgentLoop } from '../src/agent/loop.js';
 import { runInit } from '../src/memory/scaffold.js';
+import { toolSearch } from '../src/agent/filetools.js';
 import { saveConstraint } from '../src/memory/constraints.js';
 import { tempFixtureRepo } from './helpers.js';
 
@@ -140,8 +141,8 @@ describe.skipIf(!providers.some((p) => p.key))('safety net', () => {
   it('AC-4.1: no API key material anywhere in the tree after runs', async () => {
     const { repo, cleanup } = await tempFixtureRepo();
     try {
-      const { stdout } = await execa('grep', ['-rE', 'sk-[A-Za-z0-9_-]{20,}', repo], { reject: false });
-      expect(stdout).toBe('');
+      const matches = await toolSearch(repo, 'sk-[A-Za-z0-9_-]{20,}');
+      expect(matches).toEqual([]);
     } finally {
       await cleanup();
     }

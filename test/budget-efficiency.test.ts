@@ -235,7 +235,7 @@ describe('preserveFailedRun (safety-rails)', () => {
       expect(await isDirty(repo)).toBe(false);
       await execa('git', ['stash', 'apply'], { cwd: repo });
       expect(await readFile(sch, 'utf8')).toContain('KEY_EDITED');
-      expect(await readFile(path.join(repo, 'new-doc.md'), 'utf8')).toBe('untracked work\n');
+      expect((await readFile(path.join(repo, 'new-doc.md'), 'utf8')).replace(/\r\n/g, '\n')).toBe('untracked work\n');
     } finally {
       await cleanup();
     }
