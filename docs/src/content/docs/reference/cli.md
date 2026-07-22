@@ -28,6 +28,7 @@ Every command probes `kicad-cli` before doing anything and exits 1 if it is not 
 | --- | --- |
 | `--repo <path>` | Target repository. Defaults to the current directory. |
 | `--json` | Machine-readable output on stdout. |
+| `--plain` | Plain log-style output with no interactive status line. Useful for CI logs and pipes. |
 | `-V, --version` | Print the version. |
 
 Global options go before the subcommand: `copperhead --json check`.
