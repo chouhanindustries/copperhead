@@ -212,6 +212,12 @@ describe('model selection precedence (task 4.6)', () => {
       model: 'claude',
       source: 'anthropic-key',
     });
+    expect(resolveModel('codex', config, {})).toEqual({ model: 'codex', source: 'flag' });
+    expect(resolveModel('codex:gpt-test', config, {})).toEqual({ model: 'codex:gpt-test', source: 'flag' });
+    expect(resolveModel(undefined, config, { COPPERHEAD_MODEL: 'codex' })).toEqual({
+      model: 'codex',
+      source: 'env',
+    });
     expect(() => resolveModel(undefined, config, {})).toThrow(/no model configured/);
   });
 });

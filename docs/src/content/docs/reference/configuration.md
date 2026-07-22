@@ -61,6 +61,7 @@ The constraint registry: machine-readable counterparts to the constraints stated
 | `OPENAI_API_KEY` | OpenAI credentials. |
 | `ANTHROPIC_API_KEY` | Anthropic credentials. |
 | `COPPERHEAD_MODEL` | Default model. Overrides config, overridden by `--model`. |
+| `COPPERHEAD_CODEX_PATH` | Optional path to a `codex` executable. Defaults to `codex` on `PATH`; the SDK-bundled launcher is a fallback. |
 | `SYNAP_API_KEY` | Optional. Enables cross-run memory. Absent, copperhead behaves exactly as before and makes no Synap calls. |
 | `SYNAP_USER_ID` | Optional memory scope. Defaults to your `git config user.email`. |
 | `SYNAP_CUSTOMER_ID` | Optional memory scope. Defaults to `copperhead`; only matters on B2B Synap instances. |
@@ -68,6 +69,8 @@ The constraint registry: machine-readable counterparts to the constraints stated
 A `.env` file in the working directory is read at startup, before any command resolves a model or a provider. A real environment variable always wins over the file. Copy `.env.example` to get started.
 
 Keys are read from the environment only. copperhead never writes one to a config file, and redacts anything matching `sk-[A-Za-z0-9_-]+` when writing transcripts and summaries. Keep `.env` out of git; the shipped `.gitignore` already excludes it.
+
+For `--model codex`, the read-only sandbox blocks native writes but does not restrict native reads to the temporary working directory. Avoiding Codex's own filesystem tools is therefore prompt-enforced. The Codex CLI also stores its own session logs under `~/.codex/sessions/`; those logs can contain prompt and design content and are outside copperhead's `.copperhead/runs/` redaction guarantee.
 
 ## Model selection
 
@@ -78,7 +81,11 @@ Resolved in strict precedence order:
 3. `model` in `.copperhead/config.json`
 4. `gpt-5` if `OPENAI_API_KEY` is set, otherwise `claude` if `ANTHROPIC_API_KEY` is set
 
-If none of these produce a model, the command exits with an error telling you the four ways to set one. `check` never needs a model, since it makes no LLM calls at all.
+Set any of the first three to `codex` to use the installed Codex CLI and its saved ChatGPT login without a model API key. Plain `codex` uses your Codex default; `codex:<model-id>` selects an explicit Codex model. Run `codex login status` to verify authentication.
+
+If `codex` is not on `PATH`, point `COPPERHEAD_CODEX_PATH` at an executable explicitly. The optional SDK includes one at `node_modules/@openai/codex/bin/codex.js`; for a global installation, `$(npm root -g)/@openai/codex/bin/codex.js` resolves its path.
+
+If none of these produce a model, the command exits with an error telling you the available ways to set one. `check` never needs a model, since it makes no LLM calls at all.
 
 ## Files copperhead writes
 

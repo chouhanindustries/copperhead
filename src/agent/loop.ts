@@ -16,6 +16,7 @@ import { openspecArchive } from '../openspec/cli.js';
 import { existsSync } from 'node:fs';
 import { OpenAIProvider } from './providers/openai.js';
 import { AnthropicProvider } from './providers/anthropic.js';
+import { CodexProvider } from './providers/codex.js';
 import { openSynapMemory, type RunRecord, type SynapMemory } from '../memory/synap.js';
 
 /** What the user sees at the moment they decide whether to keep going. */
@@ -63,7 +64,24 @@ export interface RunResult {
   commit: string | null;
 }
 
-export function makeProvider(model: string): Provider {
+export async function makeProvider(model: string): Promise<Provider> {
+  if (model === 'codex' || model.startsWith('codex:')) {
+    const codexModel = model.startsWith('codex:') ? model.slice('codex:'.length) : undefined;
+    if (codexModel === '') throw new Error('codex model override cannot be empty; use "codex" or "codex:<model-id>"');
+    const { Codex } = await import('@openai/codex-sdk').catch((err: unknown) => {
+      throw new Error(
+        'Codex provider requires the optional @openai/codex-sdk package; install it alongside Copperhead before using --model codex',
+        { cause: err },
+      );
+    });
+    return new CodexProvider({
+      ...(codexModel ? { model: codexModel } : {}),
+      client: new Codex({
+        // Use the user's installed CLI and its saved login rather than a model API key.
+        codexPathOverride: process.env.COPPERHEAD_CODEX_PATH || 'codex',
+      }),
+    });
+  }
   if (model === 'claude' || model.startsWith('claude')) {
     return new AnthropicProvider(model === 'claude' ? undefined : model);
   }
@@ -117,14 +135,26 @@ async function appendChangelog(
  */
 export async function runAgentLoop(opts: RunOptions): Promise<RunResult> {
   const memory = await openSynapMemory({ repoRoot: opts.repoRoot, log: opts.log });
+  const providers = new Set<Provider>();
   try {
-    return await runWithMemory(opts, memory);
+    return await runWithMemory(opts, memory, providers);
   } finally {
+    for (const provider of providers) {
+      try {
+        await provider.close?.();
+      } catch (err) {
+        opts.log?.(`warning: ${provider.name} provider cleanup failed (${(err as Error).message})`);
+      }
+    }
     await memory?.close();
   }
 }
 
-async function runWithMemory(opts: RunOptions, memory: SynapMemory | null): Promise<RunResult> {
+async function runWithMemory(
+  opts: RunOptions,
+  memory: SynapMemory | null,
+  providers: Set<Provider>,
+): Promise<RunResult> {
   const r = opts.renderer ?? plainRenderer(opts.log ?? ((l: string) => console.log(l)));
   const log = (l: string): void => r.log(l);
   const repoRoot = opts.repoRoot;
@@ -155,7 +185,8 @@ async function runWithMemory(opts: RunOptions, memory: SynapMemory | null): Prom
     finishRequest: null,
   };
 
-  let provider = opts.provider ?? makeProvider(opts.model);
+  let provider = opts.provider ?? (await makeProvider(opts.model));
+  providers.add(provider);
 
   // Deterministic, LLM-free metadata block: collected once, rendered onto all
   // three surfaces (run-start event, summary ## Environment, CLI header) so
@@ -359,6 +390,7 @@ async function runWithMemory(opts: RunOptions, memory: SynapMemory | null): Prom
           log(`failing over ${provider.name} → ${fallback.name}`);
           await transcript.event('provider-failover', { from: provider.name, to: fallback.name });
           provider = fallback;
+          providers.add(provider);
           turn--;
           continue;
         }

@@ -33,7 +33,7 @@ npm install -g copperhead   # or: npx copperhead check
 
 - Node.js ≥ 20
 - [KiCad](https://www.kicad.org/) ≥ 8 with `kicad-cli` on PATH
-- `ANTHROPIC_API_KEY` or `OPENAI_API_KEY` in the environment (env var only, never a config file), except for `check`, which never calls an LLM
+- One model backend: a locally installed, ChatGPT-authenticated [Codex CLI](https://learn.chatgpt.com/docs/codex/cli), or `ANTHROPIC_API_KEY`/`OPENAI_API_KEY` in the environment. `check` never calls an LLM.
 
 ## Quick start
 
@@ -47,6 +47,22 @@ copperhead check               # ERC + DRC + doc drift; no LLM, CI-safe
 ```
 
 Starting from nothing instead? Write a product brief and run `copperhead create --brief brief.md`. The [examples/](examples/) directory has ready-made briefs sorted by difficulty, plus a note on which one is designed to fail.
+
+### Use your existing Codex login
+
+No model API key is needed when Codex CLI is already authenticated:
+
+```bash
+npm install -g @openai/codex-sdk   # optional adapter, loaded only for --model codex
+codex login status
+copperhead do "rename net KEY_DAH to KEY_DASH" --model codex
+```
+
+Plain `codex` follows your Codex model configuration. Use `codex:<model-id>` for an explicit model. If the executable is not on `PATH`, set `COPPERHEAD_CODEX_PATH=/absolute/path/to/codex`.
+The optional SDK also installs a compatible launcher; for a global install, use
+`COPPERHEAD_CODEX_PATH="$(npm root -g)/@openai/codex/bin/codex.js"` as a fallback.
+
+Codex's read-only sandbox prevents native writes but does not confine native reads. Copperhead instructs Codex not to use its own filesystem tools, but the CLI can technically read files such as `.env`. Codex also keeps session logs under `~/.codex/sessions/`; those files are outside Copperhead's transcript-redaction boundary and should be protected according to your local data-retention policy.
 
 ## How it works
 
@@ -74,9 +90,26 @@ copperhead do "<change request>"     # the core loop: propose, edit, verify, pro
 copperhead check                     # ERC + DRC + doc-drift + spec validation; no LLM calls (alias: verify)
 copperhead sync [--dry-run]          # verify the whole design state, resolve drift
 copperhead create --brief brief.md   # brief → full output package
+copperhead export bom --supplier jlcpcb   # supplier-ready ordering file from docs/BOM.md
 ```
 
 Global flags: `--repo <path>` (default: cwd) and `--json` for machine-readable output. `do` and `create` take `--model` and `--interactive`; `do` also takes `--dry-run`, `--max-turns`, and `--allow-dirty`.
+
+### Ordering (`export bom`)
+
+`copperhead export bom` turns the drift-checked `docs/BOM.md` into a file a supplier accepts without hand-editing. It is deterministic, LLM-free, and network-free — safe anywhere `check` is, and it reads `BOM.md` (never the schematic) so it inherits the drift guarantee; it refuses to export while `BOM.md` disagrees with the schematic.
+
+```bash
+copperhead export bom --supplier jlcpcb                 # JLCPCB assembly CSV → outputs/jlcpcb-bom.csv
+copperhead export bom --supplier digikey --boards 25    # DigiKey cart CSV, quantities for 25 boards
+copperhead export bom --supplier mouser --spares 15     # Mouser cart CSV, 15% spare parts
+```
+
+- `--supplier <jlcpcb|digikey|mouser>` (required). JLCPCB gets the assembly-service format (Comment, Designator, Footprint, LCSC Part #, designators grouped per line); DigiKey and Mouser get cart-upload lists (MPN, manufacturer, quantity, customer reference).
+- `--boards <n>` (default 1) and `--spares <percent>` (default 10) set the order quantity: `ceil(perBoardCount × boards × (1 + spares/100))`, raised to `perBoardCount × boards + 2` for passive lines (footprints `R_`/`C_`/`L_`) — losing a couple of 0402s to tweezers is the norm, and percentage-only spares under-order low-count passives.
+- Rows without an MPN, and rows still flagged `UNVERIFIED`, are excluded from the supplier file and named in a warnings footer on stderr. `--include-unverified` opts the flagged-but-MPN'd rows back in (it never includes MPN-less rows). `create` stage 6 also emits `outputs/jlcpcb-bom.csv` automatically.
+
+`docs/BOM.md` may carry optional `Manufacturer` and `LCSC` columns beyond the base `Refdes | Value | Footprint | MPN | Rationale` — the exporter matches columns by header, so add them when you want them populated in supplier files; `init` scaffolds the base columns only. Only *appending* columns is safe: keep `Refdes | Value | Footprint` first and in that order, because the drift check (`check`/`sync`, which the exporter gates on) reads those three by position — reordering them makes it compare the wrong cells and refuse the export with a spurious drift message.
 
 Nothing is a black box: decisions land in an append-only `docs/DECISIONS.md`, every run writes a human-readable summary next to its transcript, and a per-run `docs/CHANGELOG.md` narrates the design history.
 
@@ -123,6 +156,7 @@ Contributions are welcome; see [CONTRIBUTING.md](CONTRIBUTING.md) for setup and 
 
 ## Project layout
 
+- [`AGENTS.md`](AGENTS.md): repository instructions loaded automatically by Codex and compatible coding agents; [`CLAUDE.md`](CLAUDE.md) provides the corresponding Claude Code guidance
 - [`src/`](src/): CLI ([`cli.ts`](src/cli.ts), [`commands/`](src/commands/)), the provider-agnostic agent loop ([`agent/`](src/agent/)), the `kicad-cli` wrapper and s-expression reader ([`kicad/`](src/kicad/)), and doc/constraint memory ([`memory/`](src/memory/))
 - [`test/`](test/): offline suite plus [`fixtures/`](test/fixtures/), a tiny known-good KiCad project
 - [`openspec/specs/SPEC.md`](openspec/specs/SPEC.md): the full technical specification, including binary acceptance criteria

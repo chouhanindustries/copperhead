@@ -10,6 +10,7 @@ import type { RunMetaInput } from '../agent/runmeta.js';
 import type { ProgressRenderer } from '../agent/render.js';
 import { openspecInit } from '../openspec/cli.js';
 import { runCheck } from './check.js';
+import { emitCreateJlcpcbBom } from './export.js';
 
 /**
  * Mode A (`copperhead create`, SPEC §2.5): staged pipeline, each stage a
@@ -131,6 +132,18 @@ async function writeConfig(repoRoot: string, config: unknown): Promise<void> {
   await writeFile(path.join(repoRoot, '.copperhead', 'config.json'), JSON.stringify(config, null, 2) + '\n', 'utf8');
 }
 
+/**
+ * Stage 6 emits the JLCPCB assembly BOM deterministically alongside the agent's
+ * outputs package (create-pipeline delta). Called whenever the outputs stage is
+ * confirmed complete — on the pass that finishes it and on any later resume — so
+ * the file tracks the current BOM.md.
+ */
+async function emitJlcpcbAfterOutputs(stageName: string, opts: CreateOptions): Promise<void> {
+  if (stageName !== 'outputs') return;
+  const out = await emitCreateJlcpcbBom(opts.repoRoot);
+  if (out) opts.log(`stage outputs: emitted ${out} (JLCPCB assembly BOM)`);
+}
+
 export async function runCreate(opts: CreateOptions): Promise<{ ok: boolean; completed: string[] }> {
   const brief = await readFile(path.resolve(opts.briefPath), 'utf8');
   // Hashed from the content already in hand: a brief edited mid-pipeline shows
@@ -191,6 +204,7 @@ export async function runCreate(opts: CreateOptions): Promise<{ ok: boolean; com
     if (!opts.stage && !opts.from && stageComplete) {
       opts.log(`stage ${stage.name}: already complete (resuming past it)`);
       completed.push(stage.name);
+      await emitJlcpcbAfterOutputs(stage.name, opts);
       continue;
     }
 
@@ -252,6 +266,7 @@ export async function runCreate(opts: CreateOptions): Promise<{ ok: boolean; com
     const check = await runCheck(opts.repoRoot, opts.log);
     opts.log(check.ok ? 'create pipeline complete; all checks green' : 'create pipeline complete with check failures');
     return { ok: check.ok, completed };
+    await emitJlcpcbAfterOutputs(stage.name, opts);
   }
 
   opts.log('create stage complete');

@@ -8,6 +8,7 @@ export interface ToolCall {
   id: string;
   name: string;
   args: Record<string, unknown>;
+  extra?: Record<string, unknown>;
 }
 
 export type Msg =
@@ -29,4 +30,5 @@ export interface ChatOpts {
 export interface Provider {
   readonly name: string;
   chat(messages: Msg[], tools: ToolSchema[], opts?: ChatOpts): Promise<Turn>;
+  close?(): Promise<void>;
 }
