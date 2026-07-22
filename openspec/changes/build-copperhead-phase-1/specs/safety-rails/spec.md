@@ -10,7 +10,7 @@ All file tools SHALL resolve paths relative to the repo root and reject any path
 - **THEN** the call is rejected with an error and no file outside the repo is read or written
 
 ### Requirement: Git-state preconditions and rollback
-`do` SHALL refuse to start on a dirty git tree unless `--allow-dirty` is passed (which snapshots via `git stash create`); on unrecoverable failure the working tree SHALL be restored to the pre-run snapshot.
+`do` SHALL refuse to start on a dirty git tree unless `--allow-dirty` is passed (which snapshots via `git stash create`), and `create` SHALL require a clean tree at pipeline entry before reading stage-completion markers. On unrecoverable failure the working tree SHALL be restored to the pre-run snapshot by default after preserving failed work in a named stash. With explicit `--keep-on-fail`, preservation, restoration, and cleaning SHALL be skipped while all success, verification, obligations, and commit gates remain unchanged. A later default `do` or any later `create` SHALL refuse the intentionally dirty tree; constraint refusals remain rollback paths.
 
 #### Scenario: Dirty tree refusal (AC-3.8)
 - **WHEN** the repo has uncommitted changes and `do` runs without `--allow-dirty`
@@ -19,6 +19,18 @@ All file tools SHALL resolve paths relative to the repo root and reject any path
 #### Scenario: Snapshot restore
 - **WHEN** a run fails unrecoverably
 - **THEN** `git status` is clean and all files are byte-identical to the pre-run state
+
+#### Scenario: Explicit failed-tree preservation
+- **WHEN** an unrecoverable failure occurs with `--keep-on-fail`
+- **THEN** no restore or clean runs, no failure commit is created, and the warning and run summary identify rollback as skipped and provide the snapshot refs plus a manual recovery command
+
+#### Scenario: Dirty snapshot recovery is complete
+- **WHEN** `--allow-dirty` and `--keep-on-fail` are used together
+- **THEN** the warning and summary show both the pre-run HEAD and stash object, and the recovery recipe first unstages `.copperhead/runs`, then resets and cleans before applying the stash object
+
+#### Scenario: Create refuses dirty pipeline entry
+- **WHEN** `create` starts with uncommitted state, including partial output from a kept failed stage
+- **THEN** it refuses before evaluating stage-completion markers and tells the user to inspect/recover the tree before rerunning
 
 ### Requirement: Secret hygiene
 API keys SHALL exist only in environment variables; `.env` and `.copperhead/runs/` SHALL be in `.gitignore` from the first commit; transcripts SHALL redact anything matching `sk-[A-Za-z0-9_-]+` at write time.

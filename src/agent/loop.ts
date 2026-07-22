@@ -10,7 +10,17 @@ import { Transcript, type ExitPath, type RunStats } from './transcript.js';
 import { collectRunMeta, renderCliHeader, type RunMeta, type RunMetaInput } from './runmeta.js';
 import { plainRenderer, fmtDuration, fmtTokens, type ProgressRenderer } from './render.js';
 import { ObligationsLedger } from './ledger.js';
-import { gitPreflight, isDirty, snapshot, restore, commitAll, changedFiles, preserveFailedRun } from '../util/git.js';
+import {
+  gitPreflight,
+  isDirty,
+  snapshot,
+  restore,
+  recoveryCommand,
+  commitAll,
+  changedFiles,
+  preserveFailedRun,
+} from '../util/git.js';
+import { PreflightError } from '../util/preflight.js';
 import { withRetry, isRateLimit } from '../util/retry.js';
 import { openspecArchive } from '../openspec/cli.js';
 import { existsSync } from 'node:fs';
@@ -36,6 +46,8 @@ export interface RunOptions {
   model: string;
   maxTurns?: number;
   allowDirty?: boolean;
+  /** Leave failed edits in place for inspection instead of restoring the snapshot. */
+  keepOnFail?: boolean;
   dryRun?: boolean;
   interactive?: boolean;
   confirm?: (q: string) => Promise<boolean>;
@@ -134,6 +146,13 @@ async function appendChangelog(
  * hangs after a successful run.
  */
 export async function runAgentLoop(opts: RunOptions): Promise<RunResult> {
+  if (opts.dryRun && opts.keepOnFail) {
+    throw new PreflightError(
+      '--dry-run cannot be combined with --keep-on-fail',
+      '--dry-run guarantees that every proposed edit is reverted, while --keep-on-fail requests the opposite behavior after an unrecoverable failure',
+      ['remove --keep-on-fail to keep the dry-run no-write guarantee', 'or remove --dry-run to inspect failed edits'],
+    );
+  }
   const memory = await openSynapMemory({ repoRoot: opts.repoRoot, log: opts.log });
   const providers = new Set<Provider>();
   try {
@@ -289,20 +308,42 @@ async function runWithMemory(
     ].join(' · ');
 
   const fail = async (reason: string, exitPath: ExitPath): Promise<RunResult> => {
-    await transcript.event('run-failed', { reason, exitPath });
-    // Preserve the touched work as a stash entry before the rollback destroys
-    // it, so a budget-exhaustion (or any) failure is recoverable (issue #15).
-    const preserved = await preserveFailedRun(repoRoot, ctx.runId);
+    const keepOnFail = opts.keepOnFail ?? false;
+    const manualRecovery = recoveryCommand(snap);
+    let failedFiles = [...ctx.filesTouched];
+    if (keepOnFail) {
+      try {
+        failedFiles = await changedFiles(repoRoot, snap.head);
+      } catch {
+        // A damaged git repository must not turn failure reporting into a
+        // second failure; tool-mediated paths are still useful fallback data.
+      }
+    }
+    await transcript.event('run-failed', { reason, exitPath, keepOnFail });
+
+    // Default failures preserve touched work in a named stash before
+    // rollback (issue #15). keep-on-fail deliberately leaves the index and
+    // worktree exactly where the failed run stopped, so it must not stage or
+    // stash them first.
+    const preserved = keepOnFail ? null : await preserveFailedRun(repoRoot, ctx.runId);
     if (preserved) await transcript.event('work-preserved', { stash: preserved });
     // The rollback itself can fail (git in a bad state). That must not become
     // an unhandled throw that skips run-end and summary.md — the summary is
     // most valuable exactly when the tree is left in an unknown state.
     let restoreError: string | null = null;
-    try {
-      await restore(repoRoot, snap);
-    } catch (err) {
-      restoreError = (err as Error).message;
-      await transcript.event('restore-failed', { error: restoreError });
+    if (keepOnFail) {
+      await transcript.event('rollback-skipped', {
+        head: snap.head,
+        stash: snap.stash,
+        recoveryCommand: manualRecovery,
+      });
+    } else {
+      try {
+        await restore(repoRoot, snap);
+      } catch (err) {
+        restoreError = (err as Error).message;
+        await transcript.event('restore-failed', { error: restoreError });
+      }
     }
     const runStats = stats(exitPath);
     await transcript.event('run-end', runStats);
@@ -310,7 +351,7 @@ async function runWithMemory(
       request: opts.request,
       changeId: ctx.changeId,
       plan,
-      filesTouched: [...ctx.filesTouched],
+      filesTouched: failedFiles,
       ercResult: ctx.lastErc ? (ctx.lastErc.ok ? 'clean' : `${ctx.lastErc.violations.length} violations`) : null,
       drcResult: ctx.lastDrc ? (ctx.lastDrc.ok ? 'clean' : `${ctx.lastDrc.violations.length} violations`) : null,
       decisions: ctx.decisions,
@@ -318,13 +359,26 @@ async function runWithMemory(
       tokensOut,
       outcome: 'failure',
       openObligations: ctx.ledger.isClear ? null : ctx.ledger.describe(),
-      detail: restoreError ? `${reason}\n\nROLLBACK FAILED: ${restoreError} — the working tree may be in a partial state; inspect it with git status/git diff before rerunning` : reason,
+      rollback: {
+        status: keepOnFail ? 'skipped' : restoreError ? 'failed' : 'completed',
+        head: snap.head,
+        stash: snap.stash,
+        recoveryCommand: manualRecovery,
+      },
+      detail: restoreError
+        ? `${reason}\n\nROLLBACK FAILED: ${restoreError} — the working tree may be in a partial state; inspect it with git status/git diff before rerunning`
+        : reason,
       env: meta,
       stats: runStats,
     });
     log(`run failed: ${reason}`);
-    if (restoreError) {
+    if (keepOnFail) {
+      log('WARNING: run failed; tree left dirty for inspection (--keep-on-fail)');
+      log(`pre-run snapshot: HEAD ${snap.head}${snap.stash ? `; dirty-tree stash ${snap.stash}` : ''}`);
+      log(`to roll back: ${manualRecovery}`);
+    } else if (restoreError) {
       log(`WARNING: rollback failed (${restoreError}); the working tree may be in a partial state`);
+      log(`manual recovery: ${manualRecovery}`);
     } else {
       log(`working tree restored to pre-run snapshot`);
     }
@@ -341,7 +395,7 @@ async function runWithMemory(
       exitPath,
       summary: reason,
       transcriptDir: transcript.dir,
-      filesTouched: [],
+      filesTouched: keepOnFail ? failedFiles : [],
       commit: null,
     };
   };

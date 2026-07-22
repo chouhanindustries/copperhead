@@ -1,8 +1,9 @@
 # Tasks: Build copperhead Phase 1
 
-> **Status (2026-07-18, evening): 52/61 complete.** Every deterministic capability is
-> implemented and covered by the offline suite (57 tests green). The agent loop is now
-> **verified live** with an OpenAI key (model `gpt-5-nano`, the only model on this key):
+> **Status (2026-07-21): 53/62 complete.** Task 8.10's offline verification is
+> recorded in PR #34; its live-provider tests were skipped because credentials/opt-in were
+> unavailable. Separately, an earlier recorded run **verified the agent loop live** with an
+> OpenAI key (model `gpt-5-nano`, the only model on that key):
 > AC-3.1 net rename with surgical <5% diff (AC-3.7), AC-3.4 budget refusal via compliant
 > alternative, AC-3.5 repair convergence observed in run logs, AC-3.6 byte-identical rollback,
 > AC-4.1 no key material in the tree. Still open: AC-3.2/AC-3.3 integration tests (not yet
@@ -78,6 +79,7 @@
 - [x] 8.7 Integration test AC-3.4 (budget refusal): 100kΩ pullup refused citing 25 µA budget — the money demo
 - [x] 8.8 Integration tests AC-3.5/3.6 (repair loop converges; rollback leaves tree byte-identical)
 - [ ] 8.9 Provider parity: AC-3.1 green on both --model gpt-5 and --model claude (AC-3.10)
+- [x] 8.10 Add `--keep-on-fail` to `do` and `create`: preserve failed output only when explicitly requested, print HEAD/stash recovery instructions, record skipped rollback in `summary.md`, and retain default rollback (AC-3.11)
 
 ## 9. `create` pipeline (Mode A)
 

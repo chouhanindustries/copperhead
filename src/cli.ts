@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { Command } from 'commander';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
 import { createInterface } from 'node:readline/promises';
 import { loadConfig, resolveModel } from './config.js';
@@ -25,7 +26,7 @@ loadEnvFile(process.cwd());
 // package it was published as.
 const { version } = createRequire(import.meta.url)('../package.json') as { version: string };
 
-const program = new Command();
+export const program = new Command();
 
 const repoOf = (opts: { repo?: string }): string => path.resolve(opts.repo ?? process.cwd());
 
@@ -120,12 +121,23 @@ program
   .option('--model <model>', 'codex | gpt-5 | claude (or a provider-specific model id)')
   .option('--max-turns <n>', 'turn budget for this run')
   .option('--allow-dirty', 'allow a dirty tree (snapshot via git stash create)')
+  .option(
+    '--keep-on-fail',
+    'leave unrecoverable-failure edits in place (constraint refusals still roll back)',
+  )
   .option('--dry-run', 'propose the diff, write nothing')
   .option('--interactive', 'pause for approval after the proposal validates')
   .action(
     async (
       request: string,
-      opts: { model?: string; maxTurns?: string; allowDirty?: boolean; dryRun?: boolean; interactive?: boolean },
+      opts: {
+        model?: string;
+        maxTurns?: string;
+        allowDirty?: boolean;
+        keepOnFail?: boolean;
+        dryRun?: boolean;
+        interactive?: boolean;
+      },
     ) => {
       const repo = repoOf(program.opts());
       try {
@@ -139,6 +151,7 @@ program
           model,
           ...(opts.maxTurns ? { maxTurns: parseInt(opts.maxTurns, 10) } : {}),
           allowDirty: opts.allowDirty ?? false,
+          keepOnFail: opts.keepOnFail ?? false,
           dryRun: opts.dryRun ?? false,
           interactive: opts.interactive ?? false,
           confirm: confirmTty,
@@ -197,7 +210,11 @@ program
   .requiredOption('--brief <file>', 'product brief (markdown)')
   .option('--model <model>', 'codex | gpt-5 | claude')
   .option('--interactive', 're-enable the human gates (spec approval, pre-export)')
-  .action(async (opts: { brief: string; model?: string; interactive?: boolean }) => {
+  .option(
+    '--keep-on-fail',
+    'leave unrecoverable failed-stage edits in place; recover before rerunning create',
+  )
+  .action(async (opts: { brief: string; model?: string; interactive?: boolean; keepOnFail?: boolean }) => {
     const repo = repoOf(program.opts());
     try {
       const kicadVer = await kicadCliVersion();
@@ -209,6 +226,7 @@ program
         briefPath: opts.brief,
         model,
         interactive: opts.interactive ?? false,
+        keepOnFail: opts.keepOnFail ?? false,
         ...(continuePrompt ? { onBudgetExhausted: continuePrompt } : {}),
         log: (s) => console.log(s),
         renderer: rendererOf(),
@@ -221,7 +239,13 @@ program
     }
   });
 
-program.parseAsync().catch((err: Error) => {
-  console.error(err.message);
-  process.exit(1);
-});
+export async function main(argv = process.argv): Promise<void> {
+  await program.parseAsync(argv);
+}
+
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  main().catch((err: Error) => {
+    console.error(err.message);
+    process.exit(1);
+  });
+}

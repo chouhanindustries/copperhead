@@ -10,6 +10,26 @@ export interface GitSnapshot {
   stash: string | null;
 }
 
+function shellQuote(value: string): string {
+  return `'${value.replace(/'/g, `'"'"'`)}'`;
+}
+
+/**
+ * Print a copy-paste recovery sequence for the normal ignored audit-trail
+ * convention. Unstage .copperhead/runs first so a failed commit's `git add -A`
+ * cannot make reset --hard delete the very transcript being inspected.
+ * Snapshot refs are quoted so this stays shell-safe for non-hex test doubles
+ * and future git implementations.
+ */
+export function recoveryCommand(snap: GitSnapshot): string {
+  return [
+    'git reset -q -- .copperhead/runs',
+    `git reset --hard ${shellQuote(snap.head)}`,
+    'git clean -fd -e .copperhead/runs',
+    ...(snap.stash ? [`git stash apply ${shellQuote(snap.stash)}`] : []),
+  ].join(' && ');
+}
+
 async function git(repo: string, args: string[]): Promise<string> {
   const { stdout } = await execa('git', args, { cwd: repo });
   return stdout.trim();

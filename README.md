@@ -92,7 +92,7 @@ copperhead sync [--dry-run]          # verify the whole design state, resolve dr
 copperhead create --brief brief.md   # brief → full output package
 ```
 
-Global flags: `--repo <path>` (default: cwd) and `--json` for machine-readable output. `do` and `create` take `--model` and `--interactive`; `do` also takes `--dry-run`, `--max-turns`, and `--allow-dirty`.
+Global flags: `--repo <path>` (default: cwd) and `--json` for machine-readable output. `do` and `create` take `--model`, `--interactive`, and `--keep-on-fail`; `do` also takes `--dry-run`, `--max-turns`, and `--allow-dirty`. The debugging-only `--keep-on-fail` leaves a failed tree in place and prints the exact manual rollback command; the run still exits non-zero and never commits.
 
 Nothing is a black box: decisions land in an append-only `docs/DECISIONS.md`, every run writes a human-readable summary next to its transcript, and a per-run `docs/CHANGELOG.md` narrates the design history.
 
@@ -127,7 +127,7 @@ Honest read of where the current release stands, so you can calibrate before poi
 
 - **Solid.** `init` and `check`/`verify` are deterministic, LLM-free, and covered by the offline test suite against a real KiCad fixture: scaffolding, ERC/DRC, the s-expression reader, drift detection, and fab export all run green in CI.
 - **Implemented, not yet proven.** The agent loop (`do`, `sync --resolve`, `create`) is complete and structurally gated, but its acceptance tests need a live model and have not been observed passing end to end. Expect rough edges.
-- **Always.** Every mutation runs inside a git snapshot and rolls back if verification fails, so the worst case is a no-op commit, not a mangled schematic. Work on a branch anyway.
+- **Always by default.** Every mutation runs inside a git snapshot and rolls back if verification fails. Use `--keep-on-fail` only when you deliberately want the failed files left dirty for inspection; copperhead prints the snapshot and manual recovery command. Work on a branch anyway.
 
 ## Open source
 

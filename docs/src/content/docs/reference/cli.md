@@ -60,7 +60,8 @@ copperhead do "<change request>" [options]
 | `--model <model>` | `codex`, `gpt-5`, `claude`, or a provider-specific model id. `codex` uses the saved local Codex login. |
 | `--max-turns <n>` | Turn budget for this run. Overrides `maxTurns` from config. |
 | `--allow-dirty` | Permit a dirty working tree. The snapshot is taken with `git stash create`. |
-| `--dry-run` | Propose the diff and write nothing. |
+| `--keep-on-fail` | Debugging only: skip rollback after an unrecoverable failure, leave the tree dirty, and print HEAD/stash recovery instructions. Constraint refusals still roll back; failure still exits 1 and never commits. |
+| `--dry-run` | Propose the diff and write nothing. Cannot be combined with `--keep-on-fail`. |
 | `--interactive` | Pause for approval once the proposal validates. |
 
 Exits 1 if the run ends in failure, 0 otherwise.
@@ -110,7 +111,7 @@ Exit code 2 is the important one. A requirement violation means the as-built des
 The full pipeline from a product brief to the output package.
 
 ```bash
-copperhead create --brief brief.md [--model <model>] [--interactive]
+copperhead create --brief brief.md [--model <model>] [--interactive] [--keep-on-fail]
 ```
 
 | Option | Description |
@@ -118,8 +119,9 @@ copperhead create --brief brief.md [--model <model>] [--interactive]
 | `--brief <file>` | **Required.** The product brief, in markdown. |
 | `--model <model>` | `codex`, `gpt-5`, or `claude`. |
 | `--interactive` | Re-enable the human gates: spec approval, and a pause before export. |
+| `--keep-on-fail` | Debugging only: preserve an unrecoverable failed stage's tree and print the snapshot plus manual recovery command. Recover to a clean tree before rerunning `create`; refusals still roll back. |
 
-Exits 1 if any stage fails to complete, 0 when the pipeline finishes.
+`create` requires a clean working tree at command entry so partial output cannot be mistaken for a completed stage. It exits 1 if any stage fails to complete and 0 when the pipeline finishes.
 
 ### Pipeline stages
 

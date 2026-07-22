@@ -51,7 +51,7 @@ Tools are defined once as `{ name, description, jsonSchema, handler }` in `src/a
 
 ### D6 — Run lifecycle: git snapshot, transcript, structured commit
 
-`do` refuses a dirty tree unless `--allow-dirty` (which takes a `git stash create` snapshot; clean trees snapshot via the current HEAD). Every run writes a JSONL transcript to `.copperhead/runs/<timestamp>/`, with a redaction pass (`sk-[A-Za-z0-9_-]+` and generic bearer-token patterns) applied at write time, not post-hoc (AC-4.1). Success path: single `git commit` with the structured message; failure path: hard restore to snapshot, print transcript path, exit 1.
+`do` refuses a dirty tree unless `--allow-dirty` (which takes a `git stash create` snapshot; clean trees snapshot via the current HEAD). Every run writes a JSONL transcript to `.copperhead/runs/<timestamp>/`, with a redaction pass (`sk-[A-Za-z0-9_-]+` and generic bearer-token patterns) applied at write time, not post-hoc (AC-4.1). Success path: single `git commit` with the structured message. Failure path defaults to preserving failed work in a named stash, hard-restoring the snapshot, printing the transcript path, and exiting 1. `--keep-on-fail` is a debugging-only exception for unrecoverable failures: it skips preservation/restore, never commits, records rollback as skipped in `summary.md`, and prints a shell-safe recovery recipe using the pre-run HEAD and, when present, the dirty-tree stash object. The recipe first unstages `.copperhead/runs` so a failed commit cannot make reset delete the audit trail. Constraint refusals still restore, and `--dry-run` is incompatible with `--keep-on-fail`.
 
 ### D7 — Spec-gating: OpenSpec as subprocess, proposal-as-plan
 
@@ -68,6 +68,8 @@ BOM.md and PINOUT.md use fixed markdown table columns (refdes | value | footprin
 ### D10 — `create` pipeline: staged `do` runs, state in the repo
 
 Each stage (spec seed → architecture → BOM → schematic per sheet → layout draft → exports → firmware → DEVPLAN) is a `do`-loop invocation with a stage prompt and stage-specific completion gate (ERC per sheet, DRC for layout, export success, firmware build). Stage completion is inferred from the repo itself (which docs/files exist and pass their gates), making `create` resumable with no separate state file. Firmware verification = vendor toolchain build exits 0 (ESP-IDF/Arduino CLI detected per MCU choice); if no toolchain is present, the stage emits the scaffold and marks DEVPLAN.md with an explicit "not compiled here" flag rather than failing the run (run-to-completion guarantee).
+
+Because completion is inferred from files, `create` requires a clean tree at command entry before evaluating any stage marker. This separates intentional intra-pipeline dirtiness (OpenSpec bootstrap state passed to the first stage with `allowDirty`) from stale partial output left by `--keep-on-fail`. A kept stage failure tells the user to recover before rerunning; otherwise a partial `outputs/` or `firmware/` directory could incorrectly skip an unverified stage. If the first ordinary stage failure/refusal occurs before any stage commits, `create` also restores the clean command-entry snapshot so OpenSpec bootstrap files do not make its own next-run preflight fail.
 
 ### D11 — Test strategy: fixture-first, LLM tests behind a flag
 

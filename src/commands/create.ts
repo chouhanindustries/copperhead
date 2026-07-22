@@ -10,6 +10,8 @@ import type { RunMetaInput } from '../agent/runmeta.js';
 import type { ProgressRenderer } from '../agent/render.js';
 import { openspecInit } from '../openspec/cli.js';
 import { runCheck } from './check.js';
+import { gitPreflight, isDirty, restore, snapshot } from '../util/git.js';
+import { PreflightError } from '../util/preflight.js';
 
 /**
  * Mode A (`copperhead create`, SPEC §2.5): staged pipeline, each stage a
@@ -114,6 +116,7 @@ export interface CreateOptions {
   briefPath: string;
   model: string;
   interactive?: boolean;
+  keepOnFail?: boolean;
   /** Forwarded to each stage's run (attended continue-on-exhaustion prompt). */
   onBudgetExhausted?: (stats: BudgetExhaustedStats) => Promise<number>;
   log: (s: string) => void;
@@ -123,6 +126,22 @@ export interface CreateOptions {
 }
 
 export async function runCreate(opts: CreateOptions): Promise<{ ok: boolean; completed: string[] }> {
+  // create's per-stage allowDirty is strictly for state created inside this
+  // invocation (notably openspec init). A dirty tree at command entry may be
+  // a kept, unverified stage whose partial marker would poison isComplete().
+  await gitPreflight(opts.repoRoot, { allowDirty: true });
+  if (await isDirty(opts.repoRoot)) {
+    throw new PreflightError(
+      'working tree is dirty; copperhead create refuses to infer completed stages from uncommitted state',
+      'partial output from a kept failed stage can satisfy a file-existence completion check and make create skip unverified work',
+      [
+        'inspect the failed files and .copperhead/runs summary',
+        'run the printed recovery command (or commit/stash intentional work)',
+        'rerun copperhead create only after git status is clean',
+      ],
+    );
+  }
+  const pipelineStart = await snapshot(opts.repoRoot);
   const brief = await readFile(path.resolve(opts.briefPath), 'utf8');
   // Hashed from the content already in hand: a brief edited mid-pipeline shows
   // up as a different sha256 in the next stage's metadata (AC-8.1).
@@ -130,6 +149,7 @@ export async function runCreate(opts: CreateOptions): Promise<{ ok: boolean; com
   const config = await loadConfig(opts.repoRoot);
   await openspecInit(opts.repoRoot);
   const completed: string[] = [];
+  let completedDuringThisRun = 0;
 
   for (const [i, stage] of STAGES.entries()) {
     if (await stage.isComplete(opts.repoRoot, config.docs)) {
@@ -146,6 +166,7 @@ export async function runCreate(opts: CreateOptions): Promise<{ ok: boolean; com
       stagePrompt: stage.prompt(brief),
       interactive: opts.interactive ?? false,
       allowDirty: true, // stages build on each other's uncommitted state within the pipeline
+      keepOnFail: opts.keepOnFail ?? false,
       ...(stageTurns !== undefined ? { maxTurns: stageTurns } : {}),
       ...(opts.onBudgetExhausted ? { onBudgetExhausted: opts.onBudgetExhausted } : {}),
       log: opts.log,
@@ -158,7 +179,21 @@ export async function runCreate(opts: CreateOptions): Promise<{ ok: boolean; com
       },
     });
     if (res.outcome !== 'success') {
-      opts.log(`stage ${stage.name} did not complete (${res.outcome}); re-run copperhead create to resume here`);
+      const keptFailure = (opts.keepOnFail ?? false) && res.outcome === 'failure';
+      if (!keptFailure && completedDuringThisRun === 0) {
+        // openspecInit can dirty an otherwise-clean repo before the first
+        // stage snapshot. If that first stage rolls back/refuses, also restore
+        // the command-entry snapshot so ordinary create resumability stays
+        // clean and the new entry preflight does not reject its own scaffold.
+        await restore(opts.repoRoot, pipelineStart);
+      }
+      if (keptFailure) {
+        opts.log(
+          `stage ${stage.name} did not complete (${res.outcome}); recover the tree before rerunning create because partial output may look complete`,
+        );
+      } else {
+        opts.log(`stage ${stage.name} did not complete (${res.outcome}); re-run copperhead create to resume here`);
+      }
       return { ok: false, completed };
     }
     // A successful run is not the same as a completed stage: an agent can
@@ -174,6 +209,7 @@ export async function runCreate(opts: CreateOptions): Promise<{ ok: boolean; com
       return { ok: false, completed };
     }
     completed.push(stage.name);
+    completedDuringThisRun++;
   }
 
   const check = await runCheck(opts.repoRoot, opts.log);

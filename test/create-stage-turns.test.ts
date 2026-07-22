@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import path from 'node:path';
 import { mkdir, writeFile } from 'node:fs/promises';
+import { execa } from 'execa';
 import type { RunOptions } from '../src/agent/loop.js';
 import { tempFixtureRepo } from './helpers.js';
 
@@ -53,6 +54,8 @@ describe('create pipeline per-stage turn budgets (AC-15.18, AC-15.19)', () => {
       );
       const briefPath = path.join(repo, 'brief.md');
       await writeFile(briefPath, '# A tiny device\n', 'utf8');
+      await execa('git', ['add', '.copperhead/config.json', 'brief.md'], { cwd: repo });
+      await execa('git', ['commit', '-m', 'test: configure stage budgets'], { cwd: repo });
 
       const res = await runCreate({ repoRoot: repo, briefPath, model: 'gpt-5', log: () => {} });
       // The mocked agent never produces a schematic, so the pipeline halts at

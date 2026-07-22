@@ -16,7 +16,7 @@ Hardware design has no equivalent of a coding agent: every schematic change is m
 - Implement an event-driven sync layer so nothing goes stale: post-edit hooks inside the loop record sync obligations (drift check, constraint dual-write, `affects` revisit, decision-log and changelog entries) that MUST clear before the run may commit; `init` installs a git pre-commit hook running `copperhead check` so human edits are held to the same bar.
 - Implement spec-gated editing: the agent drives OpenSpec as a subprocess; `edit_file`/`write_file` tools are absent from the tool list until `openspec validate --change <id>` passes; constraint registry `.copperhead/constraints.json` built alongside docs.
 - Implement the Mode A `create` pipeline: brief → seeded specs → architecture → BOM → schematic → first-draft layout → outputs package (gerbers, DXF/STEP, renders, order BOM) → firmware scaffold → DEVPLAN.md, with run-to-completion guarantee and `--interactive` gates.
-- Implement safety rails: repo-root path sandboxing, dirty-tree refusal, snapshot/rollback on failure, secret redaction in transcripts, `UNVERIFIED` flagging of invented parts.
+- Implement safety rails: repo-root path sandboxing, dirty-tree refusal (including clean entry for `create` before resume-marker checks), snapshot/rollback on failure, an explicit `--keep-on-fail` debugging escape hatch that skips cleanup after unrecoverable failure without permitting success or commit, shell-safe audit-preserving manual recovery, secret redaction in transcripts, `UNVERIFIED` flagging of invented parts.
 
 ## Capabilities
 
