@@ -20,11 +20,24 @@ The offline test suite runs without any credentials. Integration tests that call
 
 For exercising the CLI by hand against a real repository, see [manual-tests/README.md](manual-tests/README.md). It provides two sandbox variants: `create` (full pipeline from a product brief) and `edit` (`init`, `check`, and the `do` loop on an existing KiCad project).
 
+Any change to CLI behavior, the agent loop, providers, or the KiCad layer must be exercised by hand in this sandbox before you open a PR, and the commands you ran plus their outcome go in the PR's manual-test log (see below).
+
 ## Making changes
 
 - This repo uses spec-driven development with OpenSpec. Behavior changes should stay consistent with `openspec/specs/SPEC.md`; if your change alters spec-level behavior, update the spec alongside the code.
 - Keep pull requests focused: one logical change per PR.
 - Add or update tests for anything you change. The offline suite must stay green.
+
+## Opening a pull request
+
+Opening a PR fills the description with [our template](.github/pull_request_template.md). Keep its sections and fill them in:
+
+- **What / Why**: what the change does and the gap it closes.
+- **Design / Spec**: for non-trivial or spec-level changes, how it works and which acceptance criteria or OpenSpec artifacts move with it.
+- **Testing**: the automated status table (typecheck, build, `npm test`, live-LLM if keyed) with real results, plus the required manual-test log. Report actual outcomes, never assumed ones. Write "n/a" with a reason only for changes that cannot be exercised at runtime, such as docs-only or CI-config-only PRs.
+- **Invariant checklist**: tick the invariants your change is responsible for and mark the rest n/a. A reviewer verifies each.
+
+A `PR lint` check runs on every PR and fails if a required section or the invariant checklist is missing or empty, so do not delete them. The lint verifies presence, not truth; a reviewer still confirms the manual log is real and the ticked invariants hold. Keep prose em-dash-free (use colons, commas, or parentheses).
 
 ## Contributor License Agreement
 

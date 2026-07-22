@@ -158,6 +158,7 @@ export async function runCreate(opts: CreateOptions): Promise<{ ok: boolean; com
       continue;
     }
     opts.log(`stage ${stage.name}: running`);
+    const stageTurns = config.stageMaxTurns?.[stage.name];
     const res = await runAgentLoop({
       repoRoot: opts.repoRoot,
       model: opts.model,
@@ -166,6 +167,7 @@ export async function runCreate(opts: CreateOptions): Promise<{ ok: boolean; com
       interactive: opts.interactive ?? false,
       allowDirty: true, // stages build on each other's uncommitted state within the pipeline
       keepOnFail: opts.keepOnFail ?? false,
+      ...(stageTurns !== undefined ? { maxTurns: stageTurns } : {}),
       ...(opts.onBudgetExhausted ? { onBudgetExhausted: opts.onBudgetExhausted } : {}),
       log: opts.log,
       ...(opts.renderer ? { renderer: opts.renderer } : {}),

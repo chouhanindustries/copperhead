@@ -8,6 +8,8 @@ export interface CopperheadConfig {
   docs: string;
   model: string | null;
   maxTurns: number;
+  /** Per-stage overrides for the create pipeline, keyed by stage name. */
+  stageMaxTurns?: Record<string, number>;
   maxRepairCycles: number;
   budgets: Record<string, number>;
   /** Content hashes of generated docs, for init idempotency (AC-1.4). */
@@ -34,12 +36,18 @@ export async function loadConfig(repoRoot: string): Promise<CopperheadConfig> {
     return { schematic: null, board: null, ...DEFAULTS };
   }
   const raw = JSON.parse(await readFile(p, 'utf8')) as Partial<CopperheadConfig>;
+  // A zero/negative/non-integer stage budget would exhaust the stage on turn 0;
+  // drop such entries rather than let a config typo stall the pipeline.
+  const stageMaxTurns = Object.fromEntries(
+    Object.entries(raw.stageMaxTurns ?? {}).filter(([, v]) => Number.isInteger(v) && v > 0),
+  );
   return {
     schematic: raw.schematic ?? null,
     board: raw.board ?? null,
     docs: raw.docs ?? DEFAULTS.docs,
     model: raw.model ?? null,
     maxTurns: raw.maxTurns ?? DEFAULTS.maxTurns,
+    ...(Object.keys(stageMaxTurns).length ? { stageMaxTurns } : {}),
     maxRepairCycles: raw.maxRepairCycles ?? DEFAULTS.maxRepairCycles,
     budgets: raw.budgets ?? {},
     ...(raw.generatedHashes ? { generatedHashes: raw.generatedHashes } : {}),
