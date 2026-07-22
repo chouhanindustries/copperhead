@@ -2,9 +2,11 @@ import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 
 /**
- * Minimal READ-ONLY s-expression tooling for .kicad_sch files. This module
- * never serializes: edits to KiCad files happen as anchored text replaces on
- * the original source (SPEC §1.3 / design D4).
+ * Minimal READ-ONLY s-expression tooling for KiCad s-expression files
+ * (.kicad_sch / .kicad_pcb). The footprint enumerator assumes the KiCad 8
+ * board format, where board-side reference designators are stored as
+ * `property` nodes. This module never serializes: edits to KiCad files happen
+ * as anchored text replaces on the original source (SPEC §1.3 / design D4).
  */
 
 export type SexpNode = string | SexpNode[];
@@ -244,6 +246,7 @@ export async function listSymbols(rootSch: string): Promise<SchematicSymbol[]> {
   }
   return out.sort((a, b) => a.ref.localeCompare(b.ref, undefined, { numeric: true }));
 }
+
 /** Reads a KiCad PCB file and returns each placed footprint's reference, footprint name, and placement information. */
 export async function listFootprints(boardPath: string): Promise<BoardFootprint[]> {
   const text = await readFile(boardPath, 'utf8');

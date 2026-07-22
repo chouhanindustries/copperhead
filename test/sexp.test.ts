@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import path from 'node:path';
-import { listSymbols, listNets, pinNets, parseSexp ,listFootprints} from '../src/kicad/sexp.js';
+import { listSymbols, listNets, pinNets, parseSexp, listFootprints} from '../src/kicad/sexp.js';
 import { FIXTURE } from './helpers.js';
 
 
@@ -31,15 +31,21 @@ describe('sexp parser', () => {
   it("lists board footprints", async () => {
     const footprints = await listFootprints(PCB);
 
-    expect(footprints).toHaveLength(2);
+    expect(footprints).toHaveLength(3);
 
     const r1 = footprints.find((footprint) => footprint.ref === "R1");
     expect(r1?.footprint).toBe("Resistor_SMD:R_0603_1608Metric");
     expect(r1?.side).toBe("front");
+    expect(r1?.at).toEqual({ x: 125.73, y: 82.55, rot: 90 });
 
     const missingRef = footprints.find((footprint) => footprint.ref === "?");
     expect(missingRef?.footprint).toBe("Capacitor_SMD:C_0603_1608Metric");
     expect(missingRef?.side).toBe("back");
+
+    const unknownSide = footprints.find((footprint) => footprint.ref === "J1");
+    expect(unknownSide?.footprint).toBe("Connector_PinHeader_2.00mm:PinHeader_1x2_P2.00mm_Vertical");
+    expect(unknownSide?.side).toBe("unknown");
+    expect(unknownSide?.at).toEqual({ x: 135, y: 90, rot: 0 });
   });
 
   it('maps pins to nets geometrically (AC-1.3 source)', async () => {

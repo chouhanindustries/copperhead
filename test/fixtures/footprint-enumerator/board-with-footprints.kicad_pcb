@@ -37,4 +37,12 @@
 
     (property "Value" "1uF")
   )
+
+  (footprint "Connector_PinHeader_2.00mm:PinHeader_1x2_P2.00mm_Vertical"
+    (uuid "8d3d5b44-0e5d-4f47-b75f-59f08d3ef003")
+    (at 135 90 0)
+
+    (property "Reference" "J1")
+    (property "Value" "Conn_01x02")
+  )
 )
