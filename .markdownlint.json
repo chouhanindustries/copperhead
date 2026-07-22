@@ -1,5 +1,17 @@
 {
   "MD013": false,
+  // Existing OpenSpec and agent prompt documents intentionally use compact heading spacing.
+  "MD022": false,
+  // Existing agent prompt documents intentionally place fences next to surrounding instructions.
+  "MD031": false,
+  // Existing OpenSpec scenarios intentionally keep lists tight against headings and paragraphs.
+  "MD032": false,
   "MD033": false,
-  "MD041": false
+  // Existing agent prompt documents use emphasized labels as non-structural section markers.
+  "MD036": false,
+  // Existing diagram and sample-output fences are intentionally language-neutral.
+  "MD040": false,
+  "MD041": false,
+  // Existing repository tables intentionally mix compact and aligned column styles.
+  "MD060": false
 }

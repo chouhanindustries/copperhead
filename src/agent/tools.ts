@@ -1,9 +1,9 @@
 import path from 'node:path';
-import { writeFile, mkdir, appendFile } from 'node:fs/promises';
+import { writeFile, mkdir, appendFile, readFile } from 'node:fs/promises';
 import type { ToolSchema } from './types.js';
 import { toolReadFile, toolWriteFile, toolEditFile, toolSearch } from './filetools.js';
 import { resolveInRepo, isKicadFile } from '../util/paths.js';
-import { runErc, runDrc, exportSvg, exportFab } from '../kicad/cli.js';
+import { runErc, runDrc, exportSvg, exportFab, kicadLoadError, isProbeableKicadFile } from '../kicad/cli.js';
 import { formatViolations, type CheckReport } from '../kicad/report.js';
 import { listSymbols, listNets } from '../kicad/sexp.js';
 import { checkDrift } from '../memory/drift.js';
@@ -217,6 +217,14 @@ export const TOOLS: ToolDef[] = [
     requiresUnlock: true,
     handler: async (ctx, args) => {
       const rel = str(args, 'path');
+      const abs = resolveInRepo(ctx.repoRoot, rel);
+      // Text edits can corrupt an s-expression file in ways the editor cannot
+      // see; a corrupted file then fails every later ERC/DRC with an opaque
+      // error. Validate loadability with KiCad itself and roll the edit back
+      // rather than letting the file drift unusable. Only schematics and
+      // boards are probeable; .kicad_pro/.kicad_sym/.kicad_mod edits must not
+      // be probed (a sch/pcb probe rejects them wholesale).
+      const before = isProbeableKicadFile(rel) ? await readFile(abs, 'utf8') : null;
       const res = await toolEditFile(
         ctx.repoRoot,
         rel,
@@ -224,6 +232,23 @@ export const TOOLS: ToolDef[] = [
         args.new_string as string,
         args.replace_all === true,
       );
+      if (before !== null) {
+        const loadErr = await kicadLoadError(abs);
+        if (loadErr) {
+          const after = await readFile(abs, 'utf8');
+          await writeFile(abs, before, 'utf8');
+          if (await kicadLoadError(abs)) {
+            // The file was already unloadable before this edit. Reverting
+            // would deadlock incremental repair (every partial fix undone
+            // unless one edit fixes the whole file), so keep the edit and
+            // keep the pressure on with the probe output.
+            await writeFile(abs, after, 'utf8');
+            markTouched(ctx, rel);
+            return `${res}\nnote: ${rel} was already unloadable before this edit, so the edit is KEPT. Keep repairing until it loads. kicad-cli says:\n${loadErr}`;
+          }
+          return `edit REVERTED: it would make ${rel} unloadable in KiCad. kicad-cli says:\n${loadErr}\nRe-read the surrounding file text and make a smaller, syntactically complete edit.`;
+        }
+      }
       markTouched(ctx, rel);
       return res;
     },
@@ -410,33 +435,66 @@ export const TOOLS: ToolDef[] = [
     schema: {
       name: 'resolve_affected',
       description:
-        'Explicitly resolve an affects-revisit obligation: state whether the affected item changed or why no change is needed.',
+        'Explicitly resolve affects-revisit obligations: state whether each affected item changed or why no change is needed. Pass resolutions[] to clear many in one call, or the single constraint_key/item/resolution form.',
       parameters: {
         type: 'object',
         properties: {
           constraint_key: { type: 'string' },
           item: { type: 'string' },
           resolution: { type: 'string', description: '"changed: ..." or "no change needed: <reason>"' },
+          resolutions: {
+            type: 'array',
+            description: 'batch form: resolve many obligations in one call',
+            items: {
+              type: 'object',
+              properties: {
+                constraint_key: { type: 'string' },
+                item: { type: 'string' },
+                resolution: { type: 'string' },
+              },
+              required: ['constraint_key', 'item', 'resolution'],
+            },
+          },
         },
-        required: ['constraint_key', 'item', 'resolution'],
+        required: [],
       },
     },
     requiresUnlock: true,
     handler: async (ctx, args) => {
-      const detail = `${str(args, 'constraint_key')} affects ${str(args, 'item')}`;
       // An item that matches nothing must not read as success: the model would
       // move on believing the obligation closed, and only find out at finish.
-      if (!ctx.ledger.clear('affects-revisit', detail)) {
-        const open = ctx.ledger.openOfKind('affects-revisit');
-        if (!open.length) return `error: no open affects-revisit obligation matches "${detail}"`;
-        return [
-          `error: no open affects-revisit obligation matches "${detail}".`,
-          'Resolve one item per call, matching these exactly:',
-          ...open.map((o) => `  - ${o.detail}`),
-        ].join('\n');
+      const resolveOne = (constraintKey: string, item: string, resolution: string): string => {
+        const detail = `${constraintKey} affects ${item}`;
+        if (!ctx.ledger.clear('affects-revisit', detail)) {
+          const open = ctx.ledger.openOfKind('affects-revisit');
+          if (!open.length) return `error: no open affects-revisit obligation matches "${detail}"`;
+          return [
+            `error: no open affects-revisit obligation matches "${detail}".`,
+            'Match these exactly:',
+            ...open.map((o) => `  - ${o.detail}`),
+          ].join('\n');
+        }
+        ctx.decisions.push(`[affects] ${detail}: ${resolution}`);
+        return `resolved: ${detail}`;
+      };
+
+      const batch = args.resolutions;
+      if (Array.isArray(batch) && batch.length) {
+        // Entries resolve independently: one bad key must not waste the call.
+        return batch
+          .map((entry, i) => {
+            const e = entry as Record<string, unknown>;
+            if (typeof e?.constraint_key !== 'string' || typeof e?.item !== 'string' || typeof e?.resolution !== 'string') {
+              return `error: resolutions[${i}] needs string constraint_key, item, and resolution`;
+            }
+            return resolveOne(e.constraint_key, e.item, e.resolution);
+          })
+          .join('\n');
       }
-      ctx.decisions.push(`[affects] ${detail}: ${str(args, 'resolution')}`);
-      return `resolved: ${detail}`;
+      if (typeof args.constraint_key === 'string' && typeof args.item === 'string' && typeof args.resolution === 'string') {
+        return resolveOne(args.constraint_key, args.item, args.resolution);
+      }
+      return 'error: pass either resolutions: [{constraint_key, item, resolution}, ...] or the single form constraint_key + item + resolution';
     },
   },
   {

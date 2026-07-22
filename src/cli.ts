@@ -8,7 +8,7 @@ import { runInit, InitError } from './memory/scaffold.js';
 import { runCheck } from './commands/check.js';
 import { syncVerify, syncResolve, formatSyncReport } from './commands/sync.js';
 import { runCreate } from './commands/create.js';
-import { runAgentLoop } from './agent/loop.js';
+import { runAgentLoop, type BudgetExhaustedStats } from './agent/loop.js';
 import { makeRenderer } from './agent/render.js';
 import { kicadCliVersion } from './kicad/cli.js';
 import { loadEnvFile } from './util/env.js';
@@ -34,6 +34,22 @@ async function confirmTty(question: string): Promise<boolean> {
   const answer = await rl.question(`${question} [y/N] `);
   rl.close();
   return /^y(es)?$/i.test(answer.trim());
+}
+
+/**
+ * Attended runs get a decision point instead of a rollback when the turn
+ * budget runs out (issue #15). Non-TTY (CI, pipes) keeps fail-and-restore.
+ */
+function budgetContinuePrompt(): ((stats: BudgetExhaustedStats) => Promise<number>) | undefined {
+  if (!process.stdin.isTTY || !process.stdout.isTTY) return undefined;
+  return async (stats) => {
+    // ceil of the ORIGINAL budget (design D1), so repeat extensions offer the
+    // same increment instead of escalating with the extended turn count.
+    const extra = Math.ceil(stats.maxTurns / 2);
+    const k = (n: number) => `${(n / 1000).toFixed(1)}k`;
+    const q = `Turn budget exhausted (${stats.turnsUsed} turns, ${k(stats.tokensIn)} in / ${k(stats.tokensOut)} out, ${stats.filesTouched.length} file(s) touched, ${stats.openObligations} open obligation(s)). Continue with ${extra} more turns?`;
+    return (await confirmTty(q)) ? extra : 0;
+  };
 }
 
 program
@@ -116,6 +132,7 @@ program
         const kicadVer = await kicadCliVersion();
         const config = await loadConfig(repo);
         const { model, source } = resolveModel(opts.model, config);
+        const continuePrompt = budgetContinuePrompt();
         const res = await runAgentLoop({
           repoRoot: repo,
           request,
@@ -125,6 +142,7 @@ program
           dryRun: opts.dryRun ?? false,
           interactive: opts.interactive ?? false,
           confirm: confirmTty,
+          ...(continuePrompt ? { onBudgetExhausted: continuePrompt } : {}),
           renderer: rendererOf(),
           meta: { command: 'do', modelSource: source, version, kicadCliVersion: kicadVer },
         });
@@ -187,6 +205,7 @@ program
       const kicadVer = await kicadCliVersion();
       const config = await loadConfig(repo);
       const { model, source } = resolveModel(opts.model, config);
+      const continuePrompt = budgetContinuePrompt();
       const res = await runCreate({
         repoRoot: repo,
         briefPath: opts.brief,
@@ -194,6 +213,7 @@ program
         interactive: opts.interactive ?? false,
         stage: opts.stage,
         from: opts.from,
+        ...(continuePrompt ? { onBudgetExhausted: continuePrompt } : {}),
         log: (s) => console.log(s),
         renderer: rendererOf(),
         meta: { command: 'create', modelSource: source, version, kicadCliVersion: kicadVer },

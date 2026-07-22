@@ -3,7 +3,7 @@ import { existsSync } from 'node:fs';
 import { loadConfig } from '../config.js';
 import { runErc, runDrc } from '../kicad/cli.js';
 import { formatViolations, type CheckReport } from '../kicad/report.js';
-import { checkDrift, type DriftMismatch } from '../memory/drift.js';
+import { checkDrift, emptySchematicWarning, type DriftMismatch } from '../memory/drift.js';
 import { loadConstraints, checkForbiddenPins, type ConstraintViolation } from '../memory/constraints.js';
 import { pinNets } from '../kicad/sexp.js';
 import { openspecValidate } from '../openspec/cli.js';
@@ -16,7 +16,7 @@ export interface CheckResult {
   ok: boolean;
   erc: { ok: boolean; violations: number } | null;
   drc: { ok: boolean; violations: number } | null;
-  drift: { ok: boolean; mismatches: DriftMismatch[] };
+  drift: { ok: boolean; mismatches: DriftMismatch[]; warning?: string };
   openspec: { ok: boolean; detail: string } | null;
   constraints: { ok: boolean; violations: ConstraintViolation[] };
 }
@@ -41,9 +41,15 @@ export async function runCheck(repoRoot: string, log: (s: string) => void): Prom
   }
 
   let drift: DriftMismatch[] = [];
+  let driftWarning: string | null = null;
   if (config.schematic && existsSync(path.join(repoRoot, config.schematic))) {
     drift = await checkDrift(repoRoot, config.docs, config.schematic);
     log(drift.length === 0 ? 'drift ✓' : drift.map((m) => `drift: ${m.doc} claims "${m.claim}" but actual is "${m.actual}"`).join('\n'));
+    // Informational, never a failure: the zero-symbol drift exemption is for
+    // bootstrap, but an established repo that lost its schematic content
+    // deserves a visible note rather than a silent green.
+    driftWarning = await emptySchematicWarning(repoRoot, config.docs, config.schematic);
+    if (driftWarning) log(`drift warning: ${driftWarning}`);
   }
 
   let openspec: { ok: boolean; detail: string } | null = null;
@@ -78,7 +84,7 @@ export async function runCheck(repoRoot: string, log: (s: string) => void): Prom
     ok,
     erc: erc ? { ok: erc.ok, violations: erc.violations.length } : null,
     drc: drc ? { ok: drc.ok, violations: drc.violations.length } : null,
-    drift: { ok: drift.length === 0, mismatches: drift },
+    drift: { ok: drift.length === 0, mismatches: drift, ...(driftWarning ? { warning: driftWarning } : {}) },
     openspec,
     constraints: { ok: constraintViolations.length === 0, violations: constraintViolations },
   };

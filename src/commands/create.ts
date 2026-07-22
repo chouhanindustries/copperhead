@@ -3,7 +3,9 @@ import { existsSync } from 'node:fs';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { loadConfig } from '../config.js';
-import { runAgentLoop } from '../agent/loop.js';
+import { listSymbols } from '../kicad/sexp.js';
+import { checkDrift } from '../memory/drift.js';
+import { runAgentLoop, type BudgetExhaustedStats } from '../agent/loop.js';
 import type { RunMetaInput } from '../agent/runmeta.js';
 import type { ProgressRenderer } from '../agent/render.js';
 import { openspecInit } from '../openspec/cli.js';
@@ -54,14 +56,36 @@ export const STAGES: Stage[] = [
     name: 'schematic',
     isComplete: async (root) => {
       const config = await loadConfig(root);
-      return !!config.schematic && existsSync(path.join(root, config.schematic));
+      if (!config.schematic) return false;
+      const p = path.join(root, config.schematic);
+      if (!existsSync(p)) return false;
+      // Mere file existence is not completion: bootstrapping leaves a blank
+      // sheet on disk (a hand-scaffolded project, or the future fix for #19),
+      // and skipping this stage over a blank sheet cascades — layout and
+      // outputs then run against nothing. The stage's contract is "build the
+      // schematic from BOM.md", so completion means symbols exist AND the
+      // BOM/PINOUT tables agree with them (drift-clean); anything less keeps
+      // the stage active on the next resume so partial capture continues.
+      if (!(await listSymbols(p)).length) return false;
+      return (await checkDrift(root, config.docs, config.schematic)).length === 0;
     },
     prompt: () =>
       'Stage 4: schematic. Build the schematic sheet by sheet from BOM.md and SUBSYSTEMS.md. After each sheet, run run_erc and fix violations before moving on. Same net names and refdes everywhere. Update PINOUT.md as you assign pins; check the strapping table first.',
   },
   {
     name: 'layout-draft',
-    isComplete: (root, docs) => docHasContent(root, path.join(docs, 'LAYOUT.md'), '## Draft quality'),
+    isComplete: async (root, docs) => {
+      // The LAYOUT.md marker alone is not enough: `copperhead init` scaffolds
+      // LAYOUT.md with the literal "## Draft quality" heading, so an init-ed
+      // repo would skip this stage without a single footprint placed. Require
+      // a board with at least one footprint on it as well.
+      const config = await loadConfig(root);
+      if (!config.board) return false;
+      const p = path.join(root, config.board);
+      if (!existsSync(p)) return false;
+      if (!(await readFile(p, 'utf8')).includes('(footprint')) return false;
+      return docHasContent(root, path.join(docs, 'LAYOUT.md'), '## Draft quality');
+    },
     prompt: () =>
       'Stage 5: first-draft layout. Rule-driven placement written as real coordinates: connectors on edges, decoupling at IC pins, ESD at connectors, keepouts honored. Route power and short critical nets; leave the rest as ratsnest. Every routed net must pass run_drc. Then write the "## Draft quality" section in LAYOUT.md: exactly what is fine and what a human or specialist tool should redo. Non-optimal is acceptable; unlabeled non-optimal is not.',
   },
@@ -90,6 +114,8 @@ export interface CreateOptions {
   briefPath: string;
   model: string;
   interactive?: boolean;
+  /** Forwarded to each stage's run (attended continue-on-exhaustion prompt). */
+  onBudgetExhausted?: (stats: BudgetExhaustedStats) => Promise<number>;
   log: (s: string) => void;
   renderer?: ProgressRenderer;
   /** Command-level metadata; stage and brief identity are filled in per stage. */
@@ -170,6 +196,8 @@ export async function runCreate(opts: CreateOptions): Promise<{ ok: boolean; com
 
     const verb = opts.stage || opts.from ? 're-running' : stageComplete ? 'rerunning selected stage' : 'running';
     opts.log(`stage ${stage.name}: ${verb}`);
+    opts.log(`stage ${stage.name}: running`);
+    const stageTurns = config.stageMaxTurns?.[stage.name];
     const res = await runAgentLoop({
       repoRoot: opts.repoRoot,
       model: opts.model,
@@ -177,6 +205,8 @@ export async function runCreate(opts: CreateOptions): Promise<{ ok: boolean; com
       stagePrompt: stage.prompt(brief),
       interactive: opts.interactive ?? false,
       allowDirty: true, // stages build on each other's uncommitted state within the pipeline
+      ...(stageTurns !== undefined ? { maxTurns: stageTurns } : {}),
+      ...(opts.onBudgetExhausted ? { onBudgetExhausted: opts.onBudgetExhausted } : {}),
       log: opts.log,
       ...(opts.renderer ? { renderer: opts.renderer } : {}),
       meta: {
@@ -199,6 +229,18 @@ export async function runCreate(opts: CreateOptions): Promise<{ ok: boolean; com
       runId: res.transcriptDir ? path.basename(res.transcriptDir) : null,
     };
     await writeConfig(opts.repoRoot, config);
+    // A successful run is not the same as a completed stage: an agent can
+    // finish "done" with all gates green having only planned the work (seen
+    // with the schematic stage: one header edit, ERC "clean" on an empty
+    // sheet). Advancing anyway lets every later stage run against a design
+    // that isn't there, so hold the pipeline until this stage's repo-state
+    // contract is actually met.
+    if (!(await stage.isComplete(opts.repoRoot, config.docs))) {
+      opts.log(
+        `stage ${stage.name}: run succeeded but the stage contract is not met yet (partial work committed); re-run copperhead create to continue this stage`,
+      );
+      return { ok: false, completed };
+    }
     completed.push(stage.name);
 
     if (opts.stage) {

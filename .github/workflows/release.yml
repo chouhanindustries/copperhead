@@ -21,14 +21,22 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      id-token: write # required for npm provenance
+      # OIDC token for npm trusted publishing (also what provenance signs with).
+      id-token: write
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          # Node 22.14+ is required for trusted publishing; 24 also ships a
+          # recent npm. registry-url writes the .npmrc that publish reads.
+          node-version: 24
           cache: npm
           registry-url: https://registry.npmjs.org
+
+      # Trusted publishing needs npm >= 11.5.1. Upgrade explicitly so the job
+      # does not depend on whichever npm happens to ship with Node.
+      - name: Ensure npm supports trusted publishing
+        run: npm install -g npm@latest
 
       # Fail before doing any work if the version can't be published, so a bad
       # release costs seconds instead of a full KiCad-installing CI run.
@@ -59,8 +67,7 @@ jobs:
       - run: npm ci
       - run: npm run build
 
-      # Provenance works here (unlike locally) because Actions supplies the
-      # OIDC token that npm attests against.
+      # No NPM_TOKEN: npm authenticates to the registry with the GitHub OIDC
+      # token via trusted publishing (configured under the package's settings
+      # on npmjs.com). Provenance is signed automatically from the same token.
       - run: npm publish
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
