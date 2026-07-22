@@ -14,6 +14,12 @@ export interface CopperheadConfig {
   budgets: Record<string, number>;
   /** Content hashes of generated docs, for init idempotency (AC-1.4). */
   generatedHashes?: Record<string, string>;
+  /**
+   * How the repo was bootstrapped. `"create"` marks a Mode A pipeline repo
+   * (fab gate requires DEVPLAN.md). Written by `copperhead create`; absent on
+   * init-only / hand-maintained repos.
+   */
+  origin?: 'create' | 'init';
 }
 
 export const CONFIG_DIR = '.copperhead';
@@ -51,6 +57,7 @@ export async function loadConfig(repoRoot: string): Promise<CopperheadConfig> {
     maxRepairCycles: raw.maxRepairCycles ?? DEFAULTS.maxRepairCycles,
     budgets: raw.budgets ?? {},
     ...(raw.generatedHashes ? { generatedHashes: raw.generatedHashes } : {}),
+    ...(raw.origin === 'create' || raw.origin === 'init' ? { origin: raw.origin } : {}),
   };
 }
 
