@@ -28,12 +28,6 @@ It reads and edits real `.kicad_sch` / `.kicad_pcb` files (s-expression text), m
 ```bash
 npm install -g copperhead   # or: npx copperhead check
 ```
-Verify the installation:
-
-```bash
-copperhead --version
-```
-
 
 ### Requirements
 
@@ -46,6 +40,7 @@ Verify your installation:
 ```bash
 node --version
 kicad-cli version
+copperhead --version
 ```
 
 ## Quick start
