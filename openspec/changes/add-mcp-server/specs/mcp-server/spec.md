@@ -49,6 +49,10 @@ The server SHALL read API keys only from environment variables. `copperhead_chec
 - **WHEN** no API key env var is set and `copperhead_do` is called
 - **THEN** the result is a typed error naming the expected env vars, and no run is started
 
+#### Scenario: Keyless resolve refuses before any work
+- **WHEN** no API key env var is set and `copperhead_sync` is called with `resolve: true`
+- **THEN** the result is a typed error naming the expected env vars, and neither the verify nor the resolve phase runs
+
 ### Requirement: Mutating tools are serialized per repo
 The server SHALL serialize `copperhead_do`, `copperhead_sync` (with `resolve`), and `copperhead_init` calls against the same repo, queueing or rejecting concurrent mutations with a typed busy error, while allowing concurrent `copperhead_check` calls.
 

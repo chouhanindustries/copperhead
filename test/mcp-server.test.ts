@@ -280,10 +280,41 @@ describe('copperhead_sync', () => {
     };
     const syncResolve = vi.fn(async () => ({ ok: true }));
     await withServer(
-      { syncVerify: async () => report, syncResolve: syncResolve as unknown as McpDeps['syncResolve'] },
+      {
+        loadConfig: async () => config,
+        resolveModel: okModel,
+        syncVerify: async () => report,
+        syncResolve: syncResolve as unknown as McpDeps['syncResolve'],
+      },
       async (client) => {
         const out = await callJson(client, 'copperhead_sync', { resolve: true });
         expect(out.resolved).toBe(false);
+        expect(syncResolve).not.toHaveBeenCalled();
+      },
+    );
+  });
+
+  it('with resolve=true and no key present, refuses fast without verifying or resolving', async () => {
+    const syncVerify = vi.fn(async () => ({ resolvable: [], violations: [] }) as SyncReport);
+    const syncResolve = vi.fn(async () => ({ ok: true }));
+    await withServer(
+      {
+        loadConfig: async () => config,
+        resolveModel: () => {
+          throw new Error(
+            'no model configured: pass --model codex, set COPPERHEAD_MODEL, set model in .copperhead/config.json, or provide OPENAI_API_KEY/ANTHROPIC_API_KEY',
+          );
+        },
+        syncVerify: syncVerify as unknown as McpDeps['syncVerify'],
+        syncResolve: syncResolve as unknown as McpDeps['syncResolve'],
+      },
+      async (client) => {
+        const err = await client
+          .callTool({ name: 'copperhead_sync', arguments: { resolve: true } })
+          .catch((e) => e);
+        expect(String((err as Error).message)).toMatch(/OPENAI_API_KEY|ANTHROPIC_API_KEY/);
+        // Fail-fast: the key check precedes even the deterministic verify phase.
+        expect(syncVerify).not.toHaveBeenCalled();
         expect(syncResolve).not.toHaveBeenCalled();
       },
     );

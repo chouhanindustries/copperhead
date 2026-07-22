@@ -194,9 +194,16 @@ export function createCopperheadMcpServer(repoRoot: string, depsOverride: Partia
 
         case 'copperhead_sync': {
           const resolve = args.resolve === true;
-          const report = await deps.syncVerify(repoRoot);
-          if (!resolve) return jsonResult({ resolved: false, report });
+          if (!resolve) {
+            // Verify-only: keyless and safe to run concurrently.
+            return jsonResult({ resolved: false, report: await deps.syncVerify(repoRoot) });
+          }
+          // resolve=true asks for the LLM resolve phase: refuse fast and honestly
+          // when no key resolves, before any work, exactly as copperhead_do does.
+          const config = await deps.loadConfig(repoRoot);
+          const { model, source } = requireModel(config);
           return await runMutating(async () => {
+            const report = await deps.syncVerify(repoRoot);
             if (report.violations.length) {
               return jsonResult({
                 resolved: false,
@@ -205,8 +212,6 @@ export function createCopperheadMcpServer(repoRoot: string, depsOverride: Partia
               });
             }
             if (!report.resolvable.length) return jsonResult({ resolved: false, report, note: 'nothing to resolve' });
-            const config = await deps.loadConfig(repoRoot);
-            const { model, source } = requireModel(config);
             const out = await deps.syncResolve(repoRoot, report, model, progressLogger(extra), {
               meta: { command: 'sync', modelSource: source, version },
             });
