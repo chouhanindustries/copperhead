@@ -4,8 +4,8 @@
 
 - [ ] 1.1 Extract the BOM.md table parser from `src/memory/drift.ts` into a shared module and reuse it
 - [ ] 1.2 Implement quantity arithmetic (`ceil(qty × boards × (1 + spares/100))`, passive minimum `qty × boards + 2` for `R_`/`C_`/`L_` footprint prefixes) with unit tests
-- [ ] 1.3 Implement per-supplier emitters in `src/kicad/bom-export.ts`: JLCPCB assembly CSV, DigiKey cart CSV, Mouser cart CSV, each as one function
-- [ ] 1.4 Implement exclusion rules: MPN-less rows always excluded, `UNVERIFIED` rows excluded unless `--include-unverified`; warnings footer to stderr and CSV comments where the format permits
+- [ ] 1.3 Implement per-supplier emitters in `src/kicad/bom-export.ts`: JLCPCB assembly CSV, DigiKey cart CSV, Mouser cart CSV, each as one function (JLCPCB emitter implemented in PR #36)
+- [ ] 1.4 Implement exclusion rules: MPN-less rows always excluded, `UNVERIFIED` rows excluded unless `--include-unverified`; warnings footer to stderr and CSV comments where the format permits (JLCPCB rules implemented in PR #36; CSV warning comments are opt-in pending parser confirmation)
 
 ## 2. CLI wiring
 
@@ -15,8 +15,8 @@
 
 ## 3. Tests
 
-- [ ] 3.1 Golden-file tests per supplier format against the fixture BOM
-- [ ] 3.2 Exclusion and `--include-unverified` behavior tests
+- [ ] 3.1 Golden-file tests per supplier format against the fixture BOM (JLCPCB golden test implemented in PR #36)
+- [ ] 3.2 Exclusion and `--include-unverified` behavior tests (JLCPCB coverage implemented in PR #36)
 - [ ] 3.3 Drift-refusal test (edited BOM.md value → non-zero exit, drift hint)
 - [ ] 3.4 Network guard: no api.* connections during export
 

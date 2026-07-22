@@ -2,6 +2,3 @@ Comment,Designator,Footprint,LCSC Part #
 "100nF, 16V","C2,C10","Capacitor_SMD:C_0603_1608Metric","C14663"
 "10k","R2,R10","Resistor_SMD:R_0603_1608Metric","C25804"
 "10k","R3","Resistor_SMD:R_0805_2012Metric",""
-# Excluded D1: UNVERIFIED (use includeUnverified to include)
-# Excluded U1: missing MPN
-# Excluded C1: UNVERIFIED (use includeUnverified to include)

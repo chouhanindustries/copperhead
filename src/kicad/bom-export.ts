@@ -16,6 +16,8 @@ export interface NormalizedBomRow {
 
 export interface JlcpcbBomOptions {
   includeUnverified?: boolean;
+  /** Include diagnostic comment lines in the CSV when the target accepts them. */
+  includeWarningsInCsv?: boolean;
 }
 
 export interface BomExportWarning {
@@ -48,18 +50,18 @@ export function emitJlcpcbBom(
     const refdes = row.refdes.trim();
     const mpn = row.mpn?.trim() ?? '';
     const mpnIsUnverifiedMarker = mpn.toUpperCase() === 'UNVERIFIED';
-    if (!mpn) {
-      warnings.push(warning(refdes, 'missing MPN'));
+    if (!mpn || mpnIsUnverifiedMarker) {
+      warnings.push(warning(refdes, mpnIsUnverifiedMarker ? 'invalid MPN (UNVERIFIED marker)' : 'missing MPN'));
       continue;
     }
 
-    const verification = (row.status ?? row.verification ?? (mpnIsUnverifiedMarker ? 'UNVERIFIED' : '')).trim().toUpperCase();
-    if (verification === 'UNVERIFIED' && !options.includeUnverified) {
+    const verification = (row.status || row.verification || '').trim().toUpperCase();
+    if (verification === 'UNVERIFIED') {
       warnings.push(warning(refdes, 'UNVERIFIED (use includeUnverified to include)'));
-      continue;
+      if (!options.includeUnverified) continue;
     }
 
-    const key = JSON.stringify([row.value, row.footprint, row.lcsc?.trim() ?? '']);
+    const key = JSON.stringify([row.value.trim(), row.footprint.trim(), row.lcsc?.trim() ?? '']);
     const group = groups.get(key);
     if (group) group.push(row);
     else groups.set(key, [row]);
@@ -70,24 +72,23 @@ export function emitJlcpcbBom(
     .map((group) => {
       const first = group[0]!;
       return [
-        first.value,
-        group.map((row) => row.refdes.trim()).sort(compareRefdes).join(','),
-        first.footprint,
+        first.value.trim(),
+        [...new Set(group.map((row) => row.refdes.trim()).filter(Boolean))].sort(compareRefdes).join(','),
+        first.footprint.trim(),
         first.lcsc?.trim() ?? '',
       ];
     });
 
   const lines = [HEADER.join(','), ...outputRows.map(csvLine)];
-  lines.push(...warnings.map((item) => `# ${item.message}`));
+  if (options.includeWarningsInCsv) {
+    lines.push(...warnings.map((item) => `# ${item.message}`));
+  }
   return { csv: `${lines.join('\n')}\n`, warnings };
 }
 
 function firstRefdes(group: readonly NormalizedBomRow[]): string {
   return [...group].map((row) => row.refdes.trim()).sort(compareRefdes)[0] ?? '';
 }
-
-/** Alias emphasizing that the returned payload is CSV text plus diagnostics. */
-export const emitJlcpcbCsv = emitJlcpcbBom;
 
 function warning(refdes: string, reason: string): BomExportWarning {
   const name = refdes || '<unnamed row>';
