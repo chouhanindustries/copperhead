@@ -73,7 +73,7 @@ The active provider/model SHALL be resolved as: `--model` flag, then `COPPERHEAD
 - **THEN** the Anthropic provider is used for that run
 
 ### Requirement: Failed-run inspection flag
-The `do` and `create` commands SHALL expose `--keep-on-fail` and forward it to every applicable agent-loop run. The option SHALL affect failed-run cleanup only; it SHALL NOT bypass dirty-tree preflight, verification, obligations, failure exit status, or the no-commit rule.
+The `do` and `create` commands SHALL expose `--keep-on-fail` and forward it to every applicable agent-loop run. The option SHALL affect cleanup after unrecoverable failure only; it SHALL NOT change constraint-refusal rollback or bypass dirty-tree preflight, verification, obligations, failure exit status, or the no-commit rule. `do --dry-run --keep-on-fail` SHALL be rejected before the provider can write because its two cleanup contracts conflict.
 
 #### Scenario: Flag is available on both agent commands
 - **WHEN** `copperhead do --help` and `copperhead create --help` are run
@@ -82,3 +82,7 @@ The `do` and `create` commands SHALL expose `--keep-on-fail` and forward it to e
 #### Scenario: Create forwards the flag to a failed stage
 - **WHEN** `create --keep-on-fail` reaches a stage that fails
 - **THEN** that stage leaves its failed files for inspection and the pipeline exits non-zero without advancing to another stage
+
+#### Scenario: Dry-run conflict is rejected
+- **WHEN** `do --dry-run --keep-on-fail` is requested
+- **THEN** the command exits non-zero before provider execution and explains that one flag guarantees reversion while the other requests preservation

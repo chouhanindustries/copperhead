@@ -209,6 +209,7 @@ describe('exit paths and run-end addenda (task 4.6)', () => {
 
       expect(res.outcome).toBe('failure');
       expect(res.commit).toBeNull();
+      expect(res.filesTouched).toContain('debug-output.txt');
       expect(await readFile(debugFile, 'utf8')).toBe('partial agent output\n');
       expect(lines).toContain('WARNING: run failed; tree left dirty for inspection (--keep-on-fail)');
       expect(lines.join('\n')).toContain(`pre-run snapshot: HEAD ${beforeHead}`);
@@ -258,9 +259,9 @@ describe('exit paths and run-end addenda (task 4.6)', () => {
       expect(output).toContain(`git stash apply '${stash}'`);
 
       // Exercise the exact recovery sequence printed by copperhead.
-      await execa('git', ['reset', '--hard', head!], { cwd: repo });
-      await execa('git', ['clean', '-fd', '-e', '.copperhead/runs'], { cwd: repo });
-      await execa('git', ['stash', 'apply', stash!], { cwd: repo });
+      const manualRecovery = output.match(/to roll back: (.+)/)?.[1];
+      expect(manualRecovery).toBeTruthy();
+      await execa('/bin/sh', ['-c', manualRecovery!], { cwd: repo });
       expect(await readFile(userFile, 'utf8')).toBe(userVersion);
       await expect(readFile(debugFile, 'utf8')).rejects.toThrow();
 
@@ -297,6 +298,65 @@ describe('exit paths and run-end addenda (task 4.6)', () => {
       const summary = await readFile(path.join(res.transcriptDir, 'summary.md'), 'utf8');
       expect(summary).toContain('ROLLBACK FAILED');
       expect(lines.join('\n')).toContain('rollback failed');
+      expect(lines.join('\n')).toContain('manual recovery: git reset -q -- .copperhead/runs');
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it('rejects --dry-run with --keep-on-fail before a provider can write', async () => {
+    const { repo, cleanup } = await tempFixtureRepo();
+    try {
+      const provider = new ScriptedProvider([spin('unused')]);
+      await expect(
+        runAgentLoop(loopOpts(repo, provider, [], { dryRun: true, keepOnFail: true })),
+      ).rejects.toThrow(/--dry-run cannot be combined with --keep-on-fail/);
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it('keeps commit-failed output, reports real files, and recovers without deleting the staged audit trail', async () => {
+    const { repo, cleanup } = await tempFixtureRepo();
+    try {
+      // Make runs stageable so commitAll reproduces the review's edge case:
+      // the failed commit has already staged the in-flight audit directory.
+      const ignorePath = path.join(repo, '.gitignore');
+      const ignore = await readFile(ignorePath, 'utf8');
+      await writeFile(ignorePath, ignore.replace(/^\.copperhead\/runs\/?\n/m, ''), 'utf8');
+      await mkdir(path.join(repo, 'docs'), { recursive: true });
+      await writeFile(path.join(repo, 'docs', 'DECISIONS.md'), '# Decisions\n', 'utf8');
+      await execa('git', ['add', '-A'], { cwd: repo });
+      await execa('git', ['commit', '-q', '-m', 'prepare staged audit test'], { cwd: repo });
+
+      const hook = path.join(repo, '.git', 'hooks', 'pre-commit');
+      await writeFile(hook, '#!/bin/sh\necho "check failed" >&2\nexit 1\n', 'utf8');
+      await chmod(hook, 0o755);
+
+      const lines: string[] = [];
+      const debugFile = path.join(repo, 'debug-output.txt');
+      const provider: Provider = {
+        name: 'scripted',
+        chat: async () => {
+          await writeFile(debugFile, 'failed commit output\n', 'utf8');
+          return finishTurn('done', 'ready to commit');
+        },
+      };
+      const res = await runAgentLoop(
+        loopOpts(repo, provider, lines, { maxTurns: 3, keepOnFail: true }),
+      );
+
+      expect(res.exitPath).toBe('commit-failed');
+      expect(res.filesTouched).toContain('debug-output.txt');
+      expect(await readFile(debugFile, 'utf8')).toBe('failed commit output\n');
+      const manualRecovery = lines.join('\n').match(/to roll back: (.+)/)?.[1];
+      expect(manualRecovery).toContain('git reset -q -- .copperhead/runs');
+
+      await execa('/bin/sh', ['-c', manualRecovery!], { cwd: repo });
+      await expect(readFile(debugFile, 'utf8')).rejects.toThrow();
+      expect(await readFile(path.join(res.transcriptDir, 'summary.md'), 'utf8')).toContain(
+        'commit-failed',
+      );
     } finally {
       await cleanup();
     }

@@ -22,14 +22,22 @@ Once started, `create` SHALL always finish with the complete output package: gat
 
 #### Scenario: Failed stage retained for debugging
 - **WHEN** a stage fails during `create --keep-on-fail`
-- **THEN** the pipeline stops with a non-zero result, creates no failure commit, leaves that stage's failed tree in place, and prints the snapshot refs and manual recovery command
+- **THEN** the pipeline stops with a non-zero result, creates no failure commit, leaves that stage's failed tree in place, prints the snapshot refs and manual recovery command, and warns that recovery is required before rerunning
 
 ### Requirement: Resumability from repo state
-Pipeline state SHALL live in the repo (docs + files + gate results), so a killed `create` re-run SHALL continue from the first incomplete stage without redoing completed ones.
+Pipeline state SHALL live in the repo (docs + files + gate results), so a killed `create` re-run SHALL continue from the first incomplete stage without redoing completed ones. Before inspecting those completion markers, `create` SHALL require a clean command-entry tree so unverified partial artifacts preserved by `--keep-on-fail` cannot be mistaken for completed stages.
 
 #### Scenario: Resume after kill
 - **WHEN** `create` is killed after the BOM stage and re-run
 - **THEN** it skips spec/architecture/BOM and resumes at the schematic stage
+
+#### Scenario: Rerun after kept failure is blocked
+- **WHEN** a kept failed stage leaves a dirty partial marker such as `firmware/` or `outputs/` and `create` is run again
+- **THEN** `create` refuses before evaluating `isComplete`, explains that partial output may be unverified, and requires recovery to a clean tree
+
+#### Scenario: Ordinary first-stage rollback remains resumable
+- **WHEN** the first stage fails or refuses without keeping failed output after OpenSpec bootstrap dirtied the tree
+- **THEN** `create` restores the clean command-entry snapshot so its next invocation passes the entry preflight
 
 ### Requirement: First-draft layout with honesty gate
 The layout stage SHALL produce rule-driven placement (real coordinates in the `.kicad_pcb`) and rule-based routing of power/critical nets, with every routed net passing DRC, and SHALL auto-write a `## Draft quality` section in LAYOUT.md listing what is done and what a human or specialist tool should redo.

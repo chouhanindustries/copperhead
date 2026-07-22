@@ -168,7 +168,7 @@ brief.md
   → DEVPLAN.md
 ```
 
-Each stage is a `do`-loop run with a stage-specific prompt. State lives in the repo (docs + files), so `create` is resumable: kill it at any stage, re-run, it continues from the docs.
+Each stage is a `do`-loop run with a stage-specific prompt. State lives in the repo (docs + files), so `create` is resumable: kill it after a completed stage, re-run, and it continues from the docs. Because file existence participates in completion detection, `create` requires a clean working tree at command entry before it examines stage markers. This prevents partial, unverified files retained by `--keep-on-fail` from making a rerun skip the failed stage; the user must run the printed recovery command first.
 
 ### First-draft layout (explicitly non-optimal, explicitly useful)
 
@@ -291,7 +291,7 @@ It's a loop, and it looks a lot like pair-programming, except the codebase is a 
 2. **Plan.** Agent states, in one short block: what will change, which files are affected, which constraints are at risk (e.g. sleep-current budget).
 3. **Edit.** Agent uses tools to modify KiCad files and docs. Edits to `.kicad_sch`/`.kicad_pcb` are **text edits on the s-expression source** (search/replace with context anchors) — no full-file regeneration, ever. Same net names and refdes everywhere.
 4. **Verify.** Agent runs `run_erc` (always) and `run_drc` (if the .kicad_pcb changed). Parses violations.
-5. **Repair.** If violations: fix and re-run, up to `maxRepairCycles` (default 5). If still failing: revert to the pre-run snapshot and report failure with the violation list. With the explicit debugging flag `--keep-on-fail`, skip only that restore/clean step, leave the failed tree for inspection, and print the snapshot refs plus the exact manual recovery command; the run still fails and cannot commit.
+5. **Repair.** If violations: fix and re-run, up to `maxRepairCycles` (default 5). If still failing: preserve the failed work in a named stash, revert to the pre-run snapshot, and report failure with the violation list. With the explicit debugging flag `--keep-on-fail`, skip failed-work stashing plus restore/clean, leave the failed index and tree for inspection, and print the snapshot refs plus a shell-safe recovery command that preserves `.copperhead/runs`; the run still fails and cannot commit. Constraint refusals still restore.
 6. **Propagate.** Agent runs `check_drift`; any doc that references a changed value/part/pin must be updated in the same run.
 7. **Rationale.** Every non-trivial decision gets a one-line "why" written into the relevant doc.
 8. **Commit.** `git commit` with a structured message (`copperhead: <request>\n\n<summary of edits + verification result>`). Requires clean working tree at start (§7 safety).
@@ -338,8 +338,10 @@ interface Provider {
 ### 4.5 Budgets & failure modes
 
 - `maxTurns` default 40; `maxRepairCycles` 5; per-run token budget logged
-- On any unrecoverable failure: restore the git snapshot, print the transcript path, exit 1. With `--keep-on-fail`, leave the failed tree dirty instead, record the skipped rollback in `summary.md`, and print the pre-run HEAD (plus the `git stash create` object for an `--allow-dirty` start) and a manual reset/clean/stash-apply command; exit status and commit gating are unchanged.
+- On turn-budget exhaustion in an attended (TTY) run: print run stats (turns, files touched, open obligations, token usage) and ask whether to continue with more turns; declining, or a non-TTY run, fails as below. The extension can repeat; each is a fresh decision with fresh numbers.
+- On any unrecoverable failure: by default preserve touched work as a git stash entry named `copperhead failed run <run-id>`, restore the snapshot, print the stash ref and transcript path, and exit 1. With `--keep-on-fail`, leave the failed tree dirty in place instead, record the skipped rollback in `summary.md`, and print the pre-run HEAD (plus the `git stash create` object for an `--allow-dirty` start) and a manual audit-preserving reset/clean/stash-apply command; exit status and commit gating are unchanged. `--dry-run` and `--keep-on-fail` are mutually exclusive, and refusals restore regardless of the flag.
 - Rate-limit (429): exponential backoff ×3, then fail over to the other provider if a key exists
+- The Anthropic provider marks `cache_control` breakpoints (system prompt, last tool, last message block) so the resent conversation prefix is cached; reported input tokens include cache reads/writes
 
 ---
 
@@ -352,11 +354,12 @@ interface Provider {
   "docs": "docs/",
   "model": "gpt-5",
   "maxTurns": 40,
+  "stageMaxTurns": { "spec-seed": 60 },
   "budgets": { "sleep_current_uA": 25 }
 }
 ```
 
-`budgets` is free-form; keys are surfaced verbatim into the system prompt so the agent treats them as hard constraints.
+`budgets` is free-form; keys are surfaced verbatim into the system prompt so the agent treats them as hard constraints. `stageMaxTurns` is optional: per-stage turn budgets for the create pipeline, keyed by stage name; stages without an entry use `maxTurns`.
 
 ---
 
@@ -374,7 +377,7 @@ Acceptance: type "add a second RGB LED on an RTC-capable pin" → watch schemati
 
 ## 7. Safety rails
 
-- Refuse to run `do` on a dirty git tree (offer `--allow-dirty` with snapshot via `git stash create`). `--keep-on-fail` does not weaken this preflight: a later run still refuses the intentionally preserved dirty state unless `--allow-dirty` is supplied.
+- Refuse to run `do` on a dirty git tree (offer `--allow-dirty` with snapshot via `git stash create`). Refuse to run `create` on any dirty command-entry tree before stage-completion checks. `--keep-on-fail` does not weaken these preflights: a later `do` refuses intentionally preserved state unless `--allow-dirty` is supplied, while `create` requires recovery to a clean tree.
 - All file tools sandboxed to repo root; no network tools in Phase 1
 - `.env` in `.gitignore` from first commit; keys only via env vars — never written to any file, transcript, or commit
 - Transcripts in `.copperhead/runs/` redact anything matching `sk-[A-Za-z0-9_-]+`
@@ -421,7 +424,7 @@ Format: Given / When / Then. "Fixture" = the open-telegraph repo (or the tiny te
 - **AC-3.8 (dirty tree)** With uncommitted changes and no `--allow-dirty`: refuses to start.
 - **AC-3.9 (dry run)** `--dry-run` prints the proposed diff and writes nothing.
 - **AC-3.10 (provider parity)** AC-3.1 passes with both `--model gpt-5` and `--model claude`.
-- **AC-3.11 (keep failed tree for debugging)** Given a run started with `--keep-on-fail`, when any unrecoverable failure path is reached, then no commit is created, the agent's failed files remain exactly in place, the CLI prominently reports the pre-run snapshot and a manual recovery command, and `summary.md` records that rollback was skipped. Without the flag, AC-3.6 remains unchanged. With `--allow-dirty`, the warning and summary also name the stash snapshot and the recovery command reapplies it.
+- **AC-3.11 (keep failed tree for debugging)** Given a run started with `--keep-on-fail`, when any unrecoverable failure path is reached, then no commit is created, the agent's failed index/files remain in place, the CLI prominently reports the pre-run snapshot and an audit-preserving manual recovery command, `filesTouched` reflects the actual on-disk diff, and `summary.md` records that rollback was skipped. Without the flag, AC-3.6 plus named-stash preservation remains unchanged. With `--allow-dirty`, the warning and summary also name the stash snapshot and the recovery command reapplies it. Constraint refusals still restore; `--dry-run --keep-on-fail` is rejected before provider execution. A `create` rerun against the kept dirty state refuses before stage-completion detection.
 
 ### AC-4 · Safety
 
@@ -437,6 +440,23 @@ Format: Given / When / Then. "Fixture" = the open-telegraph repo (or the tiny te
 - **AC-7.4 (dry run)** `sync --dry-run` prints every detected inconsistency (doc, claim, actual, proposed resolution) and writes nothing (`git status` unchanged).
 - **AC-7.5 (clean and idempotent)** On a consistent repo, `sync` exits 0 with "no inconsistencies", makes no edits and no commit; running `sync` twice in a row makes the second run a no-op.
 
+### AC-15 · Turn-budget continue & loop efficiency (issue #15)
+
+- **AC-15.1 (continue)** When `maxTurns` is reached in an attended run, granting extra turns continues the conversation from the same state, records a `budget-extended` transcript event, and the run can still succeed.
+- **AC-15.2 (decline)** Declining at the prompt fails and restores the snapshot exactly as before.
+- **AC-15.3 (non-interactive unchanged)** With no callback (CI, pipes), exhaustion fails and restores exactly as before.
+- **AC-15.4 (cost visible)** The decision point shows turns used, files touched, open obligations, and cumulative tokens in/out.
+- **AC-15.5 / AC-15.6 (batching guidance)** The system prompt workflow and the 5-turns-remaining nudge both instruct emitting multiple independent tool calls per response.
+- **AC-15.9 / AC-15.10 (batch resolution)** `resolve_affected` accepts `resolutions: [...]`; entries resolve independently with per-entry results.
+- **AC-15.12 / AC-15.13 (convergence feedback)** `run_erc`/`run_drc` without a configured artifact read as not-applicable-yet; `search` rejects an empty pattern with a corrective hint. (Obligation deferral for not-yet-built artifacts is provided by the persisted constraint-registry mechanism in AC-8's change, not re-implemented here.)
+- **AC-15.14 / AC-15.15 (prompt caching)** The Anthropic provider sends three `cache_control` breakpoints (system, last tool, last message block) and counts cache-read/creation tokens in reported input usage.
+- **AC-15.16 / AC-15.17 (work preservation)** Any run failure with touched files leaves a `copperhead failed run <run-id>` stash entry holding the work while the tree is restored byte-identical; a clean failure leaves no stash.
+- **AC-15.18 / AC-15.19 (per-stage budgets)** `stageMaxTurns` in config overrides `maxTurns` for named create-pipeline stages; absent entries change nothing.
+- **AC-15.20 – AC-15.22 (edit validation)** An `edit_file` that makes a loadable `.kicad_sch`/`.kicad_pcb` unloadable is reverted with kicad-cli's error; `.kicad_pro`/`.kicad_sym`/`.kicad_mod` edits are never probed or reverted; an already-unloadable file keeps repair edits.
+- **AC-15.23 / AC-15.24 (content-aware completion)** The schematic stage completes only with symbols present and drift-clean BOM/PINOUT (layout-draft: a board with a footprint plus the LAYOUT.md marker); a successful run that leaves the contract unmet halts the pipeline for resume instead of advancing.
+- **AC-15.25 / AC-15.26 (drift bootstrap)** Zero-symbol schematics produce no drift mismatches; `check` surfaces a non-failing warning when an empty schematic coexists with a populated BOM.md.
+- **AC-15.27 (consecutive stalls)** Only consecutive tool-less turns count toward the stopped-without-finishing failure; the counter resets on any tool call.
+- **AC-15.28 (load-failure ERC/DRC)** A missing ERC/DRC report raises an error quoting kicad-cli's own output and naming the likely load failure.
 ### AC-8 · Run observability (change: record-run-metadata)
 
 - **AC-8.1 (metadata completeness)** The `run-start` event of any agent-loop run contains: copperhead version + install path, `kicad-cli`/Node/platform versions, model id + provider + selection source (`flag`/`env`/`config`/`openai-key`/`anthropic-key`), run id + ISO timestamp + command, interactive flag, the resolved config snapshot (`schematic`, `board`, `docs`, effective `maxTurns`, `maxRepairCycles`, `budgets`), git commit/branch/dirty + uncommitted count, pre-commit-hook presence, and open-constraint + prior-run counts. The pre-existing `request`/`model`/`provider` fields keep their names. Collection is LLM-free and network-free.

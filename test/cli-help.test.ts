@@ -1,15 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import { readFile } from 'node:fs/promises';
-import path from 'node:path';
-
-const root = path.resolve(new URL('..', import.meta.url).pathname);
+import { program } from '../src/cli.js';
 
 describe('CLI help', () => {
   it('exposes --keep-on-fail on both do and create', async () => {
-    // Commander command actions call process.exit, so assert the declarative
-    // CLI surface directly; build verification separately executes the CLI.
-    const source = await readFile(path.join(root, 'src', 'cli.ts'), 'utf8');
-    expect(source.match(/\.option\('--keep-on-fail'/g)).toHaveLength(2);
-    expect(source.match(/keepOnFail: opts\.keepOnFail \?\? false/g)).toHaveLength(2);
+    for (const name of ['do', 'create']) {
+      const command = program.commands.find((candidate) => candidate.name() === name);
+      expect(command, `${name} command exists`).toBeDefined();
+      expect(command!.options.map((option) => option.long)).toContain('--keep-on-fail');
+      expect(command!.helpInformation()).toContain('--keep-on-fail');
+    }
   });
 });

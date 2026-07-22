@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { Command } from 'commander';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
 import { createInterface } from 'node:readline/promises';
 import { loadConfig, resolveModel } from './config.js';
@@ -8,7 +9,7 @@ import { runInit, InitError } from './memory/scaffold.js';
 import { runCheck } from './commands/check.js';
 import { syncVerify, syncResolve, formatSyncReport } from './commands/sync.js';
 import { runCreate } from './commands/create.js';
-import { runAgentLoop } from './agent/loop.js';
+import { runAgentLoop, type BudgetExhaustedStats } from './agent/loop.js';
 import { makeRenderer } from './agent/render.js';
 import { kicadCliVersion } from './kicad/cli.js';
 import { loadEnvFile } from './util/env.js';
@@ -25,7 +26,7 @@ loadEnvFile(process.cwd());
 // package it was published as.
 const { version } = createRequire(import.meta.url)('../package.json') as { version: string };
 
-const program = new Command();
+export const program = new Command();
 
 const repoOf = (opts: { repo?: string }): string => path.resolve(opts.repo ?? process.cwd());
 
@@ -34,6 +35,22 @@ async function confirmTty(question: string): Promise<boolean> {
   const answer = await rl.question(`${question} [y/N] `);
   rl.close();
   return /^y(es)?$/i.test(answer.trim());
+}
+
+/**
+ * Attended runs get a decision point instead of a rollback when the turn
+ * budget runs out (issue #15). Non-TTY (CI, pipes) keeps fail-and-restore.
+ */
+function budgetContinuePrompt(): ((stats: BudgetExhaustedStats) => Promise<number>) | undefined {
+  if (!process.stdin.isTTY || !process.stdout.isTTY) return undefined;
+  return async (stats) => {
+    // ceil of the ORIGINAL budget (design D1), so repeat extensions offer the
+    // same increment instead of escalating with the extended turn count.
+    const extra = Math.ceil(stats.maxTurns / 2);
+    const k = (n: number) => `${(n / 1000).toFixed(1)}k`;
+    const q = `Turn budget exhausted (${stats.turnsUsed} turns, ${k(stats.tokensIn)} in / ${k(stats.tokensOut)} out, ${stats.filesTouched.length} file(s) touched, ${stats.openObligations} open obligation(s)). Continue with ${extra} more turns?`;
+    return (await confirmTty(q)) ? extra : 0;
+  };
 }
 
 program
@@ -104,7 +121,10 @@ program
   .option('--model <model>', 'gpt-5 | claude (or a full model id)')
   .option('--max-turns <n>', 'turn budget for this run')
   .option('--allow-dirty', 'allow a dirty tree (snapshot via git stash create)')
-  .option('--keep-on-fail', 'leave failed edits in place for debugging (prints recovery command)')
+  .option(
+    '--keep-on-fail',
+    'leave unrecoverable-failure edits in place (constraint refusals still roll back)',
+  )
   .option('--dry-run', 'propose the diff, write nothing')
   .option('--interactive', 'pause for approval after the proposal validates')
   .action(
@@ -124,6 +144,7 @@ program
         const kicadVer = await kicadCliVersion();
         const config = await loadConfig(repo);
         const { model, source } = resolveModel(opts.model, config);
+        const continuePrompt = budgetContinuePrompt();
         const res = await runAgentLoop({
           repoRoot: repo,
           request,
@@ -134,6 +155,7 @@ program
           dryRun: opts.dryRun ?? false,
           interactive: opts.interactive ?? false,
           confirm: confirmTty,
+          ...(continuePrompt ? { onBudgetExhausted: continuePrompt } : {}),
           renderer: rendererOf(),
           meta: { command: 'do', modelSource: source, version, kicadCliVersion: kicadVer },
         });
@@ -188,19 +210,24 @@ program
   .requiredOption('--brief <file>', 'product brief (markdown)')
   .option('--model <model>', 'gpt-5 | claude')
   .option('--interactive', 're-enable the human gates (spec approval, pre-export)')
-  .option('--keep-on-fail', 'leave failed-stage edits in place for debugging (prints recovery command)')
+  .option(
+    '--keep-on-fail',
+    'leave unrecoverable failed-stage edits in place; recover before rerunning create',
+  )
   .action(async (opts: { brief: string; model?: string; interactive?: boolean; keepOnFail?: boolean }) => {
     const repo = repoOf(program.opts());
     try {
       const kicadVer = await kicadCliVersion();
       const config = await loadConfig(repo);
       const { model, source } = resolveModel(opts.model, config);
+      const continuePrompt = budgetContinuePrompt();
       const res = await runCreate({
         repoRoot: repo,
         briefPath: opts.brief,
         model,
         interactive: opts.interactive ?? false,
         keepOnFail: opts.keepOnFail ?? false,
+        ...(continuePrompt ? { onBudgetExhausted: continuePrompt } : {}),
         log: (s) => console.log(s),
         renderer: rendererOf(),
         meta: { command: 'create', modelSource: source, version, kicadCliVersion: kicadVer },
@@ -212,7 +239,13 @@ program
     }
   });
 
-program.parseAsync().catch((err: Error) => {
-  console.error(err.message);
-  process.exit(1);
-});
+export async function main(argv = process.argv): Promise<void> {
+  await program.parseAsync(argv);
+}
+
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  main().catch((err: Error) => {
+    console.error(err.message);
+    process.exit(1);
+  });
+}

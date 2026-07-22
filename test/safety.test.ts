@@ -167,7 +167,7 @@ describe('retry', () => {
 describe('git guard (AC-3.8, AC-3.6)', () => {
   it('shell-quotes every snapshot ref in manual recovery commands', () => {
     expect(recoveryCommand({ head: "head'with-quote", stash: "stash'with-quote" })).toBe(
-      `git reset --hard 'head'"'"'with-quote' && git clean -fd -e .copperhead/runs && git stash apply 'stash'"'"'with-quote'`,
+      `git reset -q -- .copperhead/runs && git reset --hard 'head'"'"'with-quote' && git clean -fd -e .copperhead/runs && git stash apply 'stash'"'"'with-quote'`,
     );
   });
 

@@ -3,11 +3,15 @@ import { existsSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { loadConfig } from '../config.js';
-import { runAgentLoop } from '../agent/loop.js';
+import { listSymbols } from '../kicad/sexp.js';
+import { checkDrift } from '../memory/drift.js';
+import { runAgentLoop, type BudgetExhaustedStats } from '../agent/loop.js';
 import type { RunMetaInput } from '../agent/runmeta.js';
 import type { ProgressRenderer } from '../agent/render.js';
 import { openspecInit } from '../openspec/cli.js';
 import { runCheck } from './check.js';
+import { gitPreflight, isDirty, restore, snapshot } from '../util/git.js';
+import { PreflightError } from '../util/preflight.js';
 
 /**
  * Mode A (`copperhead create`, SPEC §2.5): staged pipeline, each stage a
@@ -54,14 +58,36 @@ export const STAGES: Stage[] = [
     name: 'schematic',
     isComplete: async (root) => {
       const config = await loadConfig(root);
-      return !!config.schematic && existsSync(path.join(root, config.schematic));
+      if (!config.schematic) return false;
+      const p = path.join(root, config.schematic);
+      if (!existsSync(p)) return false;
+      // Mere file existence is not completion: bootstrapping leaves a blank
+      // sheet on disk (a hand-scaffolded project, or the future fix for #19),
+      // and skipping this stage over a blank sheet cascades — layout and
+      // outputs then run against nothing. The stage's contract is "build the
+      // schematic from BOM.md", so completion means symbols exist AND the
+      // BOM/PINOUT tables agree with them (drift-clean); anything less keeps
+      // the stage active on the next resume so partial capture continues.
+      if (!(await listSymbols(p)).length) return false;
+      return (await checkDrift(root, config.docs, config.schematic)).length === 0;
     },
     prompt: () =>
       'Stage 4: schematic. Build the schematic sheet by sheet from BOM.md and SUBSYSTEMS.md. After each sheet, run run_erc and fix violations before moving on. Same net names and refdes everywhere. Update PINOUT.md as you assign pins; check the strapping table first.',
   },
   {
     name: 'layout-draft',
-    isComplete: (root, docs) => docHasContent(root, path.join(docs, 'LAYOUT.md'), '## Draft quality'),
+    isComplete: async (root, docs) => {
+      // The LAYOUT.md marker alone is not enough: `copperhead init` scaffolds
+      // LAYOUT.md with the literal "## Draft quality" heading, so an init-ed
+      // repo would skip this stage without a single footprint placed. Require
+      // a board with at least one footprint on it as well.
+      const config = await loadConfig(root);
+      if (!config.board) return false;
+      const p = path.join(root, config.board);
+      if (!existsSync(p)) return false;
+      if (!(await readFile(p, 'utf8')).includes('(footprint')) return false;
+      return docHasContent(root, path.join(docs, 'LAYOUT.md'), '## Draft quality');
+    },
     prompt: () =>
       'Stage 5: first-draft layout. Rule-driven placement written as real coordinates: connectors on edges, decoupling at IC pins, ESD at connectors, keepouts honored. Route power and short critical nets; leave the rest as ratsnest. Every routed net must pass run_drc. Then write the "## Draft quality" section in LAYOUT.md: exactly what is fine and what a human or specialist tool should redo. Non-optimal is acceptable; unlabeled non-optimal is not.',
   },
@@ -91,6 +117,8 @@ export interface CreateOptions {
   model: string;
   interactive?: boolean;
   keepOnFail?: boolean;
+  /** Forwarded to each stage's run (attended continue-on-exhaustion prompt). */
+  onBudgetExhausted?: (stats: BudgetExhaustedStats) => Promise<number>;
   log: (s: string) => void;
   renderer?: ProgressRenderer;
   /** Command-level metadata; stage and brief identity are filled in per stage. */
@@ -98,6 +126,22 @@ export interface CreateOptions {
 }
 
 export async function runCreate(opts: CreateOptions): Promise<{ ok: boolean; completed: string[] }> {
+  // create's per-stage allowDirty is strictly for state created inside this
+  // invocation (notably openspec init). A dirty tree at command entry may be
+  // a kept, unverified stage whose partial marker would poison isComplete().
+  await gitPreflight(opts.repoRoot, { allowDirty: true });
+  if (await isDirty(opts.repoRoot)) {
+    throw new PreflightError(
+      'working tree is dirty; copperhead create refuses to infer completed stages from uncommitted state',
+      'partial output from a kept failed stage can satisfy a file-existence completion check and make create skip unverified work',
+      [
+        'inspect the failed files and .copperhead/runs summary',
+        'run the printed recovery command (or commit/stash intentional work)',
+        'rerun copperhead create only after git status is clean',
+      ],
+    );
+  }
+  const pipelineStart = await snapshot(opts.repoRoot);
   const brief = await readFile(path.resolve(opts.briefPath), 'utf8');
   // Hashed from the content already in hand: a brief edited mid-pipeline shows
   // up as a different sha256 in the next stage's metadata (AC-8.1).
@@ -105,6 +149,7 @@ export async function runCreate(opts: CreateOptions): Promise<{ ok: boolean; com
   const config = await loadConfig(opts.repoRoot);
   await openspecInit(opts.repoRoot);
   const completed: string[] = [];
+  let completedDuringThisRun = 0;
 
   for (const [i, stage] of STAGES.entries()) {
     if (await stage.isComplete(opts.repoRoot, config.docs)) {
@@ -121,6 +166,7 @@ export async function runCreate(opts: CreateOptions): Promise<{ ok: boolean; com
       interactive: opts.interactive ?? false,
       allowDirty: true, // stages build on each other's uncommitted state within the pipeline
       keepOnFail: opts.keepOnFail ?? false,
+      ...(opts.onBudgetExhausted ? { onBudgetExhausted: opts.onBudgetExhausted } : {}),
       log: opts.log,
       ...(opts.renderer ? { renderer: opts.renderer } : {}),
       meta: {
@@ -131,10 +177,37 @@ export async function runCreate(opts: CreateOptions): Promise<{ ok: boolean; com
       },
     });
     if (res.outcome !== 'success') {
-      opts.log(`stage ${stage.name} did not complete (${res.outcome}); re-run copperhead create to resume here`);
+      const keptFailure = (opts.keepOnFail ?? false) && res.outcome === 'failure';
+      if (!keptFailure && completedDuringThisRun === 0) {
+        // openspecInit can dirty an otherwise-clean repo before the first
+        // stage snapshot. If that first stage rolls back/refuses, also restore
+        // the command-entry snapshot so ordinary create resumability stays
+        // clean and the new entry preflight does not reject its own scaffold.
+        await restore(opts.repoRoot, pipelineStart);
+      }
+      if (keptFailure) {
+        opts.log(
+          `stage ${stage.name} did not complete (${res.outcome}); recover the tree before rerunning create because partial output may look complete`,
+        );
+      } else {
+        opts.log(`stage ${stage.name} did not complete (${res.outcome}); re-run copperhead create to resume here`);
+      }
+      return { ok: false, completed };
+    }
+    // A successful run is not the same as a completed stage: an agent can
+    // finish "done" with all gates green having only planned the work (seen
+    // with the schematic stage: one header edit, ERC "clean" on an empty
+    // sheet). Advancing anyway lets every later stage run against a design
+    // that isn't there, so hold the pipeline until this stage's repo-state
+    // contract is actually met.
+    if (!(await stage.isComplete(opts.repoRoot, config.docs))) {
+      opts.log(
+        `stage ${stage.name}: run succeeded but the stage contract is not met yet (partial work committed); re-run copperhead create to continue this stage`,
+      );
       return { ok: false, completed };
     }
     completed.push(stage.name);
+    completedDuringThisRun++;
   }
 
   const check = await runCheck(opts.repoRoot, opts.log);

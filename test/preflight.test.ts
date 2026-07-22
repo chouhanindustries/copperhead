@@ -129,6 +129,19 @@ describe('copperhead create without a git setup (bug-report path)', () => {
       await cleanup();
     }
   });
+
+  it('dirty pipeline entry refuses before partial files can be treated as completed stages', async () => {
+    const { repo, cleanup } = await tempFixtureRepo();
+    try {
+      await writeFile(path.join(repo, 'brief.md'), 'A tiny USB macro keypad', 'utf8');
+      await writeFile(path.join(repo, 'partial-output.txt'), 'unverified', 'utf8');
+      await expect(runCreate(createOpts(repo))).rejects.toThrow(
+        /create refuses to infer completed stages from uncommitted state/,
+      );
+    } finally {
+      await cleanup();
+    }
+  });
 });
 
 describe('preflight failures explain why and how to fix', () => {

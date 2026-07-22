@@ -25,7 +25,7 @@ Each `do` run SHALL follow the sequence: load memory (all `docs/*.md` + schemati
 - **THEN** the net is renamed in every sheet, PINOUT.md and SUBSYSTEMS.md are updated, ERC exits 0, exactly one commit exists, and no unrelated net or doc line changed
 
 ### Requirement: Turn and repair budgets
-The loop SHALL enforce `maxTurns` (default 40) and `maxRepairCycles` (default 5), log per-run token usage, and on unrecoverable failure restore the pre-run snapshot, print the transcript path, and exit 1. When the caller explicitly enables `keepOnFail`, the loop SHALL skip only snapshot restoration, leave the failed tree in place, print the pre-run snapshot refs and manual recovery command, record the skipped rollback in `summary.md`, return failure, and create no commit.
+The loop SHALL enforce `maxTurns` (default 40) and `maxRepairCycles` (default 5), log per-run token usage, and on unrecoverable failure preserve failed work in a named stash, restore the pre-run snapshot, print the transcript path, and exit 1. When the caller explicitly enables `keepOnFail`, the loop SHALL skip failed-work stashing and snapshot restoration, leave the failed index/worktree in place, print the pre-run snapshot refs and an audit-preserving manual recovery command, record the skipped rollback in `summary.md`, return failure, and create no commit. `dryRun` and `keepOnFail` SHALL be rejected together, and constraint refusals SHALL continue restoring unconditionally.
 
 #### Scenario: Repair loop converges (AC-3.5)
 - **WHEN** an edit first produces an ERC violation
@@ -41,7 +41,11 @@ The loop SHALL enforce `maxTurns` (default 40) and `maxRepairCycles` (default 5)
 
 #### Scenario: Preserve a failed run that started dirty (AC-3.11)
 - **WHEN** a run starts with `allowDirty` and `keepOnFail` and then fails unrecoverably
-- **THEN** the warning and `summary.md` also contain the `git stash create` object id and the manual recovery command reapplies it after reset and clean
+- **THEN** the warning and `summary.md` also contain the `git stash create` object id and the manual recovery command unstages the audit trail, resets and cleans, then reapplies the dirty-tree snapshot
+
+#### Scenario: Refusal is not a kept failure
+- **WHEN** the agent refuses a request because it violates a constraint while `keepOnFail` is enabled
+- **THEN** the pre-run snapshot is restored and no partial proposal/edit remains
 
 ### Requirement: Constraint-holding system prompt
 The system prompt SHALL include the verbatim rules of SPEC.md §4.3, the `budgets` from config, and the constraint registry, requiring the agent to hold all constraints simultaneously, consult strapping tables before pin assignment, and record a one-line rationale for every decision.

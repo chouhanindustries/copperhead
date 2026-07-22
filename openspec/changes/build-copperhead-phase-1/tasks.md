@@ -1,8 +1,9 @@
 # Tasks: Build copperhead Phase 1
 
-> **Status (2026-07-21): 53/62 complete.** Every deterministic capability is
-> implemented and covered by the offline suite (115 tests green; 7 live tests skipped without credentials). The agent loop is now
-> **verified live** with an OpenAI key (model `gpt-5-nano`, the only model on this key):
+> **Status (2026-07-21): 53/62 complete.** Task 8.10's offline verification is
+> recorded in PR #34; its live-provider tests were skipped because credentials/opt-in were
+> unavailable. Separately, an earlier recorded run **verified the agent loop live** with an
+> OpenAI key (model `gpt-5-nano`, the only model on that key):
 > AC-3.1 net rename with surgical <5% diff (AC-3.7), AC-3.4 budget refusal via compliant
 > alternative, AC-3.5 repair convergence observed in run logs, AC-3.6 byte-identical rollback,
 > AC-4.1 no key material in the tree. Still open: AC-3.2/AC-3.3 integration tests (not yet
