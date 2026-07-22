@@ -202,7 +202,7 @@ export const TOOLS: ToolDef[] = [
     schema: {
       name: 'edit_file',
       description:
-        'Exact-match anchored replace in an existing file. The anchor must be unique; widen it with surrounding lines if not. For renames, pass replace_all: true to replace every occurrence in one call.',
+        'Exact-match anchored replace in an existing file. Requires a validated change proposal first (call propose_change then validate_change to unlock edits; both may be in the same reply, before this call). The anchor must be unique; widen it with surrounding lines if not. For renames, pass replace_all: true to replace every occurrence in one call.',
       parameters: {
         type: 'object',
         properties: {
@@ -256,7 +256,8 @@ export const TOOLS: ToolDef[] = [
   {
     schema: {
       name: 'write_file',
-      description: 'Create a new file (docs, outputs). Refuses to overwrite anything or to create KiCad files.',
+      description:
+        'Create a new file (docs, outputs). Requires a validated change proposal first (propose_change then validate_change to unlock edits). Refuses to overwrite anything or to create KiCad files.',
       parameters: {
         type: 'object',
         properties: { path: { type: 'string' }, content: { type: 'string' } },

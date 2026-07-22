@@ -2,7 +2,7 @@ import path from 'node:path';
 import { readFile, writeFile } from 'node:fs/promises';
 import { execa } from 'execa';
 import type { Msg, Provider, Turn } from './types.js';
-import { availableTools, dispatchTool, type RunContext } from './tools.js';
+import { TOOLS, dispatchTool, type RunContext } from './tools.js';
 import { buildSystemPrompt } from './prompts.js';
 import { loadConstraints, reopenDeferredAffects } from '../memory/constraints.js';
 import { loadConfig, type CopperheadConfig } from '../config.js';
@@ -388,7 +388,17 @@ async function runWithMemory(
       await transcript.event('budget-extended', { extraTurns: extra, budget, ...exhaustStats });
       log(`turn budget extended by ${extra} (now ${budget})`);
     }
-    const tools = availableTools(ctx).map((t) => t.schema);
+    // Advertise EVERY tool each turn; dispatchTool enforces the edit-unlock gate
+    // live at call time. Hiding locked edit tools from the turn catalog meant a
+    // model that unlocked (validate_change) and edited in the SAME reply had its
+    // edit silently dropped in parsing — the call named a tool the turn had not
+    // advertised, so it was treated as prose, executed nothing, and returned no
+    // error. The model then "verified" against an unchanged file (an empty
+    // schematic even passes ERC) and finished believing it had succeeded.
+    // Advertising all tools lets a propose→validate→edit batch work in one turn
+    // (validate flips editsUnlocked, the later edit dispatches) and turns a
+    // premature edit into an actionable "unlock first" error, not a silent no-op.
+    const tools = TOOLS.map((t) => t.schema);
     r.turnStart(turn + 1, maxTurns, tokensIn, tokensOut);
     r.status('thinking');
     let res: Turn;

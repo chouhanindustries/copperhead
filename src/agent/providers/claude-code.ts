@@ -304,28 +304,72 @@ interface Parsed {
 function parseToolCalls(text: string | null, nextId: () => string, catalog: Set<string>): Parsed {
   if (!text) return { text: null, toolCalls: [] };
   const toolCalls: ToolCall[] = [];
-  let prose = text;
+  const matched: Array<[number, number]> = [];
 
-  const fence = /```(?:json)?\s*([\s\S]*?)```/gi;
-  let match: RegExpExecArray | null;
-  const consumed: string[] = [];
-  while ((match = fence.exec(text)) !== null) {
-    const call = toToolCall(match[1], nextId, catalog);
+  // Extract tool calls by scanning for complete JSON objects, NOT by matching
+  // ``` fences. A tool call's `content`/`args` can hold a full markdown doc that
+  // itself contains ``` code fences; a fence regex truncates the JSON at the
+  // first inner fence, JSON.parse fails, and the call is silently dropped (the
+  // model then assumes it wrote a file it never did). The brace scan is
+  // string-aware, so braces and backticks inside JSON string values are ignored.
+  let searchFrom = 0;
+  while (searchFrom < text.length) {
+    const braceAt = text.indexOf('{', searchFrom);
+    if (braceAt < 0) break;
+    const span = scanJsonObject(text, braceAt);
+    if (!span) {
+      // Unbalanced '{' (stray brace in prose): retry from the next candidate so
+      // one bad brace can't hide a well-formed call later in the reply.
+      searchFrom = braceAt + 1;
+      continue;
+    }
+    const call = toToolCall(text.slice(span.start, span.end), nextId, catalog);
     if (call) {
       toolCalls.push(call);
-      consumed.push(match[0]);
+      matched.push([span.start, span.end]);
     }
-  }
-  for (const block of consumed) prose = prose.replace(block, '');
-
-  // No fenced tool block: maybe the whole reply is a bare JSON object.
-  if (!toolCalls.length) {
-    const call = toToolCall(text, nextId, catalog);
-    if (call) return { text: null, toolCalls: [call] };
+    searchFrom = span.end;
   }
 
-  const trimmed = prose.trim();
-  return { text: trimmed.length ? trimmed : null, toolCalls };
+  if (!toolCalls.length) return { text: text.trim() ? text : null, toolCalls };
+
+  // Prose is whatever survives once the tool-call objects (and any now-empty
+  // ```json fences around them) are removed.
+  let prose = '';
+  let cursor = 0;
+  for (const [start, end] of matched) {
+    prose += text.slice(cursor, start);
+    cursor = end;
+  }
+  prose += text.slice(cursor);
+  prose = prose.replace(/```(?:json)?\s*```/gi, '').replace(/```(?:json)?\s*$/gi, '').trim();
+  return { text: prose.length ? prose : null, toolCalls };
+}
+
+/**
+ * Find the first complete, brace-balanced JSON object at or after `from`,
+ * respecting JSON string quoting/escaping so braces or backticks inside string
+ * values do not end the scan. Returns its `[start, end)` bounds or null.
+ */
+function scanJsonObject(text: string, from: number): { start: number; end: number } | null {
+  const start = text.indexOf('{', from);
+  if (start < 0) return null;
+  let depth = 0;
+  let inStr = false;
+  let esc = false;
+  for (let i = start; i < text.length; i++) {
+    const ch = text[i];
+    if (inStr) {
+      if (esc) esc = false;
+      else if (ch === '\\') esc = true;
+      else if (ch === '"') inStr = false;
+      continue;
+    }
+    if (ch === '"') inStr = true;
+    else if (ch === '{') depth++;
+    else if (ch === '}' && --depth === 0) return { start, end: i + 1 };
+  }
+  return null;
 }
 
 function toToolCall(raw: string | undefined, nextId: () => string, catalog: Set<string>): ToolCall | null {

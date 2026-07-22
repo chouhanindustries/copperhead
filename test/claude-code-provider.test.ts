@@ -141,6 +141,30 @@ describe('ClaudeCodeProvider — tool protocol', () => {
     expect(new Set(turn.toolCalls.map((c) => c.id)).size).toBe(2); // ids are distinct
   });
 
+  it('parses a write_file call whose content contains nested ``` fences (does not truncate at the inner fence)', async () => {
+    // Regression: a markdown doc written via write_file legitimately contains
+    // ``` code fences. A fence-delimited parser truncates the JSON at the first
+    // inner fence, JSON.parse fails, and the call is silently dropped — the file
+    // never gets written and the stage stalls. The brace-balanced scan must keep
+    // the whole call intact.
+    const writeTool: ToolSchema = {
+      name: 'write_file',
+      description: 'Create a file',
+      parameters: {
+        type: 'object',
+        properties: { path: { type: 'string' }, content: { type: 'string' } },
+        required: ['path', 'content'],
+      },
+    };
+    const doc = '# Subsystems\n\n```text\nUSB-C -> Rd -> VBUS\n```\n\nSee `docs/SPEC.md`.\n';
+    const reply = '```json\n' + JSON.stringify({ tool: 'write_file', args: { path: 'docs/SUBSYSTEMS.md', content: doc } }) + '\n```';
+    const provider = new ClaudeCodeProvider(undefined, fakeQuery([assistant(reply), result()]));
+    const turn = await provider.chat(messages, [...tools, writeTool]);
+    expect(turn.toolCalls).toHaveLength(1);
+    expect(turn.toolCalls[0]!.name).toBe('write_file');
+    expect(turn.toolCalls[0]!.args).toEqual({ path: 'docs/SUBSYSTEMS.md', content: doc });
+  });
+
   it('reuses one isolated scratch cwd across turns (no per-turn temp-dir leak)', async () => {
     const cwds: unknown[] = [];
     const provider = new ClaudeCodeProvider(undefined, fakeQuery([assistant('ok'), result()], (a) => {

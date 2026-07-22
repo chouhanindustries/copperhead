@@ -3,6 +3,7 @@ import { existsSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { loadConfig } from '../config.js';
+import { bootstrapKicadProject } from '../kicad/bootstrap.js';
 import { listSymbols } from '../kicad/sexp.js';
 import { checkDrift } from '../memory/drift.js';
 import { runAgentLoop, type BudgetExhaustedStats } from '../agent/loop.js';
@@ -34,10 +35,22 @@ async function docHasContent(repoRoot: string, rel: string, marker: string): Pro
   return (await readFile(p, 'utf8')).includes(marker);
 }
 
+// Heading-aware variant of docHasContent: matches any Markdown heading whose
+// text contains `word`, ignoring heading level, leading numbering ("3."), and
+// trailing decoration ("Budgets and constraints (...)"). Stage prompts don't
+// dictate exact heading text, so a literal `.includes('## Budgets')` produces
+// false negatives against valid docs titled e.g. "## 3. Budgets and constraints".
+async function docHasHeading(repoRoot: string, rel: string, word: string): Promise<boolean> {
+  const p = path.join(repoRoot, rel);
+  if (!existsSync(p)) return false;
+  const re = new RegExp(`^#{1,6}\\s.*\\b${word}\\b`, 'im');
+  return re.test(await readFile(p, 'utf8'));
+}
+
 export const STAGES: Stage[] = [
   {
     name: 'spec-seed',
-    isComplete: (root, docs) => docHasContent(root, path.join(docs, 'SPEC.md'), '## Budgets'),
+    isComplete: (root, docs) => docHasHeading(root, path.join(docs, 'SPEC.md'), 'Budgets?'),
     prompt: (brief) =>
       `Stage 1 of the create pipeline: seed the requirements. From the product brief below, write docs/SPEC.md (what the device is, top-level constraints and budgets). Every budget you state must also be recorded with record_constraint. Anything the brief does not state: propose a sensible default and flag it ASSUMED. If an openspec/ workspace exists, also seed openspec/specs/ with per-capability requirements using Given/When/Then scenarios.\n\nBrief:\n${brief}`,
   },
@@ -71,7 +84,7 @@ export const STAGES: Stage[] = [
       return (await checkDrift(root, config.docs, config.schematic)).length === 0;
     },
     prompt: () =>
-      'Stage 4: schematic. Build the schematic sheet by sheet from BOM.md and SUBSYSTEMS.md. After each sheet, run run_erc and fix violations before moving on. Same net names and refdes everywhere. Update PINOUT.md as you assign pins; check the strapping table first.',
+      'Stage 4: schematic. An empty KiCad project has already been scaffolded and wired into .copperhead/config.json (an empty schematic and a blank board with a default outline). Populate the existing schematic with edit_file — write_file refuses KiCad files, so add lib_symbols, symbols, and connectivity by anchored edits into the file that already exists. Build it subsystem by subsystem from BOM.md and SUBSYSTEMS.md. After each batch, run run_erc and fix violations before moving on. Same net names and refdes everywhere. Update PINOUT.md as you assign pins; check the strapping table first.',
   },
   {
     name: 'layout-draft',
@@ -145,6 +158,15 @@ export async function runCreate(opts: CreateOptions): Promise<{ ok: boolean; com
   const completed: string[] = [];
 
   for (const [i, stage] of STAGES.entries()) {
+    // The schematic stage is the first to touch KiCad files, but the agent
+    // cannot create them (write_file refuses KiCad files; edit_file needs an
+    // existing file). Scaffold a minimal empty project and wire config just
+    // before the stage runs, so there is a schematic to populate and the stage
+    // contract can eventually be met. No-op once a project exists.
+    if (stage.name === 'schematic') {
+      const created = await bootstrapKicadProject(opts.repoRoot, brief);
+      if (created) opts.log(`stage schematic: scaffolded empty KiCad project (${created} + board + project), wired into config`);
+    }
     if (await stage.isComplete(opts.repoRoot, config.docs)) {
       opts.log(`stage ${stage.name}: already complete (resuming past it)`);
       completed.push(stage.name);
