@@ -1,4 +1,4 @@
-import { parseMarkdownTables, type TableRow } from '../memory/drift.js';
+import { parseMarkdownTables, type TableRow } from '../memory/bom-table.js';
 
 /**
  * Supplier-format BOM export (capability supplier-bom-export). Deterministic,
