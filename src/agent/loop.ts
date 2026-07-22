@@ -3,9 +3,11 @@ import { readFile, writeFile } from 'node:fs/promises';
 import { execa } from 'execa';
 import type { Msg, Provider, Turn } from './types.js';
 import { TOOLS, dispatchTool, type RunContext } from './tools.js';
+import { CachingProvider } from './response-cache.js';
+import { withTimeout, TurnTimeoutError } from './recovery.js';
 import { buildSystemPrompt } from './prompts.js';
 import { loadConstraints, reopenDeferredAffects } from '../memory/constraints.js';
-import { loadConfig, type CopperheadConfig } from '../config.js';
+import { loadConfig, CONFIG_DIR, type CopperheadConfig } from '../config.js';
 import { Transcript, type ExitPath, type RunStats } from './transcript.js';
 import { collectRunMeta, renderCliHeader, type RunMeta, type RunMetaInput } from './runmeta.js';
 import { plainRenderer, fmtDuration, fmtTokens, type ProgressRenderer } from './render.js';
@@ -199,6 +201,12 @@ async function runWithMemory(
   };
 
   let provider = opts.provider ?? (await makeProvider(opts.model));
+  // Cache every turn's response so a retried/restarted stage replays what it
+  // already paid for instead of re-calling the model (repo-scoped, cross-run).
+  // Skip an injected provider (tests drive scripted providers directly).
+  if (config.llmCache && !opts.provider) {
+    provider = new CachingProvider(provider, path.join(repoRoot, CONFIG_DIR, 'llm-cache'), log);
+  }
   providers.add(provider);
 
   // Deterministic, LLM-free metadata block: collected once, rendered onto all
@@ -277,6 +285,8 @@ async function runWithMemory(
   const perTurn: { turn: number; in: number; out: number }[] = [];
   let plan: string | null = null;
   let nudges = 0;
+  let turnTimeouts = 0;
+  const maxTurnTimeouts = 3;
 
   const stats = (exitPath: ExitPath): RunStats => ({
     exitPath,
@@ -403,10 +413,24 @@ async function runWithMemory(
     r.status('thinking');
     let res: Turn;
     try {
-      res = await withRetry(() => provider.chat(messages, tools), {
-        onRetry: (attempt) => log(`rate limited; retry ${attempt}`),
-      });
+      res = await withRetry(
+        () => withTimeout(() => provider.chat(messages, tools), config.turnTimeoutMs, () => provider.close?.()),
+        { onRetry: (attempt) => log(`rate limited; retry ${attempt}`) },
+      );
     } catch (err) {
+      if (err instanceof TurnTimeoutError) {
+        // A hung provider turn: the watchdog aborted the in-flight call and tore
+        // down its subprocess. Retry the same turn a bounded number of times
+        // before giving up, so a transient hang self-heals instead of stalling
+        // the run forever.
+        if (turnTimeouts++ < maxTurnTimeouts) {
+          log(`turn exceeded ${config.turnTimeoutMs}ms; aborted the hung call and retrying (${turnTimeouts}/${maxTurnTimeouts})`);
+          await transcript.event('turn-timeout', { ms: config.turnTimeoutMs, attempt: turnTimeouts });
+          turn--;
+          continue;
+        }
+        return fail(`provider turns timed out ${turnTimeouts}× (>${config.turnTimeoutMs}ms each)`, 'provider-error');
+      }
       if (isRateLimit(err)) {
         const fallback = otherProvider(provider);
         if (fallback) {

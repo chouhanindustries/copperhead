@@ -6,7 +6,9 @@ import { loadConfig } from '../config.js';
 import { bootstrapKicadProject } from '../kicad/bootstrap.js';
 import { listSymbols } from '../kicad/sexp.js';
 import { checkDrift } from '../memory/drift.js';
-import { runAgentLoop, type BudgetExhaustedStats } from '../agent/loop.js';
+import { runAgentLoop, makeProvider, type BudgetExhaustedStats } from '../agent/loop.js';
+import { diagnoseStageFailure, transcriptExcerpt, withTimeout, type StageDiagnosis } from '../agent/recovery.js';
+import type { Provider } from '../agent/types.js';
 import type { RunMetaInput } from '../agent/runmeta.js';
 import type { ProgressRenderer } from '../agent/render.js';
 import { openspecInit } from '../openspec/cli.js';
@@ -148,6 +150,47 @@ async function emitJlcpcbAfterOutputs(stageName: string, opts: CreateOptions): P
   if (out) opts.log(`stage outputs: emitted ${out} (JLCPCB assembly BOM)`);
 }
 
+/**
+ * Ask the model, on a fresh tool-less turn, whether a failed stage should be
+ * retried and how. Wrapped in the watchdog timeout and hardened to fail safe:
+ * any error or hang resolves to "abort" so recovery never itself becomes the
+ * thing that hangs the pipeline.
+ */
+async function diagnose(input: {
+  model: string;
+  timeoutMs: number;
+  stageName: string;
+  stageGoal: string;
+  failure: string;
+  transcriptDir: string;
+  attempt: number;
+  maxAttempts: number;
+}): Promise<StageDiagnosis> {
+  let provider: Provider | undefined;
+  try {
+    provider = await makeProvider(input.model);
+    const p = provider;
+    const excerpt = await transcriptExcerpt(input.transcriptDir);
+    return await withTimeout(
+      () =>
+        diagnoseStageFailure(p, {
+          stageName: input.stageName,
+          stageGoal: input.stageGoal,
+          failure: input.failure,
+          excerpt,
+          attempt: input.attempt,
+          maxAttempts: input.maxAttempts,
+        }),
+      input.timeoutMs,
+      () => p.close?.(),
+    );
+  } catch (e) {
+    return { verdict: 'abort', reason: `diagnosis unavailable: ${(e as Error).message}` };
+  } finally {
+    await provider?.close?.();
+  }
+}
+
 export async function runCreate(opts: CreateOptions): Promise<{ ok: boolean; completed: string[] }> {
   const brief = await readFile(path.resolve(opts.briefPath), 'utf8');
   // Hashed from the content already in hand: a brief edited mid-pipeline shows
@@ -173,42 +216,82 @@ export async function runCreate(opts: CreateOptions): Promise<{ ok: boolean; com
       await emitJlcpcbAfterOutputs(stage.name, opts);
       continue;
     }
-    opts.log(`stage ${stage.name}: running`);
+    // Auto-recovery loop: run the stage, and if it fails or ends without meeting
+    // its contract, ask the model to diagnose whether another attempt is likely
+    // to help. On "retry" the pipeline runs the stage again (with the diagnosis's
+    // guidance prepended); on "abort", or once the retry budget is spent, it
+    // stops and reports for a human — the loop keeps going by itself for the
+    // recoverable cases without silently spinning on the dead-end ones.
     const stageTurns = config.stageMaxTurns?.[stage.name];
-    const res = await runAgentLoop({
-      repoRoot: opts.repoRoot,
-      model: opts.model,
-      request: `create pipeline stage: ${stage.name}`,
-      stagePrompt: stage.prompt(brief),
-      interactive: opts.interactive ?? false,
-      allowDirty: true, // stages build on each other's uncommitted state within the pipeline
-      ...(stageTurns !== undefined ? { maxTurns: stageTurns } : {}),
-      ...(opts.onBudgetExhausted ? { onBudgetExhausted: opts.onBudgetExhausted } : {}),
-      log: opts.log,
-      ...(opts.renderer ? { renderer: opts.renderer } : {}),
-      meta: {
-        ...opts.meta,
-        command: 'create',
-        stage: { name: stage.name, index: i + 1, total: STAGES.length },
-        brief: briefMeta,
-      },
-    });
-    if (res.outcome !== 'success') {
-      opts.log(`stage ${stage.name} did not complete (${res.outcome}); re-run copperhead create to resume here`);
-      return { ok: false, completed };
+    const basePrompt = stage.prompt(brief);
+    let guidance = '';
+    let stageDone = false;
+    for (let attempt = 1; ; attempt++) {
+      opts.log(`stage ${stage.name}: running${attempt > 1 ? ` (attempt ${attempt}/${config.maxStageRetries + 1})` : ''}`);
+      const res = await runAgentLoop({
+        repoRoot: opts.repoRoot,
+        model: opts.model,
+        request: `create pipeline stage: ${stage.name}`,
+        stagePrompt: guidance
+          ? `${basePrompt}\n\n## Recovery guidance (a previous attempt did not complete this stage — do this differently)\n${guidance}`
+          : basePrompt,
+        interactive: opts.interactive ?? false,
+        allowDirty: true, // stages build on each other's uncommitted state within the pipeline
+        ...(stageTurns !== undefined ? { maxTurns: stageTurns } : {}),
+        ...(opts.onBudgetExhausted ? { onBudgetExhausted: opts.onBudgetExhausted } : {}),
+        log: opts.log,
+        ...(opts.renderer ? { renderer: opts.renderer } : {}),
+        meta: {
+          ...opts.meta,
+          command: 'create',
+          stage: { name: stage.name, index: i + 1, total: STAGES.length },
+          brief: briefMeta,
+        },
+      });
+
+      // A successful run is not the same as a completed stage: an agent can
+      // finish "done" with all gates green having only planned the work (seen
+      // with the schematic stage: one header edit, ERC "clean" on an empty
+      // sheet). Advancing anyway lets every later stage run against a design
+      // that isn't there, so the completion contract is the real gate.
+      const failure =
+        res.outcome !== 'success'
+          ? `the run ended as "${res.outcome}" (${res.exitPath})`
+          : !(await stage.isComplete(opts.repoRoot, config.docs))
+            ? 'the run finished but the stage completion contract is not met — no usable artifact was produced'
+            : null;
+      if (!failure) {
+        stageDone = true;
+        break;
+      }
+
+      if (attempt > config.maxStageRetries) {
+        opts.log(
+          `stage ${stage.name}: ${failure}; exhausted ${config.maxStageRetries} auto-retry(ies). Stopping for a human — re-run copperhead create to resume here.`,
+        );
+        break;
+      }
+
+      opts.log(`stage ${stage.name}: ${failure}; asking the model whether to retry…`);
+      const diagnosis = await diagnose({
+        model: opts.model,
+        timeoutMs: config.turnTimeoutMs,
+        stageName: stage.name,
+        stageGoal: basePrompt,
+        failure,
+        transcriptDir: res.transcriptDir,
+        attempt,
+        maxAttempts: config.maxStageRetries + 1,
+      });
+      opts.log(`stage ${stage.name}: diagnosis → ${diagnosis.verdict} — ${diagnosis.reason}`);
+      if (diagnosis.verdict === 'abort') {
+        opts.log(`stage ${stage.name}: recovery supervisor recommends stopping for a human. Re-run copperhead create to resume here.`);
+        break;
+      }
+      guidance = diagnosis.guidance ?? `The previous attempt failed: ${failure}. ${diagnosis.reason}`;
     }
-    // A successful run is not the same as a completed stage: an agent can
-    // finish "done" with all gates green having only planned the work (seen
-    // with the schematic stage: one header edit, ERC "clean" on an empty
-    // sheet). Advancing anyway lets every later stage run against a design
-    // that isn't there, so hold the pipeline until this stage's repo-state
-    // contract is actually met.
-    if (!(await stage.isComplete(opts.repoRoot, config.docs))) {
-      opts.log(
-        `stage ${stage.name}: run succeeded but the stage contract is not met yet (partial work committed); re-run copperhead create to continue this stage`,
-      );
-      return { ok: false, completed };
-    }
+
+    if (!stageDone) return { ok: false, completed };
     completed.push(stage.name);
     await emitJlcpcbAfterOutputs(stage.name, opts);
   }

@@ -135,6 +135,50 @@ suite green (228). Secondary (not yet fixed): `run_erc` reporting "clean" on a
 zero-symbol schematic is misleading — a zero-symbol warning would harden the
 gate against any future silent-drop.
 
-**Status:** fixed (primary). Re-running to confirm the schematic populates.
+**Status:** fixed (primary). Confirmed live — the schematic populates (symbols
+appear, ERC runs clean on real content) instead of finishing empty.
+
+---
+
+## Issue 5 — no resilience: a hung turn stalls forever, a failed stage just stops, and every retry re-pays for the same tokens (FEATURE)
+
+**Motivation:** across these runs the pipeline had three reliability gaps. (a) A
+single provider turn can run for minutes with no way to tell a slow turn from a
+hung one, and nothing ever times it out — a genuinely stuck SDK call would stall
+the run indefinitely. (b) When a stage failed or ended without meeting its
+contract, `runCreate` simply returned and stopped; the operator had to notice and
+re-run by hand. (c) Any retry or restart re-ran the model from scratch, paying
+again for identical turns.
+
+**Fix — a recovery layer, all config-gated (`src/config.ts` defaults):**
+
+1. *Turn watchdog* (`turnTimeoutMs`, default 300000). `recovery.ts:withTimeout`
+   races each `provider.chat` against a deadline; on timeout the loop tears down
+   the hung call (`provider.close()` drops its subprocess/cwd) and retries the
+   turn, up to 3 times, before failing the run. A hang now self-heals instead of
+   stalling forever.
+
+2. *LLM self-diagnosis + auto-retry* (`maxStageRetries`, default 2). When a stage
+   fails or misses its contract, `runCreate` asks the model — on a fresh,
+   tool-less turn (`recovery.ts:diagnoseStageFailure`) — to read the failure and
+   the transcript tail and return `{verdict: retry|abort, reason, guidance}`. On
+   `retry` the stage runs again with the guidance prepended; on `abort`, or once
+   the retry budget is spent, the pipeline stops and reports for a human. It fails
+   safe: any error/hang/garbage in diagnosis resolves to `abort`, so recovery can
+   never itself loop the pipeline.
+
+3. *Response cache* (`llmCache`, default on). `response-cache.ts:CachingProvider`
+   hashes each turn's `(messages, tools)` and stores the `Turn` under
+   `.copperhead/llm-cache/` (kept out of git by a `*` .gitignore). An identical
+   later call — a watchdog retry, an auto-retry that didn't change the prompt, or
+   a fresh `copperhead create` after a stop — replays from disk at zero token
+   cost, up to the point where inputs first diverge. A retry that *does* change
+   the prompt (diagnosis guidance appended) misses and calls the model fresh, so
+   the cache never pins the run to a stale failing response.
+
+Tests: `test/recovery.test.ts` (watchdog resolve/timeout/disabled; diagnosis
+parse + fail-safe + tool-less; cache hit/replay/zero-usage/miss). Full suite green.
+
+**Status:** implemented.
 
 ---

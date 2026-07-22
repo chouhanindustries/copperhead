@@ -12,6 +12,15 @@ export interface CopperheadConfig {
   stageMaxTurns?: Record<string, number>;
   maxRepairCycles: number;
   budgets: Record<string, number>;
+  /** Per-turn watchdog (ms). A provider turn exceeding this is aborted and
+   * retried, so a hung call can't stall the run forever. <=0 disables it. */
+  turnTimeoutMs: number;
+  /** How many times the create pipeline may auto-retry a stage that failed or
+   * ended without meeting its contract, gated by an LLM diagnosis each time. */
+  maxStageRetries: number;
+  /** Cache each turn's LLM response to disk and replay it on identical inputs,
+   * so retries/restarts reuse work already paid for. Default on. */
+  llmCache: boolean;
   /** Content hashes of generated docs, for init idempotency (AC-1.4). */
   generatedHashes?: Record<string, string>;
   /**
@@ -30,6 +39,9 @@ export const DEFAULTS: Omit<CopperheadConfig, 'schematic' | 'board'> = {
   maxTurns: 40,
   maxRepairCycles: 5,
   budgets: {},
+  turnTimeoutMs: 300000,
+  maxStageRetries: 2,
+  llmCache: true,
 };
 
 export function configPath(repoRoot: string): string {
@@ -56,6 +68,12 @@ export async function loadConfig(repoRoot: string): Promise<CopperheadConfig> {
     ...(Object.keys(stageMaxTurns).length ? { stageMaxTurns } : {}),
     maxRepairCycles: raw.maxRepairCycles ?? DEFAULTS.maxRepairCycles,
     budgets: raw.budgets ?? {},
+    turnTimeoutMs: typeof raw.turnTimeoutMs === 'number' ? raw.turnTimeoutMs : DEFAULTS.turnTimeoutMs,
+    maxStageRetries:
+      Number.isInteger(raw.maxStageRetries) && (raw.maxStageRetries as number) >= 0
+        ? (raw.maxStageRetries as number)
+        : DEFAULTS.maxStageRetries,
+    llmCache: raw.llmCache !== false,
     ...(raw.generatedHashes ? { generatedHashes: raw.generatedHashes } : {}),
     ...(raw.origin === 'create' || raw.origin === 'init' ? { origin: raw.origin } : {}),
   };
