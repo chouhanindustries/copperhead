@@ -8,7 +8,7 @@ import { saveConstraint } from '../src/memory/constraints.js';
 import { tempFixtureRepo } from './helpers.js';
 
 /**
- * Live agent-loop tests (AC-3.x). These call a real LLM: they run only when an
+ * Live agent-loop tests (AC-3.x). These call a real LLM: they run only when a
  * provider is configured, and each asserts on repo state and the transcript.
  * Provider parity (AC-3.10): the suite runs for every configured provider.
  */
