@@ -128,9 +128,39 @@ const devplanScript = (): Turn[] => [
   finishTurn('done'),
 ];
 
-/** A full default run: the three incomplete stages each produce their probe artifact. */
+/**
+ * layout-draft earns its record by putting a footprint on the real board via
+ * a surgical text edit (the probe greps for "(footprint"; nothing parses the
+ * board in these tests — the kicad-cli shim answers ERC/DRC).
+ */
+const layoutDraftScript = (): Turn[] => [
+  proposeTurn('draft-layout'),
+  turn([
+    {
+      name: 'edit_file',
+      args: {
+        path: 'hardware/open-key.kicad_pcb',
+        old_string: '(kicad_pcb',
+        new_string: '(kicad_pcb\n  (footprint "Fixture:Stub" (layer "F.Cu"))',
+      },
+    },
+  ]),
+  turn([
+    { name: 'run_erc', args: {} },
+    { name: 'run_drc', args: {} },
+    { name: 'check_drift', args: {} },
+  ]),
+  finishTurn('done'),
+];
+
+/** A full default run: the four incomplete stages each produce their probe artifact. */
 const fullRunProvider = (): StageScriptProvider =>
-  new StageScriptProvider({ outputs: outputsScript(), firmware: firmwareScript(), devplan: devplanScript() });
+  new StageScriptProvider({
+    'layout-draft': layoutDraftScript(),
+    outputs: outputsScript(),
+    firmware: firmwareScript(),
+    devplan: devplanScript(),
+  });
 
 /** Every stage run finishes immediately without producing anything. */
 const finishOnlyProvider = (): StageScriptProvider => new StageScriptProvider();
@@ -161,9 +191,10 @@ const editBomScript = (): Turn[] => [
  * Fixture: real `copperhead init` over the open-key project, committed. The
  * generated docs are drift-clean against the real schematic and the stage
  * probes classify honestly with no records: spec-seed, architecture,
- * part-selection, schematic, layout-draft are assumed-complete; outputs,
- * firmware, devplan are incomplete. A default full run therefore executes
- * exactly [outputs, firmware, devplan].
+ * part-selection, schematic are assumed-complete; layout-draft (the fixture
+ * board has no footprints), outputs, firmware, devplan are incomplete. A
+ * default full run therefore executes exactly
+ * [layout-draft, outputs, firmware, devplan].
  */
 async function createFixture(): Promise<{ repo: string; brief: string; cleanup: () => Promise<void> }> {
   const { repo, cleanup } = await tempFixtureRepo();
@@ -317,15 +348,15 @@ describe('create pipeline: records, staleness, targeted re-runs', () => {
       const lines: string[] = [];
       const res = await runCreate(createOpts(repo, brief, lines));
       expect(res.ok).toBe(true);
-      // the init scaffold satisfies the first five stage probes
+      // the init scaffold satisfies the first four stage probes
       expect(lines).toContain('stage part-selection: already complete (resuming past it)');
-      expect(lines.filter((l) => l.includes('already complete (resuming past it)')).length).toBe(5);
-      expect(ranStages(lines)).toEqual(['outputs', 'firmware', 'devplan']);
+      expect(lines.filter((l) => l.includes('already complete (resuming past it)')).length).toBe(4);
+      expect(ranStages(lines)).toEqual(['layout-draft', 'outputs', 'firmware', 'devplan']);
       // every stage produced its probe artifact, so every record was earned
-      expect(lines.join('\n')).not.toContain('completion contract is not met');
+      expect(lines.join('\n')).not.toContain('contract is not met');
 
       const { state } = await loadCreateState(repo);
-      expect(Object.keys(state.stages).sort()).toEqual(['devplan', 'firmware', 'outputs']);
+      expect(Object.keys(state.stages).sort()).toEqual(['devplan', 'firmware', 'layout-draft', 'outputs']);
       // the record rides the stage's own commit
       const { stdout } = await execa('git', ['show', '--name-only', '--pretty=format:', 'HEAD'], { cwd: repo });
       expect(stdout).toContain('.copperhead/create-state.json');
@@ -335,8 +366,8 @@ describe('create pipeline: records, staleness, targeted re-runs', () => {
       const res2 = await runCreate(createOpts(repo, brief, lines2));
       expect(res2.ok).toBe(true);
       expect(ranStages(lines2)).toEqual([]);
-      expect(lines2.filter((l) => l.includes('fresh (skipping)')).length).toBe(3);
-      expect(lines2.filter((l) => l.includes('already complete (resuming past it)')).length).toBe(5);
+      expect(lines2.filter((l) => l.includes('fresh (skipping)')).length).toBe(4);
+      expect(lines2.filter((l) => l.includes('already complete (resuming past it)')).length).toBe(4);
     } finally {
       await cleanup();
     }
@@ -457,11 +488,11 @@ describe('create pipeline: records, staleness, targeted re-runs', () => {
       const res = await runCreate(createOpts(repo, brief, lines, { dryRun: true }));
       expect(res.ok).toBe(true);
       const out = lines.join('\n');
-      for (const s of ['spec-seed', 'architecture', 'part-selection', 'schematic', 'layout-draft']) {
+      for (const s of ['spec-seed', 'architecture', 'part-selection', 'schematic']) {
         expect(out).toContain(`${s}: assumed-complete`);
       }
-      for (const s of ['outputs', 'firmware', 'devplan']) expect(out).toContain(`${s}: incomplete`);
-      expect(out).toContain('would run (default): outputs → firmware → devplan');
+      for (const s of ['layout-draft', 'outputs', 'firmware', 'devplan']) expect(out).toContain(`${s}: incomplete`);
+      expect(out).toContain('would run (default): layout-draft → outputs → firmware → devplan');
       const { stdout } = await execa('git', ['status', '--porcelain'], { cwd: repo });
       expect(stdout).toBe('');
     } finally {
@@ -500,8 +531,8 @@ describe('create pipeline: records, staleness, targeted re-runs', () => {
       // spec-seed is the only consumer of the brief; everything else stays put
       expect(ranStages(lines)).toEqual(['spec-seed']);
       expect(lines).toContain('stage spec-seed: running (stale: brief)');
-      expect(lines.filter((l) => l.includes('fresh (skipping)')).length).toBe(3);
-      expect(lines.filter((l) => l.includes('already complete (resuming past it)')).length).toBe(4);
+      expect(lines.filter((l) => l.includes('fresh (skipping)')).length).toBe(4);
+      expect(lines.filter((l) => l.includes('already complete (resuming past it)')).length).toBe(3);
       // the scripted stage changed no outputs, so the spec edge never fires downstream
       expect(lines).toContain('stage spec-seed: outputs unchanged; nothing invalidated');
     } finally {
@@ -542,12 +573,12 @@ describe('create pipeline: records, staleness, targeted re-runs', () => {
         createOpts(repo, brief, lines, { provider: new ScriptedProvider([finishTurn('refuse')]) }),
       );
       expect(res.ok).toBe(false);
-      // outputs is the first planned stage of the new fixture
-      expect(res.completed).not.toContain('outputs');
-      expect(lines.join('\n')).toContain('stage outputs did not complete (refused)');
+      // layout-draft is the first planned stage of the new fixture
+      expect(res.completed).not.toContain('layout-draft');
+      expect(lines.join('\n')).toContain('stage layout-draft did not complete (refused)');
       // the record rides the stage commit; a refusal never commits, so no record exists
       const { state } = await loadCreateState(repo);
-      expect(state.stages['outputs']).toBeUndefined();
+      expect(state.stages['layout-draft']).toBeUndefined();
     } finally {
       await cleanup();
     }
@@ -669,11 +700,11 @@ describe('create pipeline: records, staleness, targeted re-runs', () => {
   it('targeted modes warn when an upstream stage is incomplete', async () => {
     const { repo, brief, cleanup } = await createFixture();
     try {
-      // fresh fixture: firmware (devplan's only incomplete ancestor) has not run yet
+      // fresh fixture: layout-draft and firmware (devplan's incomplete ancestors) have not run yet
       const lines: string[] = [];
       await runCreate(createOpts(repo, brief, lines, { dryRun: true, stage: 'devplan' }));
       expect(lines).toContain(
-        'warning: upstream stage(s) firmware are incomplete; devplan may run against missing inputs',
+        'warning: upstream stage(s) layout-draft, firmware are incomplete; devplan may run against missing inputs',
       );
     } finally {
       await cleanup();
@@ -699,22 +730,26 @@ describe('create pipeline: records, staleness, targeted re-runs', () => {
 });
 
 describe('probe-gated records and demotion (adversarial-review fixes)', () => {
-  it('a committed run that produced nothing stays unrecorded and re-runs next time', async () => {
+  it('a committed run that produced nothing stays unrecorded and halts the pipeline', async () => {
     const { repo, brief, cleanup } = await createFixture();
     try {
       const lines: string[] = [];
       const res = await runCreate(createOpts(repo, brief, lines, { provider: finishOnlyProvider() }));
-      expect(res.ok).toBe(true);
-      expect(ranStages(lines)).toEqual(['outputs', 'firmware', 'devplan']);
-      // each stage committed (changelog) but met no completion contract
-      expect(lines.filter((l) => l.includes('completion contract is not met')).length).toBe(3);
+      // upstream halt semantics: the run committed but the contract is unmet,
+      // so the pipeline stops at that stage instead of advancing past it
+      expect(res.ok).toBe(false);
+      expect(ranStages(lines)).toEqual(['layout-draft']);
+      expect(lines.join('\n')).toContain(
+        'stage layout-draft: run succeeded but the stage contract is not met yet (partial work committed); re-run copperhead create to continue this stage',
+      );
       const { state } = await loadCreateState(repo);
       expect(Object.keys(state.stages)).toEqual([]);
 
-      // nothing was recorded and nothing exists, so the same three stages re-run
+      // nothing was recorded and nothing exists, so the same stage re-runs (and halts again)
       const lines2: string[] = [];
-      await runCreate(createOpts(repo, brief, lines2, { provider: finishOnlyProvider() }));
-      expect(ranStages(lines2)).toEqual(['outputs', 'firmware', 'devplan']);
+      const res2 = await runCreate(createOpts(repo, brief, lines2, { provider: finishOnlyProvider() }));
+      expect(res2.ok).toBe(false);
+      expect(ranStages(lines2)).toEqual(['layout-draft']);
     } finally {
       await cleanup();
     }
@@ -754,7 +789,12 @@ describe('probe-gated records and demotion (adversarial-review fixes)', () => {
     try {
       await writeFile(path.join(repo, 'scratch.txt'), 'uncommitted WIP\n', 'utf8');
       const lines: string[] = [];
-      const res = await runCreate(createOpts(repo, brief, lines, { stage: 'devplan', provider: finishOnlyProvider() }));
+      const res = await runCreate(
+        createOpts(repo, brief, lines, {
+          stage: 'devplan',
+          provider: new StageScriptProvider({ devplan: devplanScript() }),
+        }),
+      );
       expect(res.ok).toBe(true);
       expect(lines).toContain('plan (--stage devplan): devplan');
       expect(lines).toContain(

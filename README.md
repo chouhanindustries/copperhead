@@ -33,7 +33,7 @@ npm install -g copperhead   # or: npx copperhead check
 
 - Node.js ≥ 20
 - [KiCad](https://www.kicad.org/) ≥ 8 with `kicad-cli` on PATH
-- `ANTHROPIC_API_KEY` or `OPENAI_API_KEY` in the environment (env var only, never a config file), except for `check`, which never calls an LLM
+- One model backend: a locally installed, ChatGPT-authenticated [Codex CLI](https://learn.chatgpt.com/docs/codex/cli), or `ANTHROPIC_API_KEY`/`OPENAI_API_KEY` in the environment. `check` never calls an LLM.
 
 ## Quick start
 
@@ -47,6 +47,22 @@ copperhead check               # ERC + DRC + doc drift; no LLM, CI-safe
 ```
 
 Starting from nothing instead? Write a product brief and run `copperhead create --brief brief.md`. The [examples/](examples/) directory has ready-made briefs sorted by difficulty, plus a note on which one is designed to fail.
+
+### Use your existing Codex login
+
+No model API key is needed when Codex CLI is already authenticated:
+
+```bash
+npm install -g @openai/codex-sdk   # optional adapter, loaded only for --model codex
+codex login status
+copperhead do "rename net KEY_DAH to KEY_DASH" --model codex
+```
+
+Plain `codex` follows your Codex model configuration. Use `codex:<model-id>` for an explicit model. If the executable is not on `PATH`, set `COPPERHEAD_CODEX_PATH=/absolute/path/to/codex`.
+The optional SDK also installs a compatible launcher; for a global install, use
+`COPPERHEAD_CODEX_PATH="$(npm root -g)/@openai/codex/bin/codex.js"` as a fallback.
+
+Codex's read-only sandbox prevents native writes but does not confine native reads. Copperhead instructs Codex not to use its own filesystem tools, but the CLI can technically read files such as `.env`. Codex also keeps session logs under `~/.codex/sessions/`; those files are outside Copperhead's transcript-redaction boundary and should be protected according to your local data-retention policy.
 
 ## How it works
 
@@ -123,6 +139,7 @@ Contributions are welcome; see [CONTRIBUTING.md](CONTRIBUTING.md) for setup and 
 
 ## Project layout
 
+- [`AGENTS.md`](AGENTS.md): repository instructions loaded automatically by Codex and compatible coding agents; [`CLAUDE.md`](CLAUDE.md) provides the corresponding Claude Code guidance
 - [`src/`](src/): CLI ([`cli.ts`](src/cli.ts), [`commands/`](src/commands/)), the provider-agnostic agent loop ([`agent/`](src/agent/)), the `kicad-cli` wrapper and s-expression reader ([`kicad/`](src/kicad/)), and doc/constraint memory ([`memory/`](src/memory/))
 - [`test/`](test/): offline suite plus [`fixtures/`](test/fixtures/), a tiny known-good KiCad project
 - [`openspec/specs/SPEC.md`](openspec/specs/SPEC.md): the full technical specification, including binary acceptance criteria

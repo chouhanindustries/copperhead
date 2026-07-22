@@ -281,14 +281,6 @@ export async function classifyStages(opts: {
       });
       continue;
     }
-    // A record is trust in a past verified commit, not in present existence:
-    // if the completion probe fails now, the work product has been deleted (or
-    // the probes have grown stricter since the record was written) and the
-    // stage must run from scratch, not be skipped as fresh or "revised".
-    if (!(await stage.isComplete())) {
-      classifications.push({ stage: stage.name, status: 'incomplete', changedInputs: [] });
-      continue;
-    }
     const changedInputs: ArtifactName[] = [];
     for (const artifact of stage.consumes) {
       const current = await hashArtifact(artifact, opts.repoRoot, opts.config, opts.briefPath);
@@ -297,11 +289,23 @@ export async function classifyStages(opts: {
       // the stage fresh with respect to it.
       if (record.inputs[artifact] !== current) changedInputs.push(artifact);
     }
-    classifications.push({
-      stage: stage.name,
-      status: changedInputs.length ? 'stale' : 'fresh',
-      changedInputs,
-    });
+    // Changed inputs outrank a failing probe: drift-aware probes (the
+    // schematic stage's, since the create-pipeline hardening) fail *because*
+    // an upstream artifact changed, and demoting to incomplete there would
+    // lose the stale trigger, the changed-input names, and the reconciliation
+    // preamble in exactly the flagship case. Only a recorded stage whose
+    // inputs still match and whose probe fails now — its work product was
+    // deleted, or the probes have grown stricter since the record was
+    // written — runs from scratch as incomplete (AC-9.9).
+    if (changedInputs.length) {
+      classifications.push({ stage: stage.name, status: 'stale', changedInputs });
+      continue;
+    }
+    if (!(await stage.isComplete())) {
+      classifications.push({ stage: stage.name, status: 'incomplete', changedInputs: [] });
+      continue;
+    }
+    classifications.push({ stage: stage.name, status: 'fresh', changedInputs: [] });
   }
   return { classifications, warning };
 }

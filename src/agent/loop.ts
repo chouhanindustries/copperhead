@@ -10,13 +10,25 @@ import { Transcript, type ExitPath, type RunStats } from './transcript.js';
 import { collectRunMeta, renderCliHeader, type RunMeta, type RunMetaInput } from './runmeta.js';
 import { plainRenderer, fmtDuration, fmtTokens, type ProgressRenderer } from './render.js';
 import { ObligationsLedger } from './ledger.js';
-import { gitPreflight, isDirty, snapshot, restore, commitAll, changedFiles } from '../util/git.js';
+import { gitPreflight, isDirty, snapshot, restore, commitAll, changedFiles, preserveFailedRun } from '../util/git.js';
 import { withRetry, isRateLimit } from '../util/retry.js';
 import { openspecArchive } from '../openspec/cli.js';
 import { existsSync } from 'node:fs';
 import { OpenAIProvider } from './providers/openai.js';
 import { AnthropicProvider } from './providers/anthropic.js';
+import { CodexProvider } from './providers/codex.js';
 import { openSynapMemory, type RunRecord, type SynapMemory } from '../memory/synap.js';
+
+/** What the user sees at the moment they decide whether to keep going. */
+export interface BudgetExhaustedStats {
+  /** The run's original turn budget, before any extensions. */
+  maxTurns: number;
+  turnsUsed: number;
+  tokensIn: number;
+  tokensOut: number;
+  filesTouched: string[];
+  openObligations: number;
+}
 
 export interface RunOptions {
   repoRoot: string;
@@ -27,8 +39,15 @@ export interface RunOptions {
   dryRun?: boolean;
   interactive?: boolean;
   confirm?: (q: string) => Promise<boolean>;
+  /**
+   * Called when the turn budget runs out. Returns the number of extra turns to
+   * grant (0 fails the run as before). Absent means non-interactive: fail.
+   */
+  onBudgetExhausted?: (stats: BudgetExhaustedStats) => Promise<number>;
   /** Extra prompt appended for pipeline stages (Mode A). */
   stagePrompt?: string;
+  /** Test seam: bypass makeProvider. */
+  provider?: Provider;
   log?: (line: string) => void;
   /** Progress renderer; defaults to a plain line renderer over `log`. */
   renderer?: ProgressRenderer;
@@ -41,8 +60,6 @@ export interface RunOptions {
    * refuse, dry-run, or rollback paths; a throw routes to commit-failed.
    */
   beforeCommit?: (info: { runId: string }) => Promise<void>;
-  /** Test seam: bypass makeProvider with a scripted provider. */
-  provider?: Provider;
 }
 
 export interface RunResult {
@@ -54,7 +71,24 @@ export interface RunResult {
   commit: string | null;
 }
 
-export function makeProvider(model: string): Provider {
+export async function makeProvider(model: string): Promise<Provider> {
+  if (model === 'codex' || model.startsWith('codex:')) {
+    const codexModel = model.startsWith('codex:') ? model.slice('codex:'.length) : undefined;
+    if (codexModel === '') throw new Error('codex model override cannot be empty; use "codex" or "codex:<model-id>"');
+    const { Codex } = await import('@openai/codex-sdk').catch((err: unknown) => {
+      throw new Error(
+        'Codex provider requires the optional @openai/codex-sdk package; install it alongside Copperhead before using --model codex',
+        { cause: err },
+      );
+    });
+    return new CodexProvider({
+      ...(codexModel ? { model: codexModel } : {}),
+      client: new Codex({
+        // Use the user's installed CLI and its saved login rather than a model API key.
+        codexPathOverride: process.env.COPPERHEAD_CODEX_PATH || 'codex',
+      }),
+    });
+  }
   if (model === 'claude' || model.startsWith('claude')) {
     return new AnthropicProvider(model === 'claude' ? undefined : model);
   }
@@ -108,14 +142,26 @@ async function appendChangelog(
  */
 export async function runAgentLoop(opts: RunOptions): Promise<RunResult> {
   const memory = await openSynapMemory({ repoRoot: opts.repoRoot, log: opts.log });
+  const providers = new Set<Provider>();
   try {
-    return await runWithMemory(opts, memory);
+    return await runWithMemory(opts, memory, providers);
   } finally {
+    for (const provider of providers) {
+      try {
+        await provider.close?.();
+      } catch (err) {
+        opts.log?.(`warning: ${provider.name} provider cleanup failed (${(err as Error).message})`);
+      }
+    }
     await memory?.close();
   }
 }
 
-async function runWithMemory(opts: RunOptions, memory: SynapMemory | null): Promise<RunResult> {
+async function runWithMemory(
+  opts: RunOptions,
+  memory: SynapMemory | null,
+  providers: Set<Provider>,
+): Promise<RunResult> {
   const r = opts.renderer ?? plainRenderer(opts.log ?? ((l: string) => console.log(l)));
   const log = (l: string): void => r.log(l);
   const repoRoot = opts.repoRoot;
@@ -146,7 +192,8 @@ async function runWithMemory(opts: RunOptions, memory: SynapMemory | null): Prom
     finishRequest: null,
   };
 
-  let provider = opts.provider ?? makeProvider(opts.model);
+  let provider = opts.provider ?? (await makeProvider(opts.model));
+  providers.add(provider);
 
   // Deterministic, LLM-free metadata block: collected once, rendered onto all
   // three surfaces (run-start event, summary ## Environment, CLI header) so
@@ -250,6 +297,10 @@ async function runWithMemory(opts: RunOptions, memory: SynapMemory | null): Prom
 
   const fail = async (reason: string, exitPath: ExitPath): Promise<RunResult> => {
     await transcript.event('run-failed', { reason, exitPath });
+    // Preserve the touched work as a stash entry before the rollback destroys
+    // it, so a budget-exhaustion (or any) failure is recoverable (issue #15).
+    const preserved = await preserveFailedRun(repoRoot, ctx.runId);
+    if (preserved) await transcript.event('work-preserved', { stash: preserved });
     // The rollback itself can fail (git in a bad state). That must not become
     // an unhandled throw that skips run-end and summary.md — the summary is
     // most valuable exactly when the tree is left in an unknown state.
@@ -284,6 +335,11 @@ async function runWithMemory(opts: RunOptions, memory: SynapMemory | null): Prom
     } else {
       log(`working tree restored to pre-run snapshot`);
     }
+    if (preserved) {
+      log(
+        `failed work preserved: git stash entry "copperhead failed run ${ctx.runId}" (${preserved.slice(0, 10)}); recover with \`git stash apply\`, discard with \`git stash drop\``,
+      );
+    }
     log(`transcript: ${transcript.jsonlPath}`);
     log(`summary: ${summaryPath}`);
     r.finish(outcomeLine(runStats));
@@ -297,7 +353,35 @@ async function runWithMemory(opts: RunOptions, memory: SynapMemory | null): Prom
     };
   };
 
-  for (let turn = 0; turn < maxTurns; turn++) {
+  let budget = maxTurns;
+  for (let turn = 0; ; turn++) {
+    if (turn >= budget) {
+      // Budget exhausted. In an attended run this is a user decision made with
+      // the cost visible, not an unconditional rollback (issue #15).
+      const exhaustStats: BudgetExhaustedStats = {
+        maxTurns,
+        turnsUsed: turn,
+        tokensIn,
+        tokensOut,
+        filesTouched: [...ctx.filesTouched],
+        openObligations: ctx.ledger.openObligations.length,
+      };
+      let extra = 0;
+      if (opts.onBudgetExhausted) {
+        try {
+          extra = Math.floor(await opts.onBudgetExhausted(exhaustStats));
+        } catch {
+          // A broken prompt (stdin closed mid-question, dying terminal) must
+          // read as "declined" and take the preserve-and-restore path below,
+          // not propagate past it and skip the rollback entirely.
+          extra = 0;
+        }
+      }
+      if (!Number.isFinite(extra) || extra <= 0) break;
+      budget += extra;
+      await transcript.event('budget-extended', { extraTurns: extra, budget, ...exhaustStats });
+      log(`turn budget extended by ${extra} (now ${budget})`);
+    }
     const tools = availableTools(ctx).map((t) => t.schema);
     r.turnStart(turn + 1, maxTurns, tokensIn, tokensOut);
     r.status('thinking');
@@ -313,6 +397,7 @@ async function runWithMemory(opts: RunOptions, memory: SynapMemory | null): Prom
           log(`failing over ${provider.name} → ${fallback.name}`);
           await transcript.event('provider-failover', { from: provider.name, to: fallback.name });
           provider = fallback;
+          providers.add(provider);
           turn--;
           continue;
         }
@@ -334,6 +419,10 @@ async function runWithMemory(opts: RunOptions, memory: SynapMemory | null): Prom
     messages.push({ role: 'assistant', content: res.text, toolCalls: res.toolCalls });
 
     if (!res.toolCalls.length) {
+      // Only *consecutive* tool-less turns are a stall. Providers emit the
+      // occasional empty completion mid-run (observed live: three empties
+      // spread across 31 productive turns); a cumulative counter turns those
+      // into a full rollback of an otherwise-converging run.
       if (nudges++ >= 2) return fail('model stopped calling tools without finishing', 'stalled');
       messages.push({
         role: 'user',
@@ -341,6 +430,7 @@ async function runWithMemory(opts: RunOptions, memory: SynapMemory | null): Prom
       });
       continue;
     }
+    nudges = 0;
 
     for (const call of res.toolCalls) {
       const result = await dispatchTool(ctx, call.name, call.args);
@@ -353,12 +443,12 @@ async function runWithMemory(opts: RunOptions, memory: SynapMemory | null): Prom
       return fail(`repair cycles exhausted (${config.maxRepairCycles}); violations persist`, 'repair-cycles-exhausted');
     }
 
-    const remaining = maxTurns - turn - 1;
+    const remaining = budget - turn - 1;
     if (remaining === 5 && !ctx.finishRequest) {
       messages.push({
         role: 'user',
         content:
-          'Only 5 turns remain. Converge now: finish the minimal correct edit set, run run_erc (and run_drc if the board changed), run check_drift, then call finish.',
+          'Only 5 turns remain. Converge now: finish the minimal correct edit set, run run_erc (and run_drc if the board changed), run check_drift, then call finish. Batch independent tool calls in a single response (e.g. all resolve_affected calls at once) instead of one per turn.',
       });
     }
 
@@ -537,7 +627,7 @@ async function runWithMemory(opts: RunOptions, memory: SynapMemory | null): Prom
 
   const filesAfter = await changedFiles(repoRoot, snap.head);
   return fail(
-    `turn budget exhausted (${maxTurns} turns, ${filesAfter.length} files touched but unverified)`,
+    `turn budget exhausted (${budget} turns, ${filesAfter.length} files touched but unverified)`,
     'turn-budget-exhausted',
   );
 }

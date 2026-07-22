@@ -1,6 +1,6 @@
 ---
 title: Quickstart
-description: Install copperhead, set an API key, and run your first verified change.
+description: Install copperhead, choose a model backend, and run your first verified change.
 sidebar:
   order: 2
 ---
@@ -11,7 +11,7 @@ import { Steps } from '@astrojs/starlight/components';
 
 - Node.js >= 20
 - [KiCad](https://www.kicad.org/) >= 8, with `kicad-cli` on your `PATH`
-- An OpenAI or Anthropic API key, supplied through the environment
+- Either an authenticated local Codex CLI, or an OpenAI/Anthropic API key supplied through the environment
 - A git repository (copperhead snapshots before it edits, and rolls back if verification fails)
 
 Check that KiCad's CLI is visible, since every command probes it before doing anything:
@@ -30,9 +30,23 @@ kicad-cli version
    npm install -g copperhead
    ```
 
-2. **Set a key.**
+2. **Choose a model backend.**
 
-   Keys are read from the environment only, and are never written to a config file. Transcripts redact anything shaped like a key at write time.
+   To reuse your existing Codex login without a model API key:
+
+   ```bash
+   npm install -g @openai/codex-sdk   # optional adapter, loaded only for Codex runs
+   codex login status
+   export COPPERHEAD_MODEL=codex
+   ```
+
+   If `codex` is not on `PATH`, the SDK package includes a compatible launcher. For a global install:
+
+   ```bash
+   export COPPERHEAD_CODEX_PATH="$(npm root -g)/@openai/codex/bin/codex.js"
+   ```
+
+   Or set a direct model API key. Keys are read from the environment only, never written to a config file, and redacted from transcripts.
 
    ```bash
    export ANTHROPIC_API_KEY=...   # or OPENAI_API_KEY

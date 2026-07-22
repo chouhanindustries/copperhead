@@ -8,10 +8,18 @@ export interface CopperheadConfig {
   docs: string;
   model: string | null;
   maxTurns: number;
+  /** Per-stage overrides for the create pipeline, keyed by stage name. */
+  stageMaxTurns?: Record<string, number>;
   maxRepairCycles: number;
   budgets: Record<string, number>;
   /** Content hashes of generated docs, for init idempotency (AC-1.4). */
   generatedHashes?: Record<string, string>;
+  /**
+   * How the repo was bootstrapped. `"create"` marks a Mode A pipeline repo
+   * (fab gate requires DEVPLAN.md). Written by `copperhead create`; absent on
+   * init-only / hand-maintained repos.
+   */
+  origin?: 'create' | 'init';
 }
 
 export const CONFIG_DIR = '.copperhead';
@@ -34,15 +42,22 @@ export async function loadConfig(repoRoot: string): Promise<CopperheadConfig> {
     return { schematic: null, board: null, ...DEFAULTS };
   }
   const raw = JSON.parse(await readFile(p, 'utf8')) as Partial<CopperheadConfig>;
+  // A zero/negative/non-integer stage budget would exhaust the stage on turn 0;
+  // drop such entries rather than let a config typo stall the pipeline.
+  const stageMaxTurns = Object.fromEntries(
+    Object.entries(raw.stageMaxTurns ?? {}).filter(([, v]) => Number.isInteger(v) && v > 0),
+  );
   return {
     schematic: raw.schematic ?? null,
     board: raw.board ?? null,
     docs: raw.docs ?? DEFAULTS.docs,
     model: raw.model ?? null,
     maxTurns: raw.maxTurns ?? DEFAULTS.maxTurns,
+    ...(Object.keys(stageMaxTurns).length ? { stageMaxTurns } : {}),
     maxRepairCycles: raw.maxRepairCycles ?? DEFAULTS.maxRepairCycles,
     budgets: raw.budgets ?? {},
     ...(raw.generatedHashes ? { generatedHashes: raw.generatedHashes } : {}),
+    ...(raw.origin === 'create' || raw.origin === 'init' ? { origin: raw.origin } : {}),
   };
 }
 
@@ -65,6 +80,8 @@ export interface ResolvedModel {
  * - `claude`  : the Anthropic provider on its default model.
  * - `claude-*`: any Anthropic model id, passed through verbatim, e.g.
  *               `claude-opus-4-5`. Anything starting with `claude` routes here.
+ * - `codex`   : the locally installed Codex CLI using its saved ChatGPT login.
+ * - `codex:*` : Codex CLI with an explicit model id, e.g. `codex:gpt-5.6`.
  * - `gpt-5`   : the OpenAI provider on its default model.
  * - anything else: sent to the OpenAI provider verbatim as a model id, e.g.
  *               `gpt-5-mini` or `o3`.
@@ -72,8 +89,8 @@ export interface ResolvedModel {
  * Routing is prefix-based, not a fixed list (see makeProvider in agent/loop.ts),
  * so a model released after this build still works without a code change. The
  * cost is that a typo like `claud-sonnet-5` silently routes to OpenAI and fails
- * there. The chosen provider must have its key set: ANTHROPIC_API_KEY for
- * `claude*`, OPENAI_API_KEY otherwise.
+ * there. Anthropic and direct OpenAI providers require their API keys; `codex`
+ * instead requires a locally installed and authenticated Codex CLI.
  */
 export function resolveModel(flag: string | undefined, config: CopperheadConfig, env = process.env): ResolvedModel {
   if (flag) return { model: flag, source: 'flag' };
@@ -82,6 +99,6 @@ export function resolveModel(flag: string | undefined, config: CopperheadConfig,
   if (env.OPENAI_API_KEY) return { model: 'gpt-5', source: 'openai-key' };
   if (env.ANTHROPIC_API_KEY) return { model: 'claude', source: 'anthropic-key' };
   throw new Error(
-    'no model configured: pass --model, set COPPERHEAD_MODEL, set model in .copperhead/config.json, or provide OPENAI_API_KEY/ANTHROPIC_API_KEY',
+    'no model configured: pass --model codex (uses your local Codex login), set COPPERHEAD_MODEL, set model in .copperhead/config.json, or provide OPENAI_API_KEY/ANTHROPIC_API_KEY',
   );
 }

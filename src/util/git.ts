@@ -137,6 +137,34 @@ export async function restore(repo: string, snap: GitSnapshot): Promise<void> {
   }
 }
 
+/**
+ * Preserve a failed run's work as a stash entry before rollback, so a failure
+ * is recoverable instead of destroyed. `git stash create` alone ignores
+ * untracked files (most of what a docs-stage run produces), so everything is
+ * staged first; restore() resets the index anyway. Never throws: preservation
+ * must not be able to block the rollback itself.
+ */
+export async function preserveFailedRun(repo: string, runId: string): Promise<string | null> {
+  try {
+    if (!(await isDirty(repo))) return null;
+    // Never leave the audit trail staged: a staged-but-not-in-HEAD path is
+    // deleted by restore()'s `reset --hard`, which silently defeats its
+    // `clean -e .copperhead/runs` protection (that flag only spares untracked
+    // files) — the in-flight run's transcript dir vanishes mid-run. Staging
+    // then unstaging (rather than an exclude pathspec) because `git add`
+    // errors outright when a pathspec touches gitignored paths, and runs/ is
+    // gitignored in some target repos but tracked in others.
+    await git(repo, ['add', '-A']);
+    await git(repo, ['reset', '-q', '--', '.copperhead/runs']);
+    const sha = await git(repo, ['stash', 'create']);
+    if (!sha) return null;
+    await git(repo, ['stash', 'store', '-m', `copperhead failed run ${runId}`, sha]);
+    return sha;
+  } catch {
+    return null;
+  }
+}
+
 /** Current branch name, or "HEAD" when detached. Read-only metadata probe. */
 export async function branchName(repo: string): Promise<string> {
   return git(repo, ['rev-parse', '--abbrev-ref', 'HEAD']);

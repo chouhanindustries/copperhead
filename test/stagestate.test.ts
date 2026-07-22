@@ -282,6 +282,43 @@ describe('staleness classification (design D4)', () => {
     }
   });
 
+  it('changed inputs outrank a failing probe for recorded stages (drift-aware probes)', async () => {
+    const { repo, cleanup } = await tempFixtureRepo();
+    try {
+      await mkdir(path.join(repo, 'docs'), { recursive: true });
+      await writeFile(path.join(repo, 'docs', 'SPEC.md'), '## Budgets\n- x: 1\n', 'utf8');
+      await saveStageRecord(repo, 'part-selection', {
+        completedAt: '2026-07-22T00:00:00.000Z',
+        runId: 'run-1',
+        inputs: { spec: await hashArtifact('spec', repo, CONFIG) },
+        outputs: {},
+      });
+      await writeFile(path.join(repo, 'docs', 'SPEC.md'), '## Budgets\n- x: 2\n', 'utf8');
+      // the probe fails BECAUSE the upstream artifact changed (drift-aware);
+      // classification must keep the stale trigger and the changed-input name
+      const res = await classifyStages({ repoRoot: repo, config: CONFIG, stages: stagesFor(repo, false) });
+      expect(res.classifications[0]).toMatchObject({ status: 'stale', changedInputs: ['spec'] });
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it('a recorded stage with matching inputs and a failing probe is incomplete (AC-9.9)', async () => {
+    const { repo, cleanup } = await tempFixtureRepo();
+    try {
+      await saveStageRecord(repo, 'part-selection', {
+        completedAt: '2026-07-22T00:00:00.000Z',
+        runId: 'run-1',
+        inputs: { spec: await hashArtifact('spec', repo, CONFIG) }, // ABSENT, still ABSENT
+        outputs: {},
+      });
+      const res = await classifyStages({ repoRoot: repo, config: CONFIG, stages: stagesFor(repo, false) });
+      expect(res.classifications[0]!.status).toBe('incomplete'); // work product gone, not "fresh"
+    } finally {
+      await cleanup();
+    }
+  });
+
   it('a consumed artifact with no recorded hash counts as changed', async () => {
     const { repo, cleanup } = await tempFixtureRepo();
     try {

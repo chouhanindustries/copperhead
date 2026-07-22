@@ -1,0 +1,109 @@
+name: PR lint
+
+# Checks that a PR description still follows .github/pull_request_template.md:
+# the required sections and the invariant checklist must be present and non-empty.
+# It verifies presence, not truth. A reviewer (see the pr-review skill) still confirms
+# the content is honest and the ticked invariants actually hold.
+#
+# Uses pull_request_target so the job holds a writable token and can post its result
+# as a comment on fork PRs (a plain pull_request run gets a read-only token on forks).
+# This is safe here only because the workflow never checks out or runs PR code: it reads
+# the PR body from an env var and parses it. Do not add a checkout of the PR head.
+on:
+  pull_request_target:
+    types: [opened, edited, synchronize, reopened, ready_for_review]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  template:
+    runs-on: ubuntu-latest
+    # Drafts are works in progress; Dependabot does not use our template.
+    if: ${{ !github.event.pull_request.draft && github.event.pull_request.user.login != 'dependabot[bot]' }}
+    steps:
+      - name: Check PR description
+        id: check
+        env:
+          # Passed via env, never interpolated into the script, so a crafted body cannot inject shell.
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          node <<'EOF'
+          const fs = require("fs");
+          const body = process.env.PR_BODY || "";
+          // Drop HTML comments so the template's placeholder guidance never counts as content.
+          const stripped = body.replace(/<!--[\s\S]*?-->/g, "");
+
+          // Bucket lines under their nearest "## Heading".
+          const sections = {};
+          let current = null;
+          for (const line of stripped.split(/\r?\n/)) {
+            const h = line.match(/^\s*##\s+(.+?)\s*$/);
+            if (h) { current = h[1].toLowerCase(); sections[current] = sections[current] || []; continue; }
+            if (current) sections[current].push(line);
+          }
+          const hasContent = (name) => {
+            const key = Object.keys(sections).find((k) => k.startsWith(name));
+            return key !== undefined && sections[key].some((l) => l.trim().length > 0);
+          };
+
+          const problems = [];
+          for (const req of ["what", "why", "testing"]) {
+            if (!hasContent(req)) problems.push(`Section "## ${req[0].toUpperCase() + req.slice(1)}" is missing or empty.`);
+          }
+          // The invariant checklist must survive (checkboxes may be unchecked or marked N/A).
+          if (!/^\s*-\s*\[[ xX]\]/m.test(stripped)) {
+            problems.push('The invariant checklist is missing (no "- [ ]" items found).');
+          }
+
+          // Build a PR comment. The marker line lets a later run find and update this
+          // same comment instead of posting a new one on every edit.
+          const marker = "<!-- pr-lint-report -->";
+          let report;
+          if (problems.length) {
+            report = [
+              marker,
+              "**PR lint failed: the description does not follow the template.**",
+              "",
+              ...problems.map((p) => "- " + p),
+              "",
+              "See `.github/pull_request_template.md`. Fill in the sections and keep the invariant checklist.",
+              "This check verifies presence, not truth: a reviewer still confirms the content is honest.",
+            ].join("\n");
+          } else {
+            report = marker + "\n**PR lint passed: the description follows the template.**";
+          }
+
+          const out = process.env.GITHUB_OUTPUT;
+          fs.appendFileSync(out, `status=${problems.length ? "fail" : "pass"}\n`);
+          fs.appendFileSync(out, `report<<PR_LINT_EOF\n${report}\nPR_LINT_EOF\n`);
+
+          if (problems.length) {
+            console.error("PR description does not follow the template:\n");
+            for (const p of problems) console.error("  - " + p);
+          } else {
+            console.log("PR description follows the template.");
+          }
+          EOF
+
+      - name: Post result as a comment
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+          REPORT: ${{ steps.check.outputs.report }}
+        run: |
+          marker='<!-- pr-lint-report -->'
+          # Reuse our own prior comment (found by the hidden marker) so edits update in place.
+          id=$(gh api "repos/$REPO/issues/$PR/comments" --paginate \
+                 --jq ".[] | select(.body | startswith(\"$marker\")) | .id" | head -n1)
+          if [ -n "$id" ]; then
+            gh api -X PATCH "repos/$REPO/issues/comments/$id" -f body="$REPORT" >/dev/null
+          else
+            gh api -X POST "repos/$REPO/issues/$PR/comments" -f body="$REPORT" >/dev/null
+          fi
+
+      - name: Fail if the description is incomplete
+        if: ${{ steps.check.outputs.status == 'fail' }}
+        run: exit 1

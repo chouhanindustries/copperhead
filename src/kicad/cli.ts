@@ -39,16 +39,27 @@ async function runCheck(
   const out = path.join(dir, `${kind}.json`);
   const sub = kind === 'erc' ? ['sch', 'erc'] : ['pcb', 'drc'];
   try {
-    await execa(
+    const res = await execa(
       'kicad-cli',
       [...sub, '--format', 'json', '--exit-code-violations', '--output', out, ...extraArgs, filePath],
       { reject: false },
-    ).then((res) => {
-      if (res.failed && (res as unknown as ExecaError).code === 'ENOENT') {
-        throw new KicadCliMissingError();
-      }
-    });
-    const raw = JSON.parse(await readFile(out, 'utf8'));
+    );
+    if (res.failed && (res as unknown as ExecaError).code === 'ENOENT') {
+      throw new KicadCliMissingError();
+    }
+    let raw: unknown;
+    try {
+      raw = JSON.parse(await readFile(out, 'utf8'));
+    } catch {
+      // No report on disk means kicad-cli bailed before checking — usually the
+      // design file itself failed to load (syntax/schema corruption). The
+      // raw readFile ENOENT told the agent nothing actionable; kicad-cli's
+      // own output at least names the failure.
+      const detail = [res.stderr, res.stdout].filter(Boolean).join('\n').trim();
+      throw new Error(
+        `kicad-cli ${kind} produced no report — the ${kind === 'erc' ? 'schematic' : 'board'} file likely fails to load in KiCad. kicad-cli output: ${detail || '(none)'}`,
+      );
+    }
     return normalizeReport(raw, kind);
   } finally {
     await rm(dir, { recursive: true, force: true });
@@ -57,6 +68,39 @@ async function runCheck(
 
 export function runErc(schPath: string): Promise<CheckReport> {
   return runCheck('erc', schPath);
+}
+
+/**
+ * Cheap loadability probe for a KiCad file: asks kicad-cli for a throwaway
+ * export and reports the failure text if the file won't load. Text edits on
+ * s-expression sources can silently corrupt the file; catching that at edit
+ * time (with KiCad's own error) beats an opaque failure at ERC/DRC time.
+ * Returns null when the file loads.
+ */
+/**
+ * Only schematics and boards have a cheap standalone load probe. Project
+ * files and symbol/footprint libraries do not: feeding them to a sch/pcb
+ * export "probe" would reject perfectly good files.
+ */
+export function isProbeableKicadFile(p: string): boolean {
+  return /\.kicad_(sch|pcb)$/.test(p);
+}
+
+export async function kicadLoadError(filePath: string): Promise<string | null> {
+  if (!isProbeableKicadFile(filePath)) return null;
+  const isSch = filePath.endsWith('.kicad_sch');
+  const dir = await mkdtemp(path.join(tmpdir(), 'copperhead-validate-'));
+  const args = isSch
+    ? ['sch', 'export', 'netlist', '--output', path.join(dir, 'probe.net'), filePath]
+    : ['pcb', 'export', 'pos', '--output', path.join(dir, 'probe.pos'), filePath];
+  try {
+    const res = await execa('kicad-cli', args, { reject: false });
+    if (res.failed && (res as unknown as ExecaError).code === 'ENOENT') throw new KicadCliMissingError();
+    if (res.exitCode === 0) return null;
+    return [res.stderr, res.stdout].filter(Boolean).join('\n').trim() || `kicad-cli exited ${res.exitCode}`;
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
 }
 
 export function runDrc(pcbPath: string): Promise<CheckReport> {

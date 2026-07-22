@@ -33,7 +33,11 @@ When a stage's `do`-loop run reaches its commit AND the stage's completion probe
 - **THEN** the `firmware` artifact hash changes and its consumers classify stale
 
 ### Requirement: Staleness classification
-At the start of every `create` invocation, each stage SHALL be classified from its completion record and the current working tree: **fresh** (record exists, the completion probe passes, all recorded input hashes match), **stale** (record exists, probe passes, at least one input hash differs — the differing artifact names retained), **incomplete** (the stage's completion probe fails, with or without a record), or **assumed-complete** (no record but the completion probe passes). A record SHALL never outrank a failing probe: a recorded stage whose probe fails is incomplete, not fresh. The completion probe is the stage table's existing `isComplete` check, called as-is. Assumed-complete stages SHALL NOT be auto-re-run on hash grounds.
+At the start of every `create` invocation, each stage SHALL be classified from its completion record and the current working tree: **stale** (record exists and at least one recorded input hash differs — the differing artifact names retained — regardless of the probe, because drift-aware probes fail precisely when an upstream artifact changed), **fresh** (record exists, all input hashes match, and the completion probe passes), **incomplete** (no record and the probe fails, or a record whose inputs all match but whose probe fails now — deleted work or stricter probes), or **assumed-complete** (no record but the completion probe passes). A record SHALL never make missing work fresh. The completion probe is the stage table's existing `isComplete` check, called as-is. Assumed-complete stages SHALL NOT be auto-re-run on hash grounds.
+
+#### Scenario: Changed inputs outrank a failing drift-aware probe
+- **WHEN** BOM.md is edited such that the schematic stage's drift-aware probe fails and the recorded `bom` input hash no longer matches
+- **THEN** the schematic stage classifies stale naming `bom` (not incomplete), keeping the reconciliation preamble and the `stale` trigger metadata
 
 #### Scenario: Deleting a completed stage's work reclassifies it incomplete
 - **WHEN** `docs/SUBSYSTEMS.md` is deleted after the architecture stage completed with a record

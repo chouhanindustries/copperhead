@@ -57,7 +57,7 @@ copperhead do "<change request>" [options]
 
 | Option | Description |
 | --- | --- |
-| `--model <model>` | `gpt-5`, `claude`, or a full model id. |
+| `--model <model>` | `codex`, `gpt-5`, `claude`, or a provider-specific model id. `codex` uses the saved local Codex login. |
 | `--max-turns <n>` | Turn budget for this run. Overrides `maxTurns` from config. |
 | `--allow-dirty` | Permit a dirty working tree. The snapshot is taken with `git stash create`. |
 | `--dry-run` | Propose the diff and write nothing. |
@@ -119,7 +119,7 @@ copperhead create --brief brief.md --dry-run        # classify stages, write not
 | Option | Description |
 | --- | --- |
 | `--brief <file>` | **Required.** The product brief, in markdown. |
-| `--model <model>` | `gpt-5` or `claude`. |
+| `--model <model>` | `codex`, `gpt-5`, or `claude`. |
 | `--interactive` | Re-enable the human gates: spec approval, a pause before export, and confirmation before stale stages reconcile. |
 | `--stage <name>` | Re-run exactly one stage against the existing artifacts (revise, not recreate), then reconcile every stage that consumes an output the re-run actually changed. Mutually exclusive with `--from`. |
 | `--from <name>` | Force-re-run the named stage and its graph descendants: the stages reachable through consumed artifacts, not simply every later stage. |
@@ -153,7 +153,7 @@ These are npm scripts in a copperhead checkout, not installed CLI commands.
 | `npm run demo:simple` | Runs the create pipeline against `examples/simple/usb-c-breakout.md` in `demo-runs/usb-c-breakout/`. See [Simple demo](/getting-started/demo/). |
 | `npm run docs:dev` | Serves this documentation locally. |
 | `npm run docs:build` | Builds the documentation site. |
-| `npm test` | Runs the vitest suite. LLM-touching tests skip without an API key. |
+| `npm test` | Runs the vitest suite. LLM-touching tests skip unless their provider is explicitly configured. |
 | `npm run typecheck` | Type-checks without emitting. |
 | `npm run build` | Compiles to `dist/`. |
 
