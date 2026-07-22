@@ -19,6 +19,7 @@ import {
   type ArtifactName,
   type StageClassification,
 } from '../memory/stagestate.js';
+import { emitCreateJlcpcbBom } from './export.js';
 
 /**
  * Mode A (`copperhead create`, SPEC §2.5): staged pipeline, each stage a
@@ -250,6 +251,18 @@ export function validateStageFlags(stage?: string, from?: string): void {
   }
 }
 
+/**
+ * Stage 6 emits the JLCPCB assembly BOM deterministically alongside the agent's
+ * outputs package (create-pipeline delta). Called whenever the outputs stage is
+ * confirmed complete — on the pass that finishes it and on any later resume — so
+ * the file tracks the current BOM.md.
+ */
+async function emitJlcpcbAfterOutputs(stageName: string, opts: CreateOptions): Promise<void> {
+  if (stageName !== 'outputs') return;
+  const out = await emitCreateJlcpcbBom(opts.repoRoot);
+  if (out) opts.log(`stage outputs: emitted ${out} (JLCPCB assembly BOM)`);
+}
+
 export async function runCreate(opts: CreateOptions): Promise<{ ok: boolean; completed: string[] }> {
   validateStageFlags(opts.stage, opts.from);
 
@@ -332,6 +345,7 @@ export async function runCreate(opts: CreateOptions): Promise<{ ok: boolean; com
       else if (c.status === 'assumed-complete') opts.log(`stage ${c.stage}: already complete (resuming past it)`);
       else continue;
       completed.push(c.stage);
+      await emitJlcpcbAfterOutputs(c.stage, opts);
     }
   }
 
@@ -352,6 +366,7 @@ export async function runCreate(opts: CreateOptions): Promise<{ ok: boolean; com
     if (!forced && cls.status === 'fresh') {
       opts.log(`stage ${name}: became fresh before running (inputs restored by an earlier stage); skipping`);
       completed.push(name);
+      await emitJlcpcbAfterOutputs(name, opts);
       continue;
     }
     const trigger: StageTrigger =
@@ -443,6 +458,7 @@ export async function runCreate(opts: CreateOptions): Promise<{ ok: boolean; com
     }
     ran.add(name);
     completed.push(name);
+    await emitJlcpcbAfterOutputs(name, opts);
 
     // Propagation: only outputs that actually changed invalidate consumers.
     const changed: ArtifactName[] = [];
