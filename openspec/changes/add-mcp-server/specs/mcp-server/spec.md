@@ -14,7 +14,7 @@
 - **THEN** no tool can mutate a repo file except by running the full gated `do`/`sync` pipeline
 
 ### Requirement: copperhead_check tool
-`copperhead_check` SHALL run the LLM-free `check` pipeline on the configured repo, accept optional boolean inputs `fab` and `strict`, and return the same structured report as `check --json`.
+`copperhead_check` SHALL run the LLM-free `check` pipeline on the configured repo and return the same structured report as `check --json`. To keep the tool surface honest (guarantees are enforced, never merely advertised), `copperhead_check` SHALL expose only inputs the underlying `check` command honors. It SHALL gain the `fab` and `strict` boolean inputs when `check` itself learns them (changes #9 fab gate and #41 strict sourcing), and not before.
 
 #### Scenario: Check over MCP matches CLI
 - **WHEN** `copperhead_check` runs on the fixture repo
