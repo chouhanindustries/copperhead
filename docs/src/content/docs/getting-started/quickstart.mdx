@@ -11,7 +11,7 @@ import { Steps } from '@astrojs/starlight/components';
 
 - Node.js >= 20
 - [KiCad](https://www.kicad.org/) >= 8, with `kicad-cli` on your `PATH`
-- Either an authenticated local Codex CLI, or an OpenAI/Anthropic API key supplied through the environment
+- One model backend: an authenticated local Codex CLI, a logged-in Claude Code (saved login, no API key), or an OpenAI/Anthropic API key supplied through the environment
 - A git repository (copperhead snapshots before it edits, and rolls back if verification fails)
 
 Check that KiCad's CLI is visible, since every command probes it before doing anything:
@@ -45,6 +45,16 @@ kicad-cli version
    ```bash
    export COPPERHEAD_CODEX_PATH="$(npm root -g)/@openai/codex/bin/codex.js"
    ```
+
+   To reuse a Claude subscription through your logged-in Claude Code, also without a model API key:
+
+   ```bash
+   claude setup-token                     # while logged into Claude Code
+   export CLAUDE_CODE_OAUTH_TOKEN=...      # the token it prints
+   export COPPERHEAD_MODEL=claude-code
+   ```
+
+   The Claude Agent SDK ships as an optional dependency, so a normal install includes it. See [Saved login (Claude Code)](/reference/configuration/#saved-login-claude-code).
 
    Or set a direct model API key. Keys are read from the environment only, never written to a config file, and redacted from transcripts.
 

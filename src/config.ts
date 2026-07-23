@@ -77,8 +77,12 @@ export interface ResolvedModel {
  * Accepted values (same set for `--model`, COPPERHEAD_MODEL, and `model` in
  * .copperhead/config.json):
  *
- * - `claude`  : the Anthropic provider on its default model.
- * - `claude-*`: any Anthropic model id, passed through verbatim, e.g.
+ * - `claude-code`     : the Claude Code saved-login provider on its default
+ *                       model. Needs NO API key — it reuses the logged-in Claude
+ *                       Code CLI / CLAUDE_CODE_OAUTH_TOKEN via the Agent SDK.
+ * - `claude-code:<id>`: the same provider on a specific model id.
+ * - `claude`  : the Anthropic API provider on its default model.
+ * - `claude-*`: any Anthropic API model id, passed through verbatim, e.g.
  *               `claude-opus-4-5`. Anything starting with `claude` routes here.
  * - `codex`   : the locally installed Codex CLI using its saved ChatGPT login.
  * - `codex:*` : Codex CLI with an explicit model id, e.g. `codex:gpt-5.6`.
@@ -87,10 +91,13 @@ export interface ResolvedModel {
  *               `gpt-5-mini` or `o3`.
  *
  * Routing is prefix-based, not a fixed list (see makeProvider in agent/loop.ts),
- * so a model released after this build still works without a code change. The
- * cost is that a typo like `claud-sonnet-5` silently routes to OpenAI and fails
- * there. Anthropic and direct OpenAI providers require their API keys; `codex`
- * instead requires a locally installed and authenticated Codex CLI.
+ * matched top to bottom: `claude-code`/`claude-code:<id>` is checked BEFORE the
+ * `claude*` prefix, so it is never captured by the Anthropic API route. A model
+ * released after this build still works without a code change. The cost is that
+ * a typo like `claud-sonnet-5` silently routes to OpenAI and fails there.
+ * Anthropic and direct OpenAI providers require their API keys; `codex` requires
+ * a locally installed and authenticated Codex CLI, and `claude-code` requires a
+ * Claude Code login (CLAUDE_CODE_OAUTH_TOKEN); neither needs a model API key.
  */
 export function resolveModel(flag: string | undefined, config: CopperheadConfig, env = process.env): ResolvedModel {
   if (flag) return { model: flag, source: 'flag' };

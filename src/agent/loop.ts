@@ -17,6 +17,7 @@ import { existsSync } from 'node:fs';
 import { OpenAIProvider } from './providers/openai.js';
 import { AnthropicProvider } from './providers/anthropic.js';
 import { CodexProvider } from './providers/codex.js';
+import { ClaudeCodeProvider } from './providers/claude-code.js';
 import { openSynapMemory, type RunRecord, type SynapMemory } from '../memory/synap.js';
 
 /** What the user sees at the moment they decide whether to keep going. */
@@ -82,6 +83,16 @@ export async function makeProvider(model: string): Promise<Provider> {
       }),
     });
   }
+  // Match claude-code before the `claude*` prefix: both `claude-code` and
+  // `claude-code:<id>` start with `claude` and would otherwise route to the
+  // Anthropic API provider.
+  if (model === 'claude-code' || model.startsWith('claude-code:')) {
+    const claudeCodeModel = model.startsWith('claude-code:') ? model.slice('claude-code:'.length) : undefined;
+    if (claudeCodeModel === '') {
+      throw new Error('claude-code model override cannot be empty; use "claude-code" or "claude-code:<model-id>"');
+    }
+    return new ClaudeCodeProvider(claudeCodeModel);
+  }
   if (model === 'claude' || model.startsWith('claude')) {
     return new AnthropicProvider(model === 'claude' ? undefined : model);
   }
@@ -89,6 +100,8 @@ export async function makeProvider(model: string): Promise<Provider> {
 }
 
 function otherProvider(current: Provider): Provider | null {
+  // Only the two keyed providers fail over to each other. A rate-limited
+  // 'claude-code' run returns null here (no silent fallback to a paid API).
   if (current.name === 'openai' && process.env.ANTHROPIC_API_KEY) return new AnthropicProvider();
   if (current.name === 'anthropic' && process.env.OPENAI_API_KEY) return new OpenAIProvider();
   return null;
