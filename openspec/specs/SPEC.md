@@ -92,7 +92,7 @@ copperhead/
 ├── docs/                   # this spec, architecture notes
 ├── package.json            # bin: { "copperhead": "dist/cli.js" }
 ├── tsconfig.json
-├── .env.example            # OPENAI_API_KEY= / ANTHROPIC_API_KEY=
+├── .env.example            # OPENAI_API_KEY= / ANTHROPIC_API_KEY= / CLAUDE_CODE_OAUTH_TOKEN=
 └── LICENSE                 # Apache-2.0
 ```
 
@@ -334,8 +334,9 @@ interface Provider {
 - `openai.ts`: GPT-5 via chat completions + tool calling (hackathon shared key)
 - `anthropic.ts`: Claude via messages API + tool use
 - `codex.ts`: locally installed Codex CLI via the official SDK and saved `codex login` authentication; Codex runs read-only and returns structured Copperhead tool requests
+- `claude-code.ts`: saved-login Claude Code via the Claude Agent SDK: a reasoning-only backend (no SDK tools, built-ins disabled, isolated cwd) mapped onto the single-turn `Provider` seam so the loop stays the driver. Selected by `--model claude-code` / `claude-code:<id>` (routed ahead of the `claude*` prefix); needs no `ANTHROPIC_API_KEY` (uses `CLAUDE_CODE_OAUTH_TOKEN` / the logged-in CLI); never falls back to a keyed provider. `@anthropic-ai/claude-agent-sdk` ships as an `optionalDependency` (its `@anthropic-ai/sdk >=0.93.0` peer is satisfied by copperhead's bumped core SDK), lazily imported and only loaded when `claude-code` is selected.
 - Selection: `--model` flag > `COPPERHEAD_MODEL` env > config.json > default (whichever key is present)
-- All configured providers must pass the same integration test on the fixture repo
+- All providers must pass the same integration test on the fixture repo
 
 ### 4.5 Budgets & failure modes
 
@@ -426,7 +427,8 @@ Format: Given / When / Then. "Fixture" = the open-telegraph repo (or the tiny te
 - **AC-3.7 (surgical edits)** For every run above: the `.kicad_sch` diff touches only the s-expressions relevant to the change — file not regenerated (assert: < 5% of lines changed for AC-3.1).
 - **AC-3.8 (dirty tree)** With uncommitted changes and no `--allow-dirty`: refuses to start.
 - **AC-3.9 (dry run)** `--dry-run` prints the proposed diff and writes nothing.
-- **AC-3.10 (provider parity)** AC-3.1 passes with `--model codex`, `--model gpt-5`, and `--model claude` when each provider is configured.
+- **AC-3.10 (provider parity)** AC-3.1 passes with `--model codex`, `--model gpt-5`, `--model claude`, and `--model claude-code` when each provider is configured.
+- **AC-3.11 (saved login)** With `--model claude-code`, a logged-in Claude Code (`CLAUDE_CODE_OAUTH_TOKEN` set) and **no** `ANTHROPIC_API_KEY`/`OPENAI_API_KEY`, a `do` run completes through the normal verify/commit path; copperhead reads no credential store; and no key material appears in the transcript, summary, or tree (AC-4.1 holds). A missing optional dependency or an unauthenticated install fails through the rollback path with an actionable error, not a raw stack trace.
 
 ### AC-4 · Safety
 
