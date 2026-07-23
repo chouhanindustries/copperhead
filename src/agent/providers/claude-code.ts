@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, rm, utimes } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import type { ChatOpts, Msg, Provider, ToolCall, ToolSchema, Turn } from '../types.js';
@@ -269,9 +269,17 @@ export class ClaudeCodeProvider implements Provider {
   /** One isolated scratch cwd per provider instance, created once and reused
    * across turns so a long run does not leak a temp dir per turn. Even with
    * tools disabled this guarantees the SDK has no path into the repo (D5). */
-  private ensureCwd(): Promise<string> {
+  private async ensureCwd(): Promise<string> {
     if (!this.cwdPromise) this.cwdPromise = mkdtemp(path.join(os.tmpdir(), 'copperhead-cc-'));
-    return this.cwdPromise;
+    const cwd = await this.cwdPromise;
+    // Keep this reused scratch dir's mtime fresh on every turn. It is the only
+    // long-lived temp dir a run holds (kicad-cli dirs are per-call), so a
+    // multi-hour run would otherwise leave it with a stale mtime and a concurrent
+    // run's startup sweep (sweepStaleTempDirs, age-gated) could delete it out from
+    // under the live process (F4). Best-effort: a touch failure is harmless.
+    const now = new Date();
+    await utimes(cwd, now, now).catch(() => {});
+    return cwd;
   }
 
   private async resolveQuery(): Promise<QueryLike> {

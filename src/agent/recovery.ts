@@ -43,6 +43,9 @@ export interface StageDiagnosis {
   reason: string;
   /** When retrying: concrete instructions to prepend to the next attempt. */
   guidance?: string;
+  /** Tokens the diagnosis call itself spent, so the pipeline can fold them into
+   *  the stage's cost total (F6). Absent when the call threw before a response. */
+  usage?: { inputTokens: number; outputTokens: number };
 }
 
 /** Extract the first brace-balanced JSON object from text, tolerating quoting and
@@ -152,7 +155,7 @@ export async function diagnoseStageFailure(
   ];
   try {
     const turn = await provider.chat(messages, []);
-    return parseDiagnosis(turn.text);
+    return { ...parseDiagnosis(turn.text), usage: turn.usage };
   } catch (e) {
     return { verdict: 'abort', reason: `diagnosis call failed: ${(e as Error).message}` };
   }

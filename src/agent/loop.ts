@@ -2,7 +2,7 @@ import path from 'node:path';
 import { readFile, writeFile } from 'node:fs/promises';
 import { execa } from 'execa';
 import type { Msg, Provider, Turn } from './types.js';
-import { TOOLS, dispatchTool, type RunContext } from './tools.js';
+import { availableTools, dispatchTool, type RunContext } from './tools.js';
 import { CachingProvider } from './response-cache.js';
 import { withTimeout, TurnTimeoutError } from './recovery.js';
 import { buildSystemPrompt } from './prompts.js';
@@ -215,7 +215,7 @@ async function runWithMemory(
   // already paid for instead of re-calling the model (repo-scoped, cross-run).
   // Skip an injected provider (tests drive scripted providers directly).
   if (config.llmCache && !opts.provider) {
-    provider = new CachingProvider(provider, path.join(repoRoot, CONFIG_DIR, 'llm-cache'), log);
+    provider = new CachingProvider(provider, path.join(repoRoot, CONFIG_DIR, 'llm-cache'), log, opts.model);
   }
   providers.add(provider);
   // Held separately from `provider` (which is reassigned on failover) so the
@@ -421,10 +421,15 @@ async function runWithMemory(
     // advertised, so it was treated as prose, executed nothing, and returned no
     // error. The model then "verified" against an unchanged file (an empty
     // schematic even passes ERC) and finished believing it had succeeded.
-    // Advertising all tools lets a propose→validate→edit batch work in one turn
-    // (validate flips editsUnlocked, the later edit dispatches) and turns a
-    // premature edit into an actionable "unlock first" error, not a silent no-op.
-    const tools = TOOLS.map((t) => t.schema);
+    // Structural lock (SPEC.md §1.3 invariant 1): the edit tools stay OUT of the
+    // advertised list until a proposal validates (`editsUnlocked`), so the model
+    // is gated by omission, not by prompt text. `dispatchTool` re-checks the same
+    // `availableTools(ctx)` live, so this is defense in depth. A premature edit is
+    // simply not offered; once `validate_change` unlocks, the next turn advertises
+    // the edit tools. (Earlier this advertised every tool to let a same-turn
+    // propose→validate→edit batch through, but that traded the spec's structural
+    // guarantee for one saved turn — not worth it.)
+    const tools = availableTools(ctx).map((t) => t.schema);
     r.turnStart(turn + 1, maxTurns, tokensIn, tokensOut);
     r.status('thinking');
     let res: Turn;

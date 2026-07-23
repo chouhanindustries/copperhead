@@ -4,7 +4,7 @@ import { readFile, mkdir, writeFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { loadConfig } from '../config.js';
 import { bootstrapKicadProject } from '../kicad/bootstrap.js';
-import { exportSvg } from '../kicad/cli.js';
+import { exportSvg, runErc } from '../kicad/cli.js';
 import { listSymbols } from '../kicad/sexp.js';
 import { isDirty, commitAll, changedFiles } from '../util/git.js';
 import type { CopperheadConfig } from '../config.js';
@@ -88,7 +88,16 @@ export const STAGES: Stage[] = [
       // BOM/PINOUT tables agree with them (drift-clean); anything less keeps
       // the stage active on the next resume so partial capture continues.
       if (!(await listSymbols(p)).length) return false;
-      return (await checkDrift(root, config.docs, config.schematic)).length === 0;
+      if ((await checkDrift(root, config.docs, config.schematic)).length !== 0) return false;
+      // ERC-clean is part of "done" (F2 / verification-gated-out on the resume
+      // path). Symbols + drift-clean can still hold on a schematic with
+      // unconnected pins — e.g. a run hard-killed mid-capture after BOM/PINOUT
+      // went clean but before ERC passed. Without this check, resume would treat
+      // it as complete and commitResumedStage would commit an ERC-failing
+      // schematic, advancing the pipeline against unverified work. Returning
+      // false here keeps the stage active so it re-runs, fixes ERC, and commits
+      // through the normal finish gate.
+      return (await runErc(p)).ok;
     },
     prompt: () =>
       'Stage 4: schematic. An empty KiCad project has already been scaffolded and wired into .copperhead/config.json (an empty schematic and a blank board with a default outline). Populate the existing schematic with edit_file — write_file refuses KiCad files, so add lib_symbols, symbols, and connectivity by anchored edits into the file that already exists. Work ONE part at a time, not in large blocks: add a symbol (its lib_symbols entry if new, then its placement), run run_erc, fix any violation, then move to the next part — small incremental edits keep a geometry or grid slip local instead of forcing a full-block rewrite. When you add a lib_symbols entry, use the exact canonical KiCad lib_id (e.g. Device:R, Connector:USB_C_Receptacle_USB2.0_16P) and reproduce the real part\'s pins faithfully — never invent pin numbers, names, or electrical types. Once symbols are placed, run verify_symbols and reconcile every divergence it reports (a wrong lib_id or pin set passes ERC but is still wrong); if it flags a renamed symbol, adopt the real name it suggests. Build subsystem by subsystem from BOM.md and SUBSYSTEMS.md. Same net names and refdes everywhere. Two KiCad rules the pipeline has repeatedly tripped on: (1) a net label placed on a pin only NAMES the net — it is NOT an electrical connection unless a wire actually reaches the pin; ERC will report the pin unconnected until you draw the wire. (2) Place every symbol origin and every wire endpoint on the 1.27mm (50mil) grid; an off-grid pin silently fails to connect and costs turns to diagnose. Update PINOUT.md as you assign pins; check the strapping table first.',
@@ -162,9 +171,14 @@ const KICAD_STAGES = new Set(['schematic', 'layout-draft', 'outputs']);
  *  whether a resumed stage's uncommitted work is safe to auto-commit (2.4): only
  *  when the ENTIRE dirty set is copperhead's, never sweeping up a user's own WIP. */
 function isManagedPath(f: string, config: CopperheadConfig): boolean {
+  // config.docs defaults to `docs/` (trailing slash), so normalize before
+  // building the prefix — otherwise the check becomes `startsWith('docs//')` and
+  // every doc reads as foreign, making commitResumedStage never commit its own
+  // work (it always bails as "non-copperhead changes").
+  const docsDir = config.docs.replace(/\/+$/, '');
   return (
-    f === config.docs ||
-    f.startsWith(`${config.docs}/`) ||
+    f === docsDir ||
+    f.startsWith(`${docsDir}/`) ||
     f.startsWith('.copperhead/') ||
     f.startsWith('openspec/') ||
     f.startsWith('outputs/') ||
@@ -302,7 +316,9 @@ function resumeCommand(opts: CreateOptions): string {
   const parts = ['copperhead'];
   const repo = path.resolve(opts.repoRoot);
   if (repo !== process.cwd()) parts.push('--repo', shellQuote(repo));
-  parts.push('create', '--brief', shellQuote(opts.briefPath), '--model', shellQuote(opts.model));
+  // Absolute --brief so the command resolves the same from any cwd; a relative
+  // path would break when resumed from a different directory (F6).
+  parts.push('create', '--brief', shellQuote(path.resolve(opts.briefPath)), '--model', shellQuote(opts.model));
   if (opts.interactive) parts.push('--interactive');
   return parts.join(' ');
 }
@@ -635,6 +651,11 @@ export async function runCreate(opts: CreateOptions): Promise<{ ok: boolean; com
         attempt,
         maxAttempts: config.maxStageRetries + 1,
       });
+      // Fold the diagnosis call's own tokens into the stage cost (F6): it is a
+      // real model call made on behalf of this stage, so the cost table should
+      // not under-report by omitting it.
+      cost.tokensIn += diagnosis.usage?.inputTokens ?? 0;
+      cost.tokensOut += diagnosis.usage?.outputTokens ?? 0;
       opts.log(`stage ${stage.name}: diagnosis → ${diagnosis.verdict} — ${diagnosis.reason}`);
       if (diagnosis.verdict === 'abort') {
         opts.log(`stage ${stage.name}: recovery supervisor recommends stopping for a human.`);

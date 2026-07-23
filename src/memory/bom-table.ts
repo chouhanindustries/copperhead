@@ -120,7 +120,7 @@ export interface TableRow {
     }
     return out;
   }
-  
+
   /**
    * Fold the semantically-identical encodings that the model and KiCad render
    * differently, so a value that differs only in *encoding* is not flagged as
@@ -153,6 +153,17 @@ export interface TableRow {
    */
   export function normalizeValue(s: string | undefined): string {
     return foldEncodings(s).replace(/\s+/g, '').toLowerCase();
+  }
+
+  /**
+   * Footprint equality key: like `normalizeValue` but WITHOUT case-folding (F6).
+   * A footprint is a KiCad library reference (`Resistor_SMD:R_0603_1608Metric`)
+   * whose casing is significant — `R_0603` and `r_0603` are not the same library
+   * id — so lowercasing it would hide a real footprint difference. Encoding and
+   * spacing are still folded (a stray space or unicode variant is not real drift).
+   */
+  export function normalizeFootprint(s: string | undefined): string {
+    return foldEncodings(s).replace(/\s+/g, '');
   }
 
   /**

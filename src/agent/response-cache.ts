@@ -32,13 +32,17 @@ export class CachingProvider implements Provider {
     private readonly inner: Provider,
     private readonly dir: string,
     private readonly log?: (s: string) => void,
+    /** The concrete model id this run resolved to (e.g. `claude-code:opus`), used
+     *  in the cache key so switching model on the same repo does not replay the
+     *  other model's cached turns (F6). Falls back to the provider family name. */
+    private readonly modelId?: string,
   ) {
     this.name = inner.name;
   }
 
   private keyFor(messages: Msg[], tools: ToolSchema[]): string {
     return createHash('sha256')
-      .update(JSON.stringify({ model: this.name, messages, tools: tools.map((t) => t.name) }))
+      .update(JSON.stringify({ model: this.modelId ?? this.name, messages, tools: tools.map((t) => t.name) }))
       .digest('hex');
   }
 

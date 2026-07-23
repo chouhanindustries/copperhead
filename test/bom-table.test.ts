@@ -6,6 +6,7 @@ import {
   parseCanonicalRows,
   parsePinoutRows,
   normalizeValue,
+  normalizeFootprint,
   pinoutColumnReport,
 } from '../src/memory/bom-table.js';
 
@@ -219,6 +220,17 @@ describe('normalizeValue (#I11 — semantic value equality, not byte-exact)', ()
   it('still flags a genuinely different value', () => {
     expect(eq('10k', '4k7')).toBe(false);
     expect(eq('Ihold≥3A', 'Ihold≥5A')).toBe(false);
+  });
+});
+
+describe('normalizeFootprint (F6 — encoding/space folded, case preserved)', () => {
+  const eq = (a: string, b: string): boolean => normalizeFootprint(a) === normalizeFootprint(b);
+
+  it('folds spacing but is case-sensitive (a footprint library id is case-significant)', () => {
+    expect(eq('Resistor_SMD:R_0603_1608Metric', 'Resistor_SMD:R_0603_1608Metric ')).toBe(true);
+    // Unlike normalizeValue, case differences are NOT folded away.
+    expect(eq('Resistor_SMD:R_0603', 'resistor_smd:r_0603')).toBe(false);
+    expect(normalizeValue('Resistor_SMD:R_0603')).toBe(normalizeValue('resistor_smd:r_0603'));
   });
 });
 

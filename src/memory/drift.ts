@@ -2,7 +2,14 @@ import { readFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { listSymbols, pinNets, type SchematicSymbol } from '../kicad/sexp.js';
-import { parseCanonicalRows, parsePinoutRows, pinoutColumnReport, normalizeValue } from './bom-table.js';
+import {
+  parseCanonicalRows,
+  parseBomTable,
+  parsePinoutRows,
+  pinoutColumnReport,
+  normalizeValue,
+  normalizeFootprint,
+} from './bom-table.js';
 
 /**
  * Doc-vs-schematic drift check (AC-2.3). BOM.md and PINOUT.md use fixed table
@@ -53,10 +60,11 @@ export async function checkDrift(repoRoot: string, docsDir: string, schematic: s
 
   const bomPath = path.join(repoRoot, docsDir, 'BOM.md');
   if (existsSync(bomPath)) {
-    const rows = parseCanonicalRows(await readFile(bomPath, 'utf8'));
+    // Resolve BOM columns by header name via the shared parseBomTable (F5), so
+    // the drift reader and `export bom` never disagree on a reordered table.
+    const rows = parseBomTable(await readFile(bomPath, 'utf8'));
     const seen = new Set<string>();
-    for (const row of rows) {
-      const [ref, value, footprint] = row.cells;
+    for (const { refdes: ref, value, footprint } of rows) {
       if (!ref) continue;
       seen.add(ref);
       const sym = byRef.get(ref);
@@ -70,10 +78,11 @@ export async function checkDrift(repoRoot: string, docsDir: string, schematic: s
       if (value !== undefined && normalizeValue(value) !== normalizeValue(sym.value)) {
         mismatches.push({ doc: 'BOM.md', claim: `${ref} value ${value}`, actual: `${ref} value ${sym.value}` });
       }
+      // Footprint compare folds encoding/spacing but keeps case (F6): a footprint
+      // library id is case-sensitive, so lowercasing would hide a real mismatch.
       if (
         footprint !== undefined &&
-        footprint !== '' &&
-        normalizeValue(footprint) !== normalizeValue(sym.footprint)
+        normalizeFootprint(footprint) !== normalizeFootprint(sym.footprint)
       ) {
         mismatches.push({
           doc: 'BOM.md',

@@ -67,9 +67,13 @@ export async function pruneHistoryDir(repoRoot: string, keepNewest = DEFAULT_HIS
  */
 export const TEMP_PREFIX = 'copperhead-';
 
-/** Default staleness cutoff for the startup sweep: 2h. Long enough that no live
- * run's scratch dir is ever in scope (a run is minutes, not hours), short enough
- * that a crashed run's leak is reclaimed on the very next invocation. */
+/** Default staleness cutoff for the startup sweep: 2h. Safe even for multi-hour
+ * runs (10-min turns × per-stage retries × 8 stages): a live run's only
+ * long-lived scratch dir is the provider's reused cwd, which is `utimes`-touched
+ * every turn (ClaudeCodeProvider.ensureCwd), so its mtime never goes stale while
+ * the process is alive; per-call kicad-cli dirs are removed within a turn. A dir
+ * older than this therefore belongs to a dead run, and the window is short enough
+ * that such a leak is reclaimed on the very next invocation. */
 export const DEFAULT_STALE_MS = 2 * 60 * 60 * 1000;
 
 /**

@@ -125,15 +125,21 @@ with the model convinced each time that it had succeeded.
    `check_drift` treats an empty sheet as bootstrap (clean). So every gate the
    model checked said "good", giving it no signal that nothing was captured.
 
-**Fix:** advertise every tool each turn (`loop.ts` now maps `TOOLS`, not
-`availableTools(ctx)`), keeping `dispatchTool` as the live unlock gate. A
-`propose→validate→edit` batch in one reply now works end to end (fewer turns —
-an efficiency win too), and a premature edit returns an actionable "unlock
-first" error instead of vanishing. `edit_file`/`write_file` descriptions now
-state the proposal requirement so the model orders the batch correctly. Full
-suite green (228). Secondary (not yet fixed): `run_erc` reporting "clean" on a
-zero-symbol schematic is misleading — a zero-symbol warning would harden the
-gate against any future silent-drop.
+**Fix:** the durable half is the stage contract: schematic `isComplete` now
+requires symbols > 0 (and, per Issue 18 below, ERC-clean), so an empty sheet can
+never be a false green regardless of a dropped edit. The `edit_file`/`write_file`
+descriptions state the proposal requirement so the model orders the
+`propose→validate→edit` sequence correctly.
+
+Superseded detail: this issue originally *also* advertised every tool each turn
+(`loop.ts` mapped `TOOLS`, not `availableTools(ctx)`) so a same-turn
+`propose→validate→edit` batch would dispatch in one turn. That was reverted
+(Issue 19 / review F1): SPEC.md §1.3 invariant 1 requires the edit tools to be
+**structurally absent from the advertised list** until a proposal validates, not
+merely gated at dispatch. The loop again advertises `availableTools(ctx)`; the
+model calls `propose`+`validate` in one turn and edits in the next (one extra
+turn, but the spec's structural guarantee is kept). `dispatchTool` remains the
+live gate as defense in depth.
 
 **Status:** fixed (primary). Confirmed live — the schematic populates (symbols
 appear, ERC runs clean on real content) instead of finishing empty.
@@ -451,3 +457,75 @@ probe call, since turns are the scarce resource (1.4).
 **Status:** implemented (opt-in).
 
 ---
+
+## Review response (PR #64)
+
+The automated `/pr-review` pass flagged findings F1 to F6. Resolutions:
+
+## Issue 18 — resume could commit an ERC-unverified schematic (review F2)
+
+**Symptom:** schematic `isComplete` judged completion by *symbols exist* +
+*BOM/PINOUT drift-clean*, never ERC. A run hard-killed after symbols were placed
+and drift went clean, but while ERC was still failing (unconnected pins
+mid-capture), would on resume be treated as complete: `commitResumedStage` then
+committed the ERC-failing schematic and the pipeline advanced to layout against
+unverified work, bypassing the verification-gated-out invariant on the resume
+path.
+
+**Fix:** schematic `isComplete` ([create.ts](src/commands/create.ts)) now also
+requires `runErc(schematic).ok`. An ERC-failing schematic is no longer
+"complete", so the stage stays active and re-runs to fix ERC and commit through
+the normal finish gate; `commitResumedStage` only ever commits ERC-clean work.
+
+**Status:** fixed.
+
+## Issue 19 — edit tools were advertised every turn, weakening the structural lock (review F1)
+
+**Symptom:** the loop advertised every tool each turn (Issue 4's original
+change), gating `edit_file`/`write_file` only at dispatch. SPEC.md §1.3 invariant
+1 requires them to be **structurally absent from the advertised list** until a
+proposal validates. The security property held (dispatch still refused a locked
+edit) but the spec's mandated mechanism did not, and the PR's invariant checklist
+misreported the gating as unchanged.
+
+**Fix:** the loop again advertises `availableTools(ctx)`
+([loop.ts](src/agent/loop.ts)), so the edit tools are omitted from the list until
+`editsUnlocked`; `dispatchTool` stays the live gate as defense in depth. The
+model calls `propose`+`validate` in one turn and edits in the next (one extra
+turn, spec-intended). Consistent with the existing `gating-sync` test.
+
+**Status:** fixed (structural lock restored).
+
+## Issue 20 — resume-commit never committed its own work, and the retry/resume paths were untested (review F3, F4, F5, F6)
+
+**F3 (tests + a latent bug):** the retry, resume-commit, and foreign-bail
+branches had no coverage. Adding a scripted-provider test
+(`test/create-resilience.test.ts`) surfaced a real bug: `config.docs` defaults to
+`docs/` (trailing slash), so `isManagedPath` built the prefix `docs//` and read
+**every doc as foreign** — meaning `commitResumedStage` always bailed and never
+committed its own work. Fixed by normalizing the trailing slash
+([create.ts](src/commands/create.ts)). Tests now drive one retry-to-success (with
+guidance prepended and cost accumulated across attempts) and both
+`commitResumedStage` branches (managed-only commit, foreign bail-out).
+
+**F4:** `sweepStaleTempDirs`' 2h age cutoff could delete a live concurrent run's
+reused provider cwd once a run ran past 2h. The provider cwd is now
+`utimes`-touched every turn ([claude-code.ts](src/agent/providers/claude-code.ts)),
+so an active run's only long-lived temp dir never goes stale; per-call kicad-cli
+dirs are short-lived. Comment in [tmp.ts](src/util/tmp.ts) updated.
+
+**F5:** the drift BOM read was positional while `parseBomTable` resolved by header
+name. Drift now routes through `parseBomTable`
+([drift.ts](src/memory/drift.ts)), so the two readers agree on a reordered table.
+
+**F6:** footprint drift compare no longer lowercases (a footprint library id is
+case-significant) via a new `normalizeFootprint`
+([bom-table.ts](src/memory/bom-table.ts)); the response cache key includes the
+resolved model id so switching model does not replay another model's turns
+([response-cache.ts](src/agent/response-cache.ts)); the diagnosis call's tokens
+are folded into the stage cost total ([create.ts](src/commands/create.ts)); and
+the printed resume command uses an absolute `--brief` path.
+
+**Status:** all fixed. Pre-existing follow-up noted by the reviewer (rollback's
+`git clean -fd` can delete untracked user files) is out of scope here and left for
+a dedicated change.
