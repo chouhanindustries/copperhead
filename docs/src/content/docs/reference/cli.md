@@ -111,32 +111,38 @@ The full pipeline from a product brief to the output package.
 
 ```bash
 copperhead create --brief brief.md [--model <model>] [--interactive]
+copperhead create --brief brief.md --stage <name>   # re-run one stage, propagate real changes
+copperhead create --brief brief.md --from <name>    # re-run a stage and everything downstream
+copperhead create --brief brief.md --dry-run        # classify stages, write nothing
 ```
 
 | Option | Description |
 | --- | --- |
 | `--brief <file>` | **Required.** The product brief, in markdown. |
 | `--model <model>` | `codex`, `gpt-5`, `claude`, or `claude-code` (saved-login Claude Code, no `ANTHROPIC_API_KEY`). |
-| `--interactive` | Re-enable the human gates: spec approval, and a pause before export. |
+| `--interactive` | Re-enable the human gates: spec approval, a pause before export, and confirmation before stale stages reconcile. |
+| `--stage <name>` | Re-run exactly one stage against the existing artifacts (revise, not recreate), then reconcile every stage that consumes an output the re-run actually changed. Mutually exclusive with `--from`. |
+| `--from <name>` | Force-re-run the named stage and its graph descendants: the stages reachable through consumed artifacts, not simply every later stage. |
+| `--dry-run` | Print each stage's classification (`fresh`, `stale` with the changed artifacts, `incomplete`, `assumed-complete`) and what the invocation would run, then exit without writing. |
 
-Exits 1 if any stage fails to complete, 0 when the pipeline finishes.
+Exits 1 if any stage fails to complete, 0 when the pipeline finishes. Unknown stage names exit 1 and list the valid ones.
 
 ### Pipeline stages
 
-Each stage is a full `do` loop with its own prompt and gate. Stage completion is inferred from repo state, so the pipeline is resumable: rerun the same command after a failure and it skips what is done and resumes at the first incomplete stage.
+Each stage is a full `do` loop with its own prompt and gate, and declares which artifacts it consumes and produces, so the stage dependency graph is data. When a stage completes, its commit records content hashes of those artifacts in `.copperhead/create-state.json`; a stage whose recorded inputs no longer match the working tree is *stale*. A plain `create` run re-runs stale and incomplete stages and skips fresh ones, so the pipeline is resumable and self-healing: rerun the same command after a failure, or after any edit that touched a stage's inputs, and exactly the affected stages run again.
 
-| # | Stage | Produces |
-| --- | --- | --- |
-| 1 | `spec` | `docs/SPEC.md`, plus every budget recorded as a constraint |
-| 2 | `architecture` | `docs/SUBSYSTEMS.md` |
-| 3 | `parts` | `docs/BOM.md`, MPNs flagged `UNVERIFIED` |
-| 4 | `schematic` | The `.kicad_sch`, ERC clean after each sheet |
-| 5 | `layout` | Draft placement and critical routing, DRC clean, plus a `## Draft quality` section in `LAYOUT.md` |
-| 6 | `outputs` | `outputs/`: gerbers, drill, DXF, STEP, SVG, `BOM.csv` |
-| 7 | `firmware` | `firmware/` scaffold, `pins.h` generated from `PINOUT.md` |
-| 8 | `devplan` | `docs/DEVPLAN.md` |
+| # | Stage | Consumes | Produces |
+| --- | --- | --- | --- |
+| 1 | `spec-seed` | the brief | `docs/SPEC.md`, plus every budget recorded as a constraint |
+| 2 | `architecture` | spec | `docs/SUBSYSTEMS.md` |
+| 3 | `part-selection` | spec, subsystems | `docs/BOM.md`, MPNs flagged `UNVERIFIED` |
+| 4 | `schematic` | bom, subsystems | The `.kicad_sch` (ERC clean after each sheet) and `docs/PINOUT.md` |
+| 5 | `layout-draft` | schematic | The `.kicad_pcb` (DRC clean) plus a `## Draft quality` section in `LAYOUT.md` |
+| 6 | `outputs` | board, bom | `outputs/`: gerbers, drill, DXF, STEP, SVG, `BOM.csv` |
+| 7 | `firmware` | pinout | `firmware/` scaffold, `pins.h` generated from `PINOUT.md` |
+| 8 | `devplan` | schematic, firmware, layout intent | `docs/DEVPLAN.md` |
 
-Stages build on each other's uncommitted state, so `create` runs them as if `--allow-dirty` were set.
+Use these stage names with `--stage` and `--from`. Stages build on each other's uncommitted state, so `create` runs them as if `--allow-dirty` were set.
 
 ## Repo scripts
 

@@ -7,13 +7,26 @@ import { kicadCliVersion } from '../kicad/cli.js';
 import { branchName, headCommit, uncommittedCount } from '../util/git.js';
 import type { CopperheadConfig, ModelSource } from '../config.js';
 
+/** Why a `create` stage ran (change rerun-create-stages). */
+export type StageTrigger = 'initial' | 'requested' | 'from' | 'stale';
+
+export interface StageMeta {
+  name: string;
+  index: number;
+  total: number;
+  /** Absent on runs predating stage re-runs; `initial` = first-time run. */
+  trigger?: StageTrigger;
+  /** Upstream artifacts whose hash changed — set when trigger is `stale`. */
+  changedInputs?: string[];
+}
+
 /** Caller-supplied run identity: facts the loop cannot probe for itself. */
 export interface RunMetaInput {
   command?: 'do' | 'create' | 'sync';
   modelSource?: ModelSource;
   version?: string;
   kicadCliVersion?: string;
-  stage?: { name: string; index: number; total: number };
+  stage?: StageMeta;
   brief?: { path: string; sha256: string };
 }
 
@@ -31,7 +44,7 @@ export interface RunMeta {
   startedAt: string;
   command: 'do' | 'create' | 'sync' | null;
   interactive: boolean;
-  stage: { name: string; index: number; total: number } | null;
+  stage: StageMeta | null;
   brief: { path: string; sha256: string } | null;
   versions: {
     copperhead: string | null;
@@ -150,6 +163,15 @@ export async function collectRunMeta(opts: CollectRunMetaOptions): Promise<RunMe
 
 const unk = (v: string | null | undefined): string => v ?? 'unknown';
 
+/** `schematic (4/8)`, or with a re-run story: `schematic (4/8, stale: bom)`. */
+function stageLabel(s: StageMeta): string {
+  const rerun =
+    s.trigger && s.trigger !== 'initial'
+      ? `, ${s.trigger}${s.changedInputs?.length ? `: ${s.changedInputs.join(', ')}` : ''}`
+      : '';
+  return `${s.name} (${s.index}/${s.total}${rerun})`;
+}
+
 /** ≤ 2 lines, printed before the first turn (AC-8.4). */
 export function renderCliHeader(meta: RunMeta): string[] {
   const v = meta.versions;
@@ -169,7 +191,7 @@ export function renderCliHeader(meta: RunMeta): string[] {
   const line2 = [
     `run ${meta.runId}`,
     unk(meta.command),
-    ...(meta.stage ? [`stage ${meta.stage.name} (${meta.stage.index}/${meta.stage.total})`] : []),
+    ...(meta.stage ? [`stage ${stageLabel(meta.stage)}`] : []),
     `model ${meta.model} (${meta.provider}, via ${unk(meta.modelSource)})`,
     `turns ≤${meta.config.maxTurns}`,
     `repo ${unk(meta.git.branch)}@${meta.git.commit?.slice(0, 7) ?? 'unknown'} ${repoState}`,
@@ -186,7 +208,7 @@ export function renderEnvironmentSection(meta: RunMeta): string[] {
     `## Environment`,
     ``,
     `- **Run:** ${meta.runId} · ${unk(meta.command)} · started ${meta.startedAt} · ${meta.interactive ? 'interactive' : 'autonomous'}`,
-    ...(meta.stage ? [`- **Stage:** ${meta.stage.name} (${meta.stage.index}/${meta.stage.total})`] : []),
+    ...(meta.stage ? [`- **Stage:** ${stageLabel(meta.stage)}`] : []),
     ...(meta.brief ? [`- **Brief:** ${meta.brief.path} (sha256 ${meta.brief.sha256.slice(0, 12)}…)`] : []),
     `- **Model:** ${meta.model} (${meta.provider}, via ${unk(meta.modelSource)})`,
     `- **copperhead:** v${unk(v.copperhead)}${v.installPath ? ` at ${v.installPath}` : ''}`,
