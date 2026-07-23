@@ -20,3 +20,18 @@ export function formatPreflightFailure(reason: string, why: string, remedy: stri
   const steps = remedy.map((step, i) => `  ${i + 1}. ${step}`);
   return [reason, '', `why it failed: ${why}`, 'to fix:', ...steps].join('\n');
 }
+
+export function isNotFoundError(err: any): boolean {
+  if (!err) return false;
+  if (err.code === 'ENOENT') return true;
+  if (process.platform === 'win32') {
+    const msg = String(err.stderr || err.message || '');
+    if (err.exitCode === 1 || err.exitCode === 9009) {
+      return (
+        msg.includes('is not recognized') ||
+        msg.includes('cannot find the path specified')
+      );
+    }
+  }
+  return false;
+}

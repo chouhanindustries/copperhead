@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { readFile, writeFile, appendFile, readdir, stat } from 'node:fs/promises';
+import { readFile, writeFile, appendFile, readdir, lstat } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import path from 'node:path';
 import { execa } from 'execa';
@@ -163,7 +163,8 @@ async function scanTreeForSecret(dir: string, pattern: RegExp, root = dir): Prom
       if (skip.has(entry)) continue;
       const abs = path.join(current, entry);
       const rel = path.relative(root, abs);
-      const st = await stat(abs);
+      const st = await lstat(abs);
+      if (st.isSymbolicLink()) continue;
       if (st.isDirectory()) {
         await walk(abs);
       } else {
