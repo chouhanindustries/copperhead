@@ -3,7 +3,7 @@
 ## ADDED Requirements
 
 ### Requirement: Simulation opt-in via SUBSYSTEMS.md
-A subsystem SHALL be flagged for SPICE verification by a `## Simulation` block in SUBSYSTEMS.md. The line-oriented block SHALL contain one `scope: sheet <path>` or `scope: nets <net>, <net>` field, one `analysis: op|dc|ac|tran` field, optional repeated `source: <port>=<number>` lines for driven ports, and one or more `assert: <assertion>` lines. The `sources` field name SHALL be accepted as an alias for `source`. A scope that references sheets or nets absent from the schematic SHALL be reported as a failure by `check`.
+A subsystem SHALL be flagged for SPICE verification by a `## Simulation` block in SUBSYSTEMS.md. The line-oriented block SHALL contain one `scope: sheet <path>` or `scope: nets <net>, <net>` field, one `analysis: op|dc|ac|tran` field, optional repeated `source: <port>=<number>` lines for driven ports, and one or more `assert: <assertion>` lines. The `sources` field name SHALL be accepted as an alias for `source`. Fenced code examples and non-field narrative lines SHALL NOT be parsed as live Simulation input. A scope that references sheets or nets absent from the schematic SHALL be reported as a failure by `check`.
 
 #### Scenario: Flagged subsystem is picked up
 - **WHEN** SUBSYSTEMS.md contains a `## Simulation` block scoped to the divider sheet with an `op` analysis
@@ -14,7 +14,7 @@ A subsystem SHALL be flagged for SPICE verification by a `## Simulation` block i
 - **THEN** `check` exits non-zero naming the block and the missing net
 
 ### Requirement: Assertion grammar
-Assertions SHALL use the closed grammar: measurables `V(<net>)`, `I(<refdes>)`, and `corner(<net>)`; comparators `between <a> and <b>`, `< <x>`, `> <x>`; numbers with SI suffixes. The gate SHALL compile assertions to ngspice `.meas` directives and SHALL reject any other syntax with a parse error naming the line. Raw ngspice control blocks SHALL NOT be accepted.
+Assertions SHALL use the closed grammar: measurables `V(<net>)`, `I(<refdes>)`, and `corner(<net>)`; comparators `between <a> and <b>`, `< <x>`, `> <x>`; numbers with SI suffixes. Both `between` bounds SHALL omit units or use the same unit, compared case-insensitively. The gate SHALL compile assertions to ngspice `.meas` directives and SHALL reject any other syntax with a parse error naming the line. Raw ngspice control blocks SHALL NOT be accepted.
 
 #### Scenario: Valid assertion compiles
 - **WHEN** a block contains `V(VREF) between 3.25 and 3.35`

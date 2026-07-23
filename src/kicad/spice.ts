@@ -98,10 +98,8 @@ export function parseSpiceNumber(raw: string, line = 1): SpiceNumber {
 
   const base = Number(match[1]);
   const suffix = (match[2] ?? '').toLowerCase();
-  const multiplier = SI_MULTIPLIERS[suffix];
-  if (multiplier === undefined) {
-    throw new SimulationParseError(line, `unsupported SI suffix in "${raw}"`);
-  }
+  // The regex limits suffixes to keys in SI_MULTIPLIERS.
+  const multiplier = SI_MULTIPLIERS[suffix]!;
 
   const value = base * multiplier;
   if (!Number.isFinite(value)) {
@@ -143,11 +141,7 @@ export function parseSpiceAssertion(raw: string, line = 1): SimulationAssertion 
   if (betweenMatch) {
     const lower = parseSpiceNumber(betweenMatch[1]!, line);
     const upper = parseSpiceNumber(betweenMatch[2]!, line);
-    if (
-      lower.unit.length > 0 &&
-      upper.unit.length > 0 &&
-      lower.unit.toLowerCase() !== upper.unit.toLowerCase()
-    ) {
+    if (lower.unit.toLowerCase() !== upper.unit.toLowerCase()) {
       throw new SimulationParseError(line, 'between bounds use different units');
     }
     if (lower.value >= upper.value) {
@@ -177,29 +171,61 @@ export function parseSpiceAssertion(raw: string, line = 1): SimulationAssertion 
 export function parseSimulationBlocks(markdown: string): SimulationBlock[] {
   const lines = markdown.split(/\r?\n/);
   const blocks: SimulationBlock[] = [];
+  let openFence: string | null = null;
+  let inDocumentComment = false;
 
   for (let index = 0; index < lines.length; index++) {
-    if (!/^##\s+Simulation\s*$/i.test(lines[index]!.trim())) continue;
+    const line = lines[index]!.trim();
+    const fence = markdownFence(line);
+    if (openFence) {
+      if (fence) openFence = toggleFence(openFence, fence);
+      continue;
+    }
+    if (inDocumentComment) {
+      if (line.includes('-->')) inDocumentComment = false;
+      continue;
+    }
+    if (fence) {
+      openFence = fence;
+      continue;
+    }
+    if (line.startsWith('<!--')) {
+      if (!line.includes('-->')) inDocumentComment = true;
+      continue;
+    }
+    if (!/^##\s+Simulation\s*$/i.test(line)) continue;
 
     const headingLine = index + 1;
     const body: Array<{ text: string; line: number }> = [];
     let cursor = index + 1;
     let inComment = false;
+    let bodyFence: string | null = null;
 
     for (; cursor < lines.length; cursor++) {
       const text = lines[cursor]!;
-      if (/^#{1,2}\s+/.test(text.trim())) break;
-
       const trimmed = text.trim();
+      const bodyFenceMarker = markdownFence(trimmed);
+      if (bodyFence) {
+        if (bodyFenceMarker) bodyFence = toggleFence(bodyFence, bodyFenceMarker);
+        continue;
+      }
       if (inComment) {
         if (trimmed.includes('-->')) inComment = false;
         continue;
       }
+      if (bodyFenceMarker) {
+        bodyFence = bodyFenceMarker;
+        continue;
+      }
+      if (/^#{1,6}\s+/.test(trimmed)) break;
+
       if (trimmed.startsWith('<!--')) {
         if (!trimmed.includes('-->')) inComment = true;
         continue;
       }
-      if (trimmed.length > 0) body.push({ text: trimmed, line: cursor + 1 });
+      if (trimmed.startsWith('.') || /^[A-Za-z]+\s*:/.test(trimmed)) {
+        body.push({ text: trimmed, line: cursor + 1 });
+      }
     }
 
     blocks.push(parseSimulationBlock(body, headingLine));
@@ -207,6 +233,16 @@ export function parseSimulationBlocks(markdown: string): SimulationBlock[] {
   }
 
   return blocks;
+}
+
+function markdownFence(line: string): string | null {
+  return /^(`{3,}|~{3,})/.exec(line)?.[1] ?? null;
+}
+
+function toggleFence(openFence: string | null, marker: string): string | null {
+  if (!openFence) return marker;
+  if (marker[0] === openFence[0] && marker.length >= openFence.length) return null;
+  return openFence;
 }
 
 function parseSimulationBlock(
@@ -270,20 +306,20 @@ function parseSimulationBlock(
 }
 
 function parseScope(raw: string, line: number): SimulationScope {
-  const match = /^(sheet|nets)\s+(.+)$/i.exec(raw);
+  const match = /^(sheet|nets)(?:\s+(.*))?$/i.exec(raw);
   if (!match) {
     throw new SimulationParseError(line, 'scope must be "sheet <path>" or "nets <a>, <b>"');
   }
 
+  const scopeValue = (match[2] ?? '').trim();
   if (match[1]!.toLowerCase() === 'sheet') {
-    const sheet = match[2]!.trim();
-    if (sheet.length === 0 || /[\r\n]/.test(sheet)) {
+    if (scopeValue.length === 0) {
       throw new SimulationParseError(line, 'sheet scope is empty');
     }
-    return { kind: 'sheet', sheet };
+    return { kind: 'sheet', sheet: scopeValue };
   }
 
-  const netList = match[2]!.trim().replace(/^\[(.*)\]$/, '$1');
+  const netList = scopeValue.replace(/^\[(.*)\]$/, '$1');
   const nets = netList
     .split(',')
     .map((net) => net.trim())
