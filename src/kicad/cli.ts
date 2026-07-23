@@ -28,9 +28,7 @@ function isNotFoundError(err: any): boolean {
     if (err.exitCode === 1 || err.exitCode === 9009) {
       return (
         msg.includes('is not recognized') ||
-        msg.includes('cannot find') ||
-        msg.includes('not found') ||
-        msg.includes('not recognized')
+        msg.includes('cannot find the path specified')
       );
     }
   }

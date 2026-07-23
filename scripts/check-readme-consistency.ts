@@ -43,8 +43,7 @@ async function main() {
   const readmeContent = await readFile(readmePath, 'utf8');
 
   // Verify and update status line version
-  const statusLineRegex = /(>\s+\*\*Status:\s+early\s+\(v)[^)]+(\)\.\*\*)/;
-  const expectedStatusLine = `> **Status: early (v${version}).**`;
+  const statusLineRegex = /(>\s+\*\*Status:\s+([A-Za-z0-9_-]+)\s+\(v)[^)]+(\)\.\*\*)/;
   const currentStatusLineMatch = readmeContent.match(statusLineRegex);
 
   let newReadme = readmeContent;
@@ -52,8 +51,11 @@ async function main() {
 
   if (!currentStatusLineMatch) {
     // If not found in the new format, let's try replacing the old one
-    const oldStatusLineRegex = /(>\s+\*\*Status:\s+early\.\*\*)/;
-    if (oldStatusLineRegex.test(readmeContent)) {
+    const oldStatusLineRegex = /(>\s+\*\*Status:\s+([A-Za-z0-9_-]+)\.\*\*)/;
+    const oldMatch = readmeContent.match(oldStatusLineRegex);
+    if (oldMatch) {
+      const statusText = oldMatch[2];
+      const expectedStatusLine = `> **Status: ${statusText} (v${version}).**`;
       newReadme = readmeContent.replace(oldStatusLineRegex, expectedStatusLine);
       hasVersionDrift = true;
     } else {
@@ -63,7 +65,9 @@ async function main() {
   } else {
     const currentVersion = currentStatusLineMatch[0].match(/v([^)]+)/)?.[1];
     if (currentVersion !== version) {
-      newReadme = readmeContent.replace(statusLineRegex, `$1${version}$2`);
+      const statusText = currentStatusLineMatch[2];
+      const expectedStatusLine = `> **Status: ${statusText} (v${version}).**`;
+      newReadme = readmeContent.replace(statusLineRegex, expectedStatusLine);
       hasVersionDrift = true;
     }
   }
