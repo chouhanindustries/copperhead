@@ -91,6 +91,7 @@ copperhead check                     # ERC + DRC + doc-drift + spec validation; 
 copperhead sync [--dry-run]          # verify the whole design state, resolve drift
 copperhead create --brief brief.md   # brief → full output package
 copperhead export bom --supplier jlcpcb   # supplier-ready ordering file from docs/BOM.md
+copperhead mcp                       # stdio MCP server: expose the gated pipeline to MCP hosts
 ```
 
 Global flags: `--repo <path>` (default: cwd) and `--json` for machine-readable output. `do` and `create` take `--model` and `--interactive`; `do` also takes `--dry-run`, `--max-turns`, and `--allow-dirty`.
@@ -128,6 +129,28 @@ copperhead export bom --supplier mouser --spares 15     # Mouser cart CSV, 15% s
 `docs/BOM.md` may carry optional `Manufacturer` and `LCSC` columns beyond the base `Refdes | Value | Footprint | MPN | Rationale`; the exporter matches columns by header, so add them when you want them populated in supplier files; `init` scaffolds the base columns only. Only *appending* columns is safe: keep `Refdes | Value | Footprint` first and in that order, because the drift check (`check`/`sync`, which the exporter gates on) reads those three by position, so reordering them makes it compare the wrong cells and refuse the export with a spurious drift message.
 
 Nothing is a black box: decisions land in an append-only `docs/DECISIONS.md`, every run writes a human-readable summary next to its transcript, and a per-run `docs/CHANGELOG.md` narrates the design history.
+
+## MCP server
+
+Coding agents (Claude Code, Codex, any MCP host) are increasingly pointed at KiCad repos through raw tool servers that expose ungated file edits, so the host can rewrite a `.kicad_sch` with no spec gate, no verification, and no rollback. `copperhead mcp` closes that hole: it exposes the gated pipeline to any MCP host as four opaque, outcome-level tools, so the invariants survive the integration.
+
+- `copperhead_check`: run the LLM-free verification pipeline and return the report (read-only, no key).
+- `copperhead_do`: run the full gated loop for one change request and return a summary (status committed, rolled_back, or refused, plus commit, files touched, verification, and transcript path).
+- `copperhead_sync`: report design-state inconsistencies; with `resolve: true`, fix drift (requirement violations stay for a human).
+- `copperhead_init`: scaffold the docs-as-memory layer.
+
+There is deliberately no file-edit or raw-KiCad tool: tool granularity is the security boundary, so no sequence of calls can bypass spec-gating or verification-gating. Configure it in your host and add the companion skill from [integrations/](integrations/):
+
+```json
+{
+  "mcpServers": {
+    "copperhead": {
+      "command": "copperhead",
+      "args": ["mcp", "--repo", "/path/to/your/kicad-repo"]
+    }
+  }
+}
+```
 
 ## What it is not
 
@@ -175,6 +198,7 @@ Contributions are welcome; see [CONTRIBUTING.md](CONTRIBUTING.md) for setup and 
 - [`AGENTS.md`](AGENTS.md): repository instructions loaded automatically by Codex and compatible coding agents; [`CLAUDE.md`](CLAUDE.md) provides the corresponding Claude Code guidance
 - [`src/`](src/): CLI ([`cli.ts`](src/cli.ts), [`commands/`](src/commands/)), the provider-agnostic agent loop ([`agent/`](src/agent/)), the `kicad-cli` wrapper and s-expression reader ([`kicad/`](src/kicad/)), and doc/constraint memory ([`memory/`](src/memory/))
 - [`test/`](test/): offline suite plus [`fixtures/`](test/fixtures/), a tiny known-good KiCad project
+- [`integrations/`](integrations/): MCP host configuration and the companion Claude Code skill for `copperhead mcp`
 - [`openspec/specs/SPEC.md`](openspec/specs/SPEC.md): the full technical specification, including binary acceptance criteria
 - [`openspec/changes/build-copperhead-phase-1/`](openspec/changes/build-copperhead-phase-1/): the implementation plan with proposal, design decisions, capability specs, and task checklist
 

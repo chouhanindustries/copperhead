@@ -14,7 +14,7 @@
 - **THEN** no tool can mutate a repo file except by running the full gated `do`/`sync` pipeline
 
 ### Requirement: copperhead_check tool
-`copperhead_check` SHALL run the LLM-free `check` pipeline on the configured repo, accept optional boolean inputs `fab` and `strict`, and return the same structured report as `check --json`.
+`copperhead_check` SHALL run the LLM-free `check` pipeline on the configured repo and return the same structured report as `check --json`. To keep the tool surface honest (guarantees are enforced, never merely advertised), `copperhead_check` SHALL expose only inputs the underlying `check` command honors. It SHALL gain the `fab` and `strict` boolean inputs when `check` itself learns them (changes #9 fab gate and #41 strict sourcing), and not before.
 
 #### Scenario: Check over MCP matches CLI
 - **WHEN** `copperhead_check` runs on the fixture repo
@@ -48,6 +48,10 @@ The server SHALL read API keys only from environment variables. `copperhead_chec
 #### Scenario: Keyless do degrades honestly
 - **WHEN** no API key env var is set and `copperhead_do` is called
 - **THEN** the result is a typed error naming the expected env vars, and no run is started
+
+#### Scenario: Keyless resolve refuses before any work
+- **WHEN** no API key env var is set and `copperhead_sync` is called with `resolve: true`
+- **THEN** the result is a typed error naming the expected env vars, and neither the verify nor the resolve phase runs
 
 ### Requirement: Mutating tools are serialized per repo
 The server SHALL serialize `copperhead_do`, `copperhead_sync` (with `resolve`), and `copperhead_init` calls against the same repo, queueing or rejecting concurrent mutations with a typed busy error, while allowing concurrent `copperhead_check` calls.
