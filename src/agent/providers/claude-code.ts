@@ -51,6 +51,16 @@ export interface QueryOptions {
   cwd?: string;
   env?: Record<string, string | undefined>;
   maxTurns?: number;
+  /** Aborting this controller stops the query and tears down the `claude`
+   * subprocess it spawned (Agent SDK `Options.abortController`). Used so the
+   * watchdog's `close()` on a hung turn kills the process instead of orphaning
+   * it (2.2/4.1) — a stranded subprocess keeps writing to its temp cwd and, with
+   * KiCad local history, was a source of the disk-fill halt (I8). */
+  abortController?: AbortController;
+  /** Resume a prior SDK session by id so the subprocess reconstructs earlier
+   * turns itself instead of us re-sending the whole conversation each turn (1.1,
+   * `Options.resume`). Only set in the opt-in session-resume mode. */
+  resume?: string;
 }
 export interface QueryArgs {
   prompt: string;
@@ -59,6 +69,7 @@ export interface QueryArgs {
 export interface QueryMessage {
   type: string;
   subtype?: string;
+  session_id?: string;
   message?: { content?: Array<{ type: string; text?: string }> };
   usage?: { input_tokens?: number; output_tokens?: number };
 }
@@ -93,17 +104,35 @@ export class ClaudeCodeProvider implements Provider {
   readonly name = 'claude-code';
   private callSeq = 0;
   private cwdPromise?: Promise<string>;
+  /** In-flight query aborters, so close() (called by the turn watchdog on a
+   * hung turn) can tear down the live subprocess, not just delete its cwd. */
+  private readonly inFlight = new Set<AbortController>();
+  /** Session-resume state (1.1). `sessionId` is the last session the SDK reported;
+   * `sentCount` is how many `messages` we have already handed it, so a resumed
+   * turn sends only the delta. Unused unless `sessionResume` is on. */
+  private sessionId?: string;
+  private sentCount = 0;
 
   constructor(
     private readonly model?: string,
     private readonly injectedQuery?: QueryLike,
     private readonly importSdk: ImportLike = (specifier) => import(specifier),
+    /**
+     * Opt-in: resume one SDK session across turns and send only new messages,
+     * instead of flattening and re-sending the entire conversation every turn
+     * (1.1). Cuts the ~quadratic history re-send that dominates long-stage cost.
+     * OFF by default and deliberately mutually exclusive with the response cache:
+     * the cache replays turns the resumed session never saw, so mixing them would
+     * desync the session. `makeProvider` enables it only when the cache is off.
+     */
+    private readonly sessionResume = false,
   ) {}
 
-  // `_opts.maxTokens` is intentionally ignored: the Agent SDK drives the Claude
-  // Code subprocess and exposes no per-call max-tokens knob. loop.ts calls
-  // chat() without opts today; noted so a future opts pass is not a surprise.
-  async chat(messages: Msg[], tools: ToolSchema[], _opts: ChatOpts = {}): Promise<Turn> {
+  // `opts.maxTokens` is intentionally ignored: the Agent SDK drives the Claude
+  // Code subprocess and exposes no per-call max-tokens knob. `opts.onStream` is
+  // honored: this provider streams, so it reports cumulative streamed-text length
+  // as blocks arrive, which the loop turns into a liveness heartbeat (5.1).
+  async chat(messages: Msg[], tools: ToolSchema[], opts: ChatOpts = {}): Promise<Turn> {
     const query = await this.resolveQuery();
 
     const system = messages
@@ -111,19 +140,28 @@ export class ClaudeCodeProvider implements Provider {
       .map((m) => m.content)
       .join('\n\n');
     const systemPrompt = [system, renderToolProtocol(tools)].filter(Boolean).join('\n\n');
-    const prompt = renderConversation(messages);
+    // Session-resume mode (1.1): once the SDK has given us a session id, resume it
+    // and send only the messages added since our last turn — the subprocess still
+    // holds the earlier conversation, so re-sending it would just re-bill it. The
+    // first turn (no session id yet) sends the full flattened history as usual.
+    const resume = this.sessionResume ? this.sessionId : undefined;
+    const prompt = resume ? renderDelta(messages, this.sentCount) : renderConversation(messages);
     const catalog = new Set(tools.map((t) => t.name));
     const cwd = await this.ensureCwd();
 
     let text: string | null = null;
     let inputTokens = 0;
     let outputTokens = 0;
+    // One aborter per turn: close() aborts it to kill a hung subprocess.
+    const aborter = new AbortController();
+    this.inFlight.add(aborter);
     try {
       for await (const msg of query({
         prompt,
         options: {
           systemPrompt,
           ...(this.model ? { model: this.model } : {}),
+          abortController: aborter,
           // Layered "the SDK executes nothing" defense (D1/D5):
           //  1. `tools: []` disables ALL built-in tools (Agent SDK 0.3.x docs:
           //     "[] (empty array) - Disable all built-in tools").
@@ -134,6 +172,7 @@ export class ClaudeCodeProvider implements Provider {
           //  4. The tool_use tripwire below fails the run loudly if one is
           //     emitted anyway. Any single layer failing is caught by the next.
           tools: [],
+          ...(resume ? { resume } : {}),
           disallowedTools: DISALLOWED_BUILTINS,
           canUseTool: async (toolName) => ({
             behavior: 'deny',
@@ -153,6 +192,9 @@ export class ClaudeCodeProvider implements Provider {
           for (const block of msg.message?.content ?? []) {
             if (block.type === 'text' && block.text) {
               text = (text ?? '') + block.text;
+              // Report progress so the loop's heartbeat shows this turn is alive
+              // and streaming, not hung, during a multi-minute large-output turn.
+              opts.onStream?.(text.length);
             } else if (block.type === 'tool_use') {
               // Load-bearing invariant (D1): the SDK must execute nothing, so it
               // must never emit a tool_use block. If it does, `tools: []` was not
@@ -169,6 +211,9 @@ export class ClaudeCodeProvider implements Provider {
           if (typeof msg.usage?.input_tokens === 'number') inputTokens = msg.usage.input_tokens;
           if (typeof msg.usage?.output_tokens === 'number') outputTokens = msg.usage.output_tokens;
         }
+        // The session id can arrive on any message (init/system/result); keep the
+        // latest so the next turn can resume it (1.1). No-op unless resume is on.
+        if (this.sessionResume && typeof msg.session_id === 'string') this.sessionId = msg.session_id;
       }
     } catch (err) {
       // Auth failures get an actionable message (non-retryable); everything else
@@ -177,15 +222,40 @@ export class ClaudeCodeProvider implements Provider {
       // distinct `name` makes otherProvider() return null for us.
       if (isAuthError(err)) throw new Error(authHint((err as Error).message));
       throw err;
+    } finally {
+      this.inFlight.delete(aborter);
     }
 
+    // Only advance the high-water mark on a turn that completed: a thrown turn
+    // (rate limit, timeout) is retried, and must re-send the same delta so no
+    // message is lost from the resumed session (1.1).
+    if (this.sessionResume) this.sentCount = messages.length;
+
     const parsed = parseToolCalls(text, () => `cc-${++this.callSeq}`, catalog);
-    return { text: parsed.text, toolCalls: parsed.toolCalls, usage: { inputTokens, outputTokens } };
+    return {
+      text: parsed.text,
+      toolCalls: parsed.toolCalls,
+      usage: { inputTokens, outputTokens },
+      nudge: parsed.nudge,
+    };
   }
 
-  /** Remove the scratch cwd. loop.ts calls this on every provider in a finally,
-   * so the one temp dir this instance created does not leak past the run. */
+  /** Tear down in-flight work and remove the scratch cwd. Called by the turn
+   * watchdog on a hung turn (via withTimeout's onTimeout) AND once per run in a
+   * finally. Aborting first kills the `claude` subprocess a hung turn spawned —
+   * without it the process is orphaned and keeps writing to its temp cwd, which
+   * (with KiCad local history) was a source of the disk-fill halt (2.2/4.1, I8).
+   * A leftover empty dir in the OS tmpdir is harmless; the startup sweep reclaims
+   * any that a hard SIGKILL bypassed this cleanup for. */
   async close(): Promise<void> {
+    for (const aborter of this.inFlight) {
+      try {
+        aborter.abort();
+      } catch {
+        // best effort: a controller that already settled throws nothing useful
+      }
+    }
+    this.inFlight.clear();
     const pending = this.cwdPromise;
     this.cwdPromise = undefined;
     if (!pending) return;
@@ -265,6 +335,32 @@ function renderToolProtocol(tools: ToolSchema[]): string {
   return lines.join('\n');
 }
 
+/**
+ * The prompt for a *resumed* turn (1.1): only the messages added since the last
+ * turn we sent, and only the ones the resumed session does not already hold. The
+ * subprocess already has every prior turn plus its own assistant replies, so we
+ * send just the new user nudges and tool results — that delta is what advances
+ * the conversation. Falls back to the full render (via the caller) when there is
+ * no session yet.
+ */
+function renderDelta(messages: Msg[], from: number): string {
+  const idToName = new Map<string, string>();
+  for (const m of messages) {
+    if (m.role === 'assistant') for (const call of m.toolCalls ?? []) idToName.set(call.id, call.name);
+  }
+  const parts: string[] = [];
+  for (const m of messages.slice(Math.max(0, from))) {
+    if (m.role === 'user') {
+      parts.push(`[user]\n${m.content}`);
+    } else if (m.role === 'tool') {
+      const name = idToName.get(m.toolCallId) ?? m.toolCallId;
+      parts.push(`[result of ${name}]\n${m.content}`);
+    }
+    // assistant/system messages are already in the resumed session — skip them.
+  }
+  return parts.join('\n\n');
+}
+
 function renderConversation(messages: Msg[]): string {
   const idToName = new Map<string, string>();
   const parts: string[] = [];
@@ -291,6 +387,33 @@ function renderConversation(messages: Msg[]): string {
 interface Parsed {
   text: string | null;
   toolCalls: ToolCall[];
+  nudge?: string;
+}
+
+/**
+ * Detect a malformed-but-intended tool call in a turn that dispatched none
+ * (#I10). The signature is machine-recognizable: the text contains
+ * `"tool":"<name>"` naming a tool in the current catalog, yet nothing parsed.
+ * That is the exact case where the tolerant extractor's silence misleads the
+ * model — the JSON was near-miss malformed (a brace short, or the outer object
+ * split so only an inner `{args}` with no `tool` key balanced), not the tool
+ * being broken. Returns a one-line steer to re-emit it, or undefined when the
+ * absence of a call is genuine (plain prose, no tool named).
+ */
+function detectMalformedCall(text: string, catalog: Set<string>): string | undefined {
+  const re = /"tool"\s*:\s*"([^"]+)"/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(text)) !== null) {
+    const name = m[1]!;
+    if (catalog.has(name)) {
+      return (
+        `A tool call for "${name}" looks malformed — it named the tool but did not parse as ` +
+        'valid JSON (likely unbalanced braces or a missing closing brace), so no call ran. ' +
+        'Re-emit it as exactly one complete JSON object: {"tool": "...", "args": { ... }}.'
+      );
+    }
+  }
+  return undefined;
 }
 
 /**
@@ -331,7 +454,15 @@ function parseToolCalls(text: string | null, nextId: () => string, catalog: Set<
     searchFrom = span.end;
   }
 
-  if (!toolCalls.length) return { text: text.trim() ? text : null, toolCalls };
+  if (!toolCalls.length) {
+    // No call dispatched — but did the model clearly *intend* one? A fenced
+    // ```json block that names a catalog tool yet produced zero calls is a
+    // malformed near-miss (unbalanced braces, a missing `}`, or an inner object
+    // with no `tool` key). Silently dropping it gives the model no signal, so it
+    // misreads "no result" as "this tool is broken" and can bake that false
+    // conclusion into a committed summary (#I10). Surface a nudge instead.
+    return { text: text.trim() ? text : null, toolCalls, nudge: detectMalformedCall(text, catalog) };
+  }
 
   // Prose is whatever survives once the tool-call objects (and any now-empty
   // ```json fences around them) are removed.

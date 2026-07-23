@@ -15,6 +15,11 @@ export interface CopperheadConfig {
   /** Per-turn watchdog (ms). A provider turn exceeding this is aborted and
    * retried, so a hung call can't stall the run forever. <=0 disables it. */
   turnTimeoutMs: number;
+  /** How often (ms) to emit a liveness heartbeat while a provider turn is in
+   * flight, so a slow large-output turn is distinguishable from a hung one
+   * (5.1). Fires only after the first interval, so quick turns stay silent.
+   * <=0 disables it. */
+  heartbeatMs: number;
   /** How many times the create pipeline may auto-retry a stage that failed or
    * ended without meeting its contract, gated by an LLM diagnosis each time. */
   maxStageRetries: number;
@@ -39,7 +44,17 @@ export const DEFAULTS: Omit<CopperheadConfig, 'schematic' | 'board'> = {
   maxTurns: 40,
   maxRepairCycles: 5,
   budgets: {},
-  turnTimeoutMs: 300000,
+  // 10 min. A single large capture turn (a full lib_symbols + instances edit,
+  // ~40k output tokens) on the claude-code provider legitimately runs several
+  // minutes; the old 5-min deadline killed those mid-flight and, because the
+  // watchdog budget is spent per stage, could fail a stage that was only slow,
+  // not hung. 10 min clears the largest observed turns while still catching a
+  // genuinely stuck subprocess.
+  turnTimeoutMs: 600000,
+  // 30s: within one interval an operator knows a turn is alive, and a full
+  // 10-min turn emits ~20 lines — enough to distinguish slow from hung without
+  // flooding the log. Quick turns (< 30s) emit nothing.
+  heartbeatMs: 30000,
   maxStageRetries: 2,
   llmCache: true,
 };
@@ -69,6 +84,7 @@ export async function loadConfig(repoRoot: string): Promise<CopperheadConfig> {
     maxRepairCycles: raw.maxRepairCycles ?? DEFAULTS.maxRepairCycles,
     budgets: raw.budgets ?? {},
     turnTimeoutMs: typeof raw.turnTimeoutMs === 'number' ? raw.turnTimeoutMs : DEFAULTS.turnTimeoutMs,
+    heartbeatMs: typeof raw.heartbeatMs === 'number' ? raw.heartbeatMs : DEFAULTS.heartbeatMs,
     maxStageRetries:
       Number.isInteger(raw.maxStageRetries) && (raw.maxStageRetries as number) >= 0
         ? (raw.maxStageRetries as number)

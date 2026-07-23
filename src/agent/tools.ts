@@ -6,6 +6,7 @@ import { resolveInRepo, isKicadFile } from '../util/paths.js';
 import { runErc, runDrc, exportSvg, exportFab, kicadLoadError, isProbeableKicadFile } from '../kicad/cli.js';
 import { formatViolations, type CheckReport } from '../kicad/report.js';
 import { listSymbols, listNets } from '../kicad/sexp.js';
+import { verifySchematicSymbols } from '../kicad/symlib.js';
 import { checkDrift } from '../memory/drift.js';
 import { saveConstraint, classifyAffectsTarget, affectsTargetExists } from '../memory/constraints.js';
 import { openspecValidate } from '../openspec/cli.js';
@@ -51,6 +52,24 @@ const str = (args: Record<string, unknown>, key: string): string => {
   if (typeof v !== 'string' || v === '') throw new Error(`missing required string arg "${key}"`);
   return v;
 };
+
+// U+FFFD (the Unicode replacement character) is what a byte sequence becomes
+// when UTF-8 decoding fails — most often a multibyte glyph (Ω, µ, ±, °) split
+// across a streaming chunk boundary and decoded per-chunk upstream in the
+// provider SDK (I2). It never appears in a legitimately authored PCB doc, so
+// its presence in a content-bearing tool arg means the value arrived corrupted.
+// Reject the call before it lands on disk so the model re-emits; the corruption
+// is nondeterministic (it depends on where a chunk boundary fell), so the retry
+// almost always comes through clean — far cheaper than shipping a mangled value
+// like "5.1kΩ" → "5.1k�" into DECISIONS.md and only noticing on review.
+const REPLACEMENT_CHAR = '�';
+export function corruptionError(fields: Record<string, unknown>): string | null {
+  const bad = Object.entries(fields)
+    .filter(([, v]) => typeof v === 'string' && v.includes(REPLACEMENT_CHAR))
+    .map(([k]) => k);
+  if (!bad.length) return null;
+  return `rejected: the ${bad.join(', ')} value contains U+FFFD (�), the replacement character that signals a UTF-8 decoding error — a special character (e.g. Ω, µ, ±, °) was likely mangled in transit. Re-send this exact call with the intended character written correctly, or spell it in ASCII (e.g. "ohm", "uF", "+/-", "deg").`;
+}
 
 function markTouched(ctx: RunContext, rel: string): void {
   ctx.filesTouched.add(rel);
@@ -216,6 +235,8 @@ export const TOOLS: ToolDef[] = [
     },
     requiresUnlock: true,
     handler: async (ctx, args) => {
+      const corrupt = corruptionError({ new_string: args.new_string });
+      if (corrupt) return corrupt;
       const rel = str(args, 'path');
       const abs = resolveInRepo(ctx.repoRoot, rel);
       // Text edits can corrupt an s-expression file in ways the editor cannot
@@ -266,6 +287,8 @@ export const TOOLS: ToolDef[] = [
     },
     requiresUnlock: true,
     handler: async (ctx, args) => {
+      const corrupt = corruptionError({ content: args.content });
+      if (corrupt) return corrupt;
       const rel = str(args, 'path');
       const res = await toolWriteFile(ctx.repoRoot, rel, args.content as string);
       markTouched(ctx, rel);
@@ -282,11 +305,43 @@ export const TOOLS: ToolDef[] = [
     handler: async (ctx) => {
       if (!ctx.config.schematic)
         return 'no schematic configured; ERC does not apply yet — skip it until a schematic exists and is set in .copperhead/config.json';
-      const report = await runErc(path.join(ctx.repoRoot, ctx.config.schematic));
+      const schPath = path.join(ctx.repoRoot, ctx.config.schematic);
+      const report = await runErc(schPath);
       ctx.lastErc = report;
       if (report.ok) ctx.ledger.clear('erc');
       else ctx.repairCycles++;
-      return formatViolations(report);
+      const out = formatViolations(report);
+      // A zero-symbol schematic passes ERC with 0 violations — a false green
+      // (3.2) that lets a premature finish look verified (an empty sheet also
+      // passes drift). The stage contract already requires symbols>0, but a bare
+      // "ERC clean" on the empty starting sheet still misleads the model, so warn
+      // here too: no gate should read as satisfied by the empty starting state.
+      if (report.ok && !(await listSymbols(schPath)).length) {
+        return `${out}\nwarning: ERC is clean but the schematic has ZERO symbols — an empty sheet always passes ERC, so this is NOT a verified design. Capture the parts from BOM.md (and re-run run_erc) before calling finish.`;
+      }
+      return out;
+    },
+  },
+  {
+    schema: {
+      name: 'verify_symbols',
+      description:
+        "Cross-check every lib_symbols entry in the schematic against the KiCad symbol library installed on this machine. Reports pins that diverge from the real part (wrong count, name, or electrical type) and lib_ids that do not exist in the current KiCad version (with the closest real names). ERC cannot catch these — a symbol whose lib_id claims to be a canonical part but whose pins are wrong passes ERC while being wrong. Run this after capturing symbols and reconcile every finding.",
+      parameters: { type: 'object', properties: {}, required: [] },
+    },
+    requiresUnlock: false,
+    handler: async (ctx) => {
+      if (!ctx.config.schematic)
+        return 'no schematic configured; verify_symbols does not apply yet';
+      const { findings, checked, skipped } = await verifySchematicSymbols(
+        path.join(ctx.repoRoot, ctx.config.schematic),
+      );
+      if (!findings.length) {
+        return `verify_symbols: ${checked} symbol(s) match the installed KiCad library. No divergences.`;
+      }
+      const lines = findings.map((f) => `  - [${f.kind}] ${f.detail}`);
+      const mismatches = findings.filter((f) => f.kind !== 'no-library').length;
+      return `verify_symbols: ${checked} verified, ${skipped} unverifiable (library not installed), ${mismatches} issue(s) to reconcile:\n${lines.join('\n')}`;
     },
   },
   {
@@ -515,6 +570,8 @@ export const TOOLS: ToolDef[] = [
     },
     requiresUnlock: true,
     handler: async (ctx, args) => {
+      const corrupt = corruptionError({ decision: args.decision, rationale: args.rationale, affects: args.affects });
+      if (corrupt) return corrupt;
       const decision = str(args, 'decision');
       const rationale = str(args, 'rationale');
       const affects = (args.affects as string | undefined) ?? '';

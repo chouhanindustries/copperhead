@@ -23,6 +23,11 @@ export class CachingProvider implements Provider {
   readonly name: string;
   private hits = 0;
 
+  /** Turns served from the on-disk cache so far (5.2: per-stage cache-hit%). */
+  get cacheHits(): number {
+    return this.hits;
+  }
+
   constructor(
     private readonly inner: Provider,
     private readonly dir: string,

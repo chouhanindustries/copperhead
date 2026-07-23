@@ -21,10 +21,27 @@ export interface Turn {
   text: string | null;
   toolCalls: ToolCall[];
   usage: { inputTokens: number; outputTokens: number };
+  /**
+   * A one-line steer for a turn that produced NO tool call but clearly *intended*
+   * one — e.g. a fenced ```json block that names a real tool yet fails to parse
+   * (unbalanced braces). The loop surfaces it in place of the generic
+   * "continue using tools" nudge so the model fixes the malformed call instead of
+   * misreading the silence as a broken tool (#I10). Providers that can't detect
+   * a near-miss simply never set it.
+   */
+  nudge?: string;
 }
 
 export interface ChatOpts {
   maxTokens?: number;
+  /**
+   * Liveness callback for the loop's heartbeat (5.1). A streaming provider calls
+   * it as output arrives, passing the cumulative streamed-output length in chars,
+   * so a slow turn can be told apart from a hung one. Providers that don't stream
+   * simply never call it (the heartbeat still reports elapsed time). Never used
+   * for billing — real token usage is reported once, on the returned Turn.
+   */
+  onStream?: (streamedChars: number) => void;
 }
 
 export interface Provider {
