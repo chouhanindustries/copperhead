@@ -10,7 +10,7 @@
 
 **Cursor for circuit boards.** An AI agent that designs, documents, and validates real PCBs from a prompt, working directly on existing KiCad repositories.
 
-> **Status: early (v0.5.0).** Phase 1 is implemented and the CLI runs. The [technical specification](openspec/specs/SPEC.md) is the source of truth; expect the surface to move before 1.0.
+> **Status: early (v0.6.0).** Phase 1 is implemented and the CLI runs. The [technical specification](openspec/specs/SPEC.md) is the source of truth; expect the surface to move before 1.0.
 
 Full documentation lives at [docs.copperhead.sh](https://docs.copperhead.sh).
 
@@ -157,7 +157,7 @@ More briefs, including medium and hard tiers, live in [examples/](examples/).
 ## Maturity
 
 <!-- maturity:begin -->
-Honest read of where v0.5.0 stands, so you can calibrate before pointing this at a board you care about:
+Honest read of where v0.6.0 stands, so you can calibrate before pointing this at a board you care about:
 
 - **Solid.** `init` and `check`/`verify` are deterministic, LLM-free, and covered by the offline test suite against a real KiCad fixture: scaffolding, ERC/DRC, the s-expression reader, drift detection, and fab export all run green in CI.
 - **Implemented, not yet proven.** The agent loop (`do`, `sync --resolve`, `create`) is complete and structurally gated.
