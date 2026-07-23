@@ -3,7 +3,7 @@
 ## ADDED Requirements
 
 ### Requirement: Simulation opt-in via SUBSYSTEMS.md
-A subsystem SHALL be flagged for SPICE verification by a `## Simulation` block in SUBSYSTEMS.md that names the netlist scope (a hierarchical sheet reference or an explicit net set), the analysis type (`op`, `dc`, `ac`, or `tran`), optional `sources` lines for driven ports, and one or more assertions. A scope that references sheets or nets absent from the schematic SHALL be reported as a failure by `check`.
+A subsystem SHALL be flagged for SPICE verification by a `## Simulation` block in SUBSYSTEMS.md. The line-oriented block SHALL contain one `scope: sheet <path>` or `scope: nets <net>, <net>` field, one `analysis: op|dc|ac|tran` field, optional repeated `source: <port>=<number>` lines for driven ports, and one or more `assert: <assertion>` lines. The `sources` field name SHALL be accepted as an alias for `source`. A scope that references sheets or nets absent from the schematic SHALL be reported as a failure by `check`.
 
 #### Scenario: Flagged subsystem is picked up
 - **WHEN** SUBSYSTEMS.md contains a `## Simulation` block scoped to the divider sheet with an `op` analysis
