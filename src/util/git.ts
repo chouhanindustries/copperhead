@@ -1,9 +1,43 @@
 import { execa } from 'execa';
-import { cp, mkdir, mkdtemp, rm } from 'node:fs/promises';
+import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { PreflightError } from './preflight.js';
+
+/**
+ * Paths copperhead must keep out of `git add -A`. KiCad ≥9 writes a
+ * git-backed local-history directory (`.history/`, complete with its own nested
+ * `.git`) into the project the first time kicad-cli touches it. Left untracked,
+ * that nested repo has an unborn HEAD, so a plain `git add -A` in the parent
+ * aborts with `error: '.history/' does not have a commit checked out` (exit
+ * 128) — which fails the commit at the end of every KiCad-touching stage
+ * (schematic, layout, outputs). Ignoring it is both correct (local history is
+ * never a project artifact) and the fix for that abort. Kept as a list so other
+ * KiCad transients can join it if they surface.
+ */
+const GIT_ADD_EXCLUDES = ['.history/'];
+
+/**
+ * Ensure the repo's root .gitignore lists each entry, appending only the
+ * missing ones. Idempotent and best-effort: a failure here must never block a
+ * commit, so it swallows its own errors. Run before any `git add -A` so a
+ * git-backed KiCad `.history/` (or similar nested repo) is skipped instead of
+ * aborting the add.
+ */
+export async function ensureIgnored(repo: string, entries: string[]): Promise<void> {
+  try {
+    const p = path.join(repo, '.gitignore');
+    const text = existsSync(p) ? await readFile(p, 'utf8') : '';
+    const present = new Set(text.split('\n').map((l) => l.trim()));
+    const missing = entries.filter((e) => !present.has(e));
+    if (!missing.length) return;
+    const prefix = text.length && !text.endsWith('\n') ? '\n' : '';
+    await writeFile(p, text + prefix + missing.join('\n') + '\n', 'utf8');
+  } catch {
+    // best-effort: .gitignore maintenance must never be the thing that fails a run
+  }
+}
 
 export interface GitSnapshot {
   head: string;
@@ -147,6 +181,7 @@ export async function restore(repo: string, snap: GitSnapshot): Promise<void> {
 export async function preserveFailedRun(repo: string, runId: string): Promise<string | null> {
   try {
     if (!(await isDirty(repo))) return null;
+    await ensureIgnored(repo, GIT_ADD_EXCLUDES);
     // Never leave the audit trail staged: a staged-but-not-in-HEAD path is
     // deleted by restore()'s `reset --hard`, which silently defeats its
     // `clean -e .copperhead/runs` protection (that flag only spares untracked
@@ -181,6 +216,7 @@ export async function uncommittedCount(repo: string): Promise<number> {
 }
 
 export async function commitAll(repo: string, message: string): Promise<string> {
+  await ensureIgnored(repo, GIT_ADD_EXCLUDES);
   await git(repo, ['add', '-A']);
   await git(repo, ['commit', '-m', message]);
   return git(repo, ['rev-parse', 'HEAD']);
