@@ -20,6 +20,7 @@ import { OpenAIProvider } from './providers/openai.js';
 import { AnthropicProvider } from './providers/anthropic.js';
 import { CodexProvider } from './providers/codex.js';
 import { ClaudeCodeProvider } from './providers/claude-code.js';
+import { LMStudioProvider } from './providers/lmstudio.js';
 import { openSynapMemory, type RunRecord, type SynapMemory } from '../memory/synap.js';
 
 /** What the user sees at the moment they decide whether to keep going. */
@@ -100,17 +101,27 @@ export async function makeProvider(model: string, sessionResume = false): Promis
     }
     return new ClaudeCodeProvider(claudeCodeModel, undefined, undefined, sessionResume);
   }
+  // Local OpenAI-compatible server (LM Studio). Matched before the OpenAI
+  // fallthrough so it is never sent to api.openai.com, and it needs no API key.
+  if (model === 'lmstudio' || model.startsWith('lmstudio:')) {
+    const lmstudioModel = model.startsWith('lmstudio:') ? model.slice('lmstudio:'.length) : undefined;
+    if (lmstudioModel === '') {
+      throw new Error('lmstudio model override cannot be empty; use "lmstudio" or "lmstudio:<model-id>"');
+    }
+    return new LMStudioProvider({ ...(lmstudioModel ? { model: lmstudioModel } : {}) });
+  }
   if (model === 'claude' || model.startsWith('claude')) {
     return new AnthropicProvider(model === 'claude' ? undefined : model);
   }
-  return new OpenAIProvider(model === 'gpt-5' ? undefined : model);
+  return new OpenAIProvider(model === 'gpt-5' ? {} : { model });
 }
 
 function otherProvider(current: Provider): Provider | null {
   // Only the two keyed providers fail over to each other. A rate-limited
-  // 'claude-code' run returns null here (no silent fallback to a paid API).
+  // 'claude-code' or 'lmstudio' run returns null here (no silent fallback to a
+  // paid API — a local run in particular must never become a billed one).
   if (current.name === 'openai' && process.env.ANTHROPIC_API_KEY) return new AnthropicProvider();
-  if (current.name === 'anthropic' && process.env.OPENAI_API_KEY) return new OpenAIProvider();
+  if (current.name === 'anthropic' && process.env.OPENAI_API_KEY) return new OpenAIProvider({});
   return null;
 }
 
