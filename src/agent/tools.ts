@@ -6,7 +6,7 @@ import { resolveInRepo, isKicadFile } from '../util/paths.js';
 import { runErc, runDrc, exportSvg, exportFab, kicadLoadError, isProbeableKicadFile } from '../kicad/cli.js';
 import { formatViolations, type CheckReport } from '../kicad/report.js';
 import { listSymbols, listNets } from '../kicad/sexp.js';
-import { verifySchematicSymbols } from '../kicad/symlib.js';
+import { verifySchematicSymbols, resolveLibrarySymbol, symbolSearchDirs } from '../kicad/symlib.js';
 import { checkDrift } from '../memory/drift.js';
 import { saveConstraint, classifyAffectsTarget, affectsTargetExists } from '../memory/constraints.js';
 import { openspecValidate } from '../openspec/cli.js';
@@ -18,6 +18,54 @@ import type { Transcript } from './transcript.js';
 export interface FinishRequest {
   outcome: 'done' | 'refuse';
   summary: string;
+}
+
+/**
+ * Per-check-type repair progress. The repair budget bounds STAGNATION, not
+ * attempts: the schematic stage explicitly demands "one part, run_erc, fix,
+ * next part", so a converging design legitimately produces many failing
+ * reports whose violation counts shrink (10 -> 7 -> 5 -> 3). Only consecutive
+ * NON-IMPROVING reports of the same check (violation count >= the previous
+ * failing report of that check) count against maxRepairCycles; any improvement
+ * resets that check's streak. ERC and DRC are tracked independently so board
+ * progress can never mask a stuck schematic loop, or vice versa.
+ */
+export interface RepairProgress {
+  /** Violation count of the last FAILING report per check; null = no baseline
+   * (never failed, or reset by a clean pass). */
+  lastFailCount: { erc: number | null; drc: number | null };
+  /** Current streak of consecutive non-improving failing reports per check. */
+  stagnant: { erc: number; drc: number };
+}
+
+export function newRepairProgress(): RepairProgress {
+  return { lastFailCount: { erc: null, drc: null }, stagnant: { erc: 0, drc: 0 } };
+}
+
+/**
+ * Fold one ERC/DRC report into the repair budget. Invariant: bounded
+ * stagnation, not bounded attempts. `ctx.repairCycles` (what the loop compares
+ * to maxRepairCycles) is the WORST current stagnation streak across check
+ * types, so a run only exhausts when one check has gone maxRepairCycles+1
+ * consecutive reports without a strict improvement. The first failing report
+ * of a (re)started sequence sets the baseline and does not count.
+ */
+export function recordCheckForBudget(ctx: RunContext, report: CheckReport): void {
+  const p = ctx.repairProgress;
+  const type = report.source;
+  if (report.ok) {
+    // Clean pass: the sequence converged. Drop the baseline so a later,
+    // unrelated failure starts a fresh sequence instead of reading as a regression.
+    p.lastFailCount[type] = null;
+    p.stagnant[type] = 0;
+  } else {
+    const count = report.violations.length;
+    const prev = p.lastFailCount[type];
+    if (prev !== null && count >= prev) p.stagnant[type]++;
+    else p.stagnant[type] = 0; // first report (baseline) or strict improvement
+    p.lastFailCount[type] = count;
+  }
+  ctx.repairCycles = Math.max(p.stagnant.erc, p.stagnant.drc);
 }
 
 /** Mutable state one run threads through every tool call. */
@@ -36,7 +84,11 @@ export interface RunContext {
   decisions: string[];
   lastErc: CheckReport | null;
   lastDrc: CheckReport | null;
+  /** Worst current stagnation streak across check types (bounded stagnation,
+   * not bounded attempts). Derived by recordCheckForBudget; the loop fails the
+   * run when it exceeds config.maxRepairCycles. Never increment directly. */
   repairCycles: number;
+  repairProgress: RepairProgress;
   finishRequest: FinishRequest | null;
 }
 
@@ -309,7 +361,7 @@ export const TOOLS: ToolDef[] = [
       const report = await runErc(schPath);
       ctx.lastErc = report;
       if (report.ok) ctx.ledger.clear('erc');
-      else ctx.repairCycles++;
+      recordCheckForBudget(ctx, report);
       const out = formatViolations(report);
       // A zero-symbol schematic passes ERC with 0 violations — a false green
       // (3.2) that lets a premature finish look verified (an empty sheet also
@@ -346,6 +398,39 @@ export const TOOLS: ToolDef[] = [
   },
   {
     schema: {
+      name: 'lookup_symbol',
+      description:
+        'Return the real pin table (number, name, electrical type) of a lib_id from the KiCad symbol libraries installed on this machine, e.g. "RF_Module:ESP32-C3-MINI-1". Use this BEFORE authoring a lib_symbols entry for any part so pins are transcribed from the library, never invented; read_file cannot reach the system libraries, this tool is the sanctioned path. Unknown symbols return the closest real names to try.',
+      parameters: {
+        type: 'object',
+        properties: {
+          lib_id: { type: 'string', description: 'Library:Symbol identifier, e.g. Device:R' },
+        },
+        required: ['lib_id'],
+      },
+    },
+    requiresUnlock: false,
+    handler: async (_ctx, args) => {
+      const libId = String((args as { lib_id?: unknown }).lib_id ?? '');
+      if (!libId.includes(':')) return `lookup_symbol: "${libId}" is not a lib_id (expected Library:Symbol, e.g. Device:R)`;
+      const dirs = await symbolSearchDirs();
+      if (!dirs.length) {
+        return 'lookup_symbol: no KiCad symbol libraries found on this machine (checked KICAD_SYMBOL_DIR and the standard install locations)';
+      }
+      const res = await resolveLibrarySymbol(libId, dirs);
+      if (res.status === 'ok') {
+        const rows = res.pins.map((p) => `  ${p.number}\t${p.name}\t${p.type}`);
+        return `lookup_symbol: ${libId} has ${res.pins.length} pin(s) (number\tname\ttype):\n${rows.join('\n')}`;
+      }
+      if (res.status === 'no-symbol') {
+        const hint = res.candidates.length ? ` Closest real symbols: ${res.candidates.join(', ')}.` : '';
+        return `lookup_symbol: symbol not found in ${libId.split(':')[0]}.${hint}`;
+      }
+      return `lookup_symbol: library "${libId.split(':')[0]}" is not installed on this machine`;
+    },
+  },
+  {
+    schema: {
       name: 'run_drc',
       description: 'Run kicad-cli DRC on the board. Clears the DRC obligation when clean.',
       parameters: { type: 'object', properties: {}, required: [] },
@@ -357,7 +442,7 @@ export const TOOLS: ToolDef[] = [
       const report = await runDrc(path.join(ctx.repoRoot, ctx.config.board));
       ctx.lastDrc = report;
       if (report.ok) ctx.ledger.clear('drc');
-      else ctx.repairCycles++;
+      recordCheckForBudget(ctx, report);
       return formatViolations(report);
     },
   },

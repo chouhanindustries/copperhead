@@ -36,13 +36,7 @@ interface Stage {
 
 const docExists = (repoRoot: string, rel: string) => existsSync(path.join(repoRoot, rel));
 
-async function docHasContent(repoRoot: string, rel: string, marker: string): Promise<boolean> {
-  const p = path.join(repoRoot, rel);
-  if (!existsSync(p)) return false;
-  return (await readFile(p, 'utf8')).includes(marker);
-}
-
-// Heading-aware variant of docHasContent: matches any Markdown heading whose
+// Heading-aware completion marker: matches any Markdown heading whose
 // text contains `word`, ignoring heading level, leading numbering ("3."), and
 // trailing decoration ("Budgets and constraints (...)"). Stage prompts don't
 // dictate exact heading text, so a literal `.includes('## Budgets')` produces
@@ -100,7 +94,7 @@ export const STAGES: Stage[] = [
       return (await runErc(p)).ok;
     },
     prompt: () =>
-      'Stage 4: schematic. An empty KiCad project has already been scaffolded and wired into .copperhead/config.json (an empty schematic and a blank board with a default outline). Populate the existing schematic with edit_file — write_file refuses KiCad files, so add lib_symbols, symbols, and connectivity by anchored edits into the file that already exists. Work ONE part at a time, not in large blocks: add a symbol (its lib_symbols entry if new, then its placement), run run_erc, fix any violation, then move to the next part — small incremental edits keep a geometry or grid slip local instead of forcing a full-block rewrite. When you add a lib_symbols entry, use the exact canonical KiCad lib_id (e.g. Device:R, Connector:USB_C_Receptacle_USB2.0_16P) and reproduce the real part\'s pins faithfully — never invent pin numbers, names, or electrical types. Once symbols are placed, run verify_symbols and reconcile every divergence it reports (a wrong lib_id or pin set passes ERC but is still wrong); if it flags a renamed symbol, adopt the real name it suggests. Build subsystem by subsystem from BOM.md and SUBSYSTEMS.md. Same net names and refdes everywhere. Two KiCad rules the pipeline has repeatedly tripped on: (1) a net label placed on a pin only NAMES the net — it is NOT an electrical connection unless a wire actually reaches the pin; ERC will report the pin unconnected until you draw the wire. (2) Place every symbol origin and every wire endpoint on the 1.27mm (50mil) grid; an off-grid pin silently fails to connect and costs turns to diagnose. Update PINOUT.md as you assign pins; check the strapping table first.',
+      'Stage 4: schematic. An empty KiCad project has already been scaffolded and wired into .copperhead/config.json (an empty schematic and a blank board with a default outline). Populate the existing schematic with edit_file — write_file refuses KiCad files, so add lib_symbols, symbols, and connectivity by anchored edits into the file that already exists. Work ONE part at a time, not in large blocks: add a symbol (its lib_symbols entry if new, then its placement), run run_erc, fix any violation, then move to the next part — small incremental edits keep a geometry or grid slip local instead of forcing a full-block rewrite. When you add a lib_symbols entry, use the exact canonical KiCad lib_id (e.g. Device:R, Connector:USB_C_Receptacle_USB2.0_16P) and reproduce the real part\'s pins faithfully — never invent pin numbers, names, or electrical types. Before authoring any non-trivial part (anything past passives and power symbols), call lookup_symbol with its lib_id to read the real pin table from the installed library and transcribe from that, never from memory; if lookup_symbol reports the symbol is not found, adopt one of the closest real names it suggests rather than inventing the missing one. Once symbols are placed, run verify_symbols and reconcile every divergence it reports (a wrong lib_id or pin set passes ERC but is still wrong); if it flags a renamed symbol, adopt the real name it suggests. Build subsystem by subsystem from BOM.md and SUBSYSTEMS.md. Same net names and refdes everywhere. Two KiCad rules the pipeline has repeatedly tripped on: (1) a net label placed on a pin only NAMES the net — it is NOT an electrical connection unless a wire actually reaches the pin; ERC will report the pin unconnected until you draw the wire. (2) Place every symbol origin and every wire endpoint on the 1.27mm (50mil) grid; an off-grid pin silently fails to connect and costs turns to diagnose. Update PINOUT.md as you assign pins; check the strapping table first.',
   },
   {
     name: 'layout-draft',
@@ -114,7 +108,10 @@ export const STAGES: Stage[] = [
       const p = path.join(root, config.board);
       if (!existsSync(p)) return false;
       if (!(await readFile(p, 'utf8')).includes('(footprint')) return false;
-      return docHasContent(root, path.join(docs, 'LAYOUT.md'), '## Draft quality');
+      // Same heading-aware match as spec-seed (PIPELINE-ISSUES.md Issue 1): a
+      // valid doc may title the section e.g. "## 5. Draft quality notes", which
+      // a literal '## Draft quality' substring check would reject forever.
+      return docHasHeading(root, path.join(docs, 'LAYOUT.md'), 'Draft quality');
     },
     prompt: () =>
       'Stage 5: first-draft layout. Rule-driven placement written as real coordinates: connectors on edges, decoupling at IC pins, ESD at connectors, keepouts honored. Route power and short critical nets; leave the rest as ratsnest. Every routed net must pass run_drc. Then write the "## Draft quality" section in LAYOUT.md: exactly what is fine and what a human or specialist tool should redo. Non-optimal is acceptable; unlabeled non-optimal is not.',
