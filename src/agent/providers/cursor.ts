@@ -248,7 +248,7 @@ export async function defaultCursorRun(args: CursorRunArgs): Promise<CursorRunRe
 
   const { stdout } = await execa(bin, cmdArgs, {
     env: args.env ?? subprocessEnv(),
-    signal: args.signal,
+    cancelSignal: args.signal,
     reject: true,
     maxBuffer: 50 * 1024 * 1024,
   });
