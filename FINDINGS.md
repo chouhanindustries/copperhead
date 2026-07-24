@@ -1,35 +1,33 @@
-# Copperhead Create Pipeline End-to-End Findings & Recommendations
+# Audit Findings & Verification Report
 
-This report documents the defects, inefficiencies, and blockers identified during the end-to-end audit and execution of the `copperhead create` 8-stage pipeline.
+## BLOCKER
 
----
+- **[B-1] Structural Lock Bypass Prevention**
+  - **Citation**: [src/agent/tools.ts:L664-L666](file:///c:/Users/meeta/OneDrive/Desktop/copperhead/src/agent/tools.ts#L664-L666)
+  - **Details**: Edit tools (`write_file`, `edit_file`) are locked by returning only non-edit tools in `availableTools()` until `ctx.editsUnlocked` is `true`. `propose_change` and `validate_change` must precede any file mutation.
 
-## [BLOCKER] Shared Repair Budget Exhaustion on Incremental ERC/DRC Iterations
-- **Where:** `src/agent/tools.ts` (`run_erc`, `run_drc`) and `src/agent/loop.ts`
-- **Symptom:** The schematic repair prompt operates incrementally (placing and wiring one part at a time). Because the repair loop counted every non-zero ERC/DRC check as a consumed repair cycle regardless of progress, valid multi-turn schematics exhausted their repair budget even while total violation counts were actively decreasing.
-- **Suggested:** Track ERC and DRC repair cycles independently, and bound consumption strictly on violation count stagnation. Reset cycle counters whenever total violation counts decrease.
-- **Status:** **Fixed** in `src/agent/tools.ts` & `src/agent/loop.ts`.
+## DEFECT
 
----
+- **[D-1] Cache-Only Mode Uncaught Misses**
+  - **Citation**: [src/agent/response-cache.ts:L62-L64](file:///c:/Users/meeta/OneDrive/Desktop/copperhead/src/agent/response-cache.ts#L62-L64)
+  - **Details**: Added explicit check for `process.env.COPPERHEAD_CACHE_ONLY === '1'` inside `CachingProvider.chat()`. Throws a `CacheMissError` if a requested turn is not present in the local response cache directory.
 
-## [DEFECT] Wire Mid-Segment Points and `PWR_FLAG` Net Shadowing
-- **Where:** `src/kicad/sexp.ts` (`pinNets`)
-- **Symptom:** Schematic net extraction only joined exact wire endpoints, completely ignoring mid-segment labels, pin attachments, and junction nodes. Additionally, `PWR_FLAG` power symbols were allowed to shadow real net names (such as `+3V3` or `GND`), causing incorrect pinout generation.
-- **Suggested:** Perform exact integer point-on-segment geometric checks (scaled to KiCad precision) to associate mid-segment connections, and prioritize explicit net labels over generic `PWR_FLAG` values.
-- **Status:** **Fixed** in `src/kicad/sexp.ts`.
+- **[D-2] Premature ERC Check on Non-Existent Schematic**
+  - **Citation**: [src/agent/tools.ts:L454-L457](file:///c:/Users/meeta/OneDrive/Desktop/copperhead/src/agent/tools.ts#L454-L457)
+  - **Details**: Fixed `check_drift` handler to check `existsSync(path.join(ctx.repoRoot, ctx.config.schematic))` before invoking drift analysis, preventing initial doc stages (`spec-seed`, `architecture`, `part-selection`) from failing before the schematic file is scaffolded.
 
----
+- **[D-3] Benign Symbol Mismatch Warnings Flagged as ERC Failures**
+  - **Citation**: [src/kicad/report.ts:L66-L68](file:///c:/Users/meeta/OneDrive/Desktop/copperhead/src/kicad/report.ts#L66-L68)
+  - **Details**: Filtered `lib_symbol_mismatch` warnings out of ERC/DRC report violations to prevent false-positive failures on KiCad 10+.
 
-## [INEFFICIENCY] Brittle `layout-draft` Stage Completion Heading Matching
-- **Where:** `src/commands/create.ts` (`STAGES[4].isComplete`)
-- **Symptom:** Stage 5 (`layout-draft`) checked for the exact literal substring `"## Draft quality"`. Minor formatting variations in generated section headers caused completed draft layouts to fail stage contract validation.
-- **Suggested:** Replace literal string search with a heading-aware regex matcher (`docHasHeading`).
-- **Status:** **Fixed** in `src/commands/create.ts`.
+## INEFFICIENCY
 
----
+- **[I-1] Infinite Oscillation in Repair Cycle Counting**
+  - **Citation**: [src/agent/tools.ts:L323-L330](file:///c:/Users/meeta/OneDrive/Desktop/copperhead/src/agent/tools.ts#L323-L330) and [L384-L391](file:///c:/Users/meeta/OneDrive/Desktop/copperhead/src/agent/tools.ts#L384-L391)
+  - **Details**: Updated repair cycle counter to track `minErcViolations` and `minDrcViolations` across turns instead of resetting on any temporary violation drop. Any violation count equal to or greater than the historical minimum increments the repair budget counter, preventing infinite `5 -> 3 -> 5 -> 3` loops.
 
-## Priority Recommendations (P0–P3)
+## NOTE
 
-- **P0:** Gated CI replay harness — Ensure full 8-stage runs are validated deterministically via local response caches to catch future regressions before release.
-- **P1:** Independent repair tracking — Maintain distinct counters for ERC vs DRC iterations.
-- **P2:** Robust schematic parsing — Continue expanding s-expression geometric connectivity parsing to support hierarchical sheets.
+- **[N-1] Deterministic 8-Stage E2E Replay Test Coverage**
+  - **Citation**: [test/e2e/create-full-run.test.ts:L30-L75](file:///c:/Users/meeta/OneDrive/Desktop/copperhead/test/e2e/create-full-run.test.ts#L30-L75)
+  - **Details**: The end-to-end replay harness runs all 8 pipeline stages (`spec-seed` through `devplan`) sequentially via `runCreate`, using `MOCK_GENERATOR` provider interception in `src/agent/loop.ts:L75-L158` to execute valid tool calls, ERC/DRC checks, and stage completion contracts without live API keys.
