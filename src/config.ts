@@ -10,6 +10,7 @@ export interface CopperheadConfig {
   maxTurns: number;
   /** Per-stage overrides for the create pipeline, keyed by stage name. */
   stageMaxTurns?: Record<string, number>;
+  /** Maximum consecutive non-improving ERC/DRC attempts before rollback. */
   maxRepairCycles: number;
   budgets: Record<string, number>;
   /** Per-turn watchdog (ms). A provider turn exceeding this is aborted and

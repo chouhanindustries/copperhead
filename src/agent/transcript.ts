@@ -20,6 +20,7 @@ export interface RunStats {
   exitPath: ExitPath;
   turnsUsed: number;
   maxTurns: number;
+  /** High-water mark of consecutive non-improving ERC/DRC reports. */
   repairCyclesUsed: number;
   maxRepairCycles: number;
   tokensIn: number;
@@ -51,7 +52,7 @@ function renderRunStats(s: RunStats): string[] {
     ``,
     `- **Exit path:** ${s.exitPath}`,
     `- **Turns:** ${s.turnsUsed} / ${s.maxTurns}`,
-    `- **Repair cycles:** ${s.repairCyclesUsed} / ${s.maxRepairCycles}`,
+    `- **Non-improving repair streak (high-water):** ${s.repairCyclesUsed} / ${s.maxRepairCycles}`,
     `- **Tokens:** ${fmtTokens(s.tokensIn)} in / ${fmtTokens(s.tokensOut)} out`,
     `- **Duration:** ${fmtDuration(s.durationMs)}`,
     ...(s.perTurn.length

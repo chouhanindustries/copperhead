@@ -20,6 +20,11 @@ export interface FinishRequest {
   summary: string;
 }
 
+export interface RepairProgress {
+  erc?: { violations: number; nonImproving: number };
+  drc?: { violations: number; nonImproving: number };
+}
+
 /** Mutable state one run threads through every tool call. */
 export interface RunContext {
   repoRoot: string;
@@ -36,6 +41,9 @@ export interface RunContext {
   decisions: string[];
   lastErc: CheckReport | null;
   lastDrc: CheckReport | null;
+  /** Progress retained across KiCad edits so improving verification results do
+   * not consume the bounded repair budget. Optional for injected test contexts. */
+  repairProgress?: RepairProgress;
   repairCycles: number;
   finishRequest: FinishRequest | null;
 }
@@ -80,6 +88,28 @@ function markTouched(ctx: RunContext, rel: string): void {
   } else if (rel.endsWith('.md')) {
     ctx.ledger.onDocEdit(rel);
   }
+}
+
+/**
+ * Track consecutive verification attempts that fail to improve. The first
+ * failing report establishes a baseline; a lower violation count resets the
+ * streak, while an equal or higher count spends one repair cycle. Progress is
+ * kept separately for ERC and DRC and survives edits between checks.
+ */
+export function trackRepairProgress(progress: RepairProgress, report: CheckReport): number {
+  const source = report.source;
+  if (report.ok) {
+    delete progress[source];
+    return 0;
+  }
+  const previous = progress[source];
+  const violations = report.violations.length;
+  const nonImproving =
+    previous === undefined || violations < previous.violations
+      ? 0
+      : previous.nonImproving + 1;
+  progress[source] = { violations, nonImproving };
+  return nonImproving;
 }
 
 export const TOOLS: ToolDef[] = [
@@ -308,8 +338,9 @@ export const TOOLS: ToolDef[] = [
       const schPath = path.join(ctx.repoRoot, ctx.config.schematic);
       const report = await runErc(schPath);
       ctx.lastErc = report;
+      ctx.repairProgress ??= {};
+      ctx.repairCycles = Math.max(ctx.repairCycles, trackRepairProgress(ctx.repairProgress, report));
       if (report.ok) ctx.ledger.clear('erc');
-      else ctx.repairCycles++;
       const out = formatViolations(report);
       // A zero-symbol schematic passes ERC with 0 violations — a false green
       // (3.2) that lets a premature finish look verified (an empty sheet also
@@ -356,8 +387,9 @@ export const TOOLS: ToolDef[] = [
         return 'no board configured; DRC does not apply yet — skip it until a board exists and is set in .copperhead/config.json';
       const report = await runDrc(path.join(ctx.repoRoot, ctx.config.board));
       ctx.lastDrc = report;
+      ctx.repairProgress ??= {};
+      ctx.repairCycles = Math.max(ctx.repairCycles, trackRepairProgress(ctx.repairProgress, report));
       if (report.ok) ctx.ledger.clear('drc');
-      else ctx.repairCycles++;
       return formatViolations(report);
     },
   },

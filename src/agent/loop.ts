@@ -201,6 +201,7 @@ async function runWithMemory(
     decisions: [],
     lastErc: null,
     lastDrc: null,
+    repairProgress: {},
     repairCycles: 0,
     finishRequest: null,
   };
