@@ -120,11 +120,16 @@ describe('create pipeline: e2e stage contracts (bounty AC)', () => {
     }
   });
 
-  it('resume command format includes all required flags (5.3)', () => {
-    // Verify the resume command helper produces correct output by testing
-    // the STAGES export. Actual resume logic tested in create-resilience.test.ts
+  it('all 8 stages have prompt and isComplete functions (contract integrity)', () => {
+    // Verify pipeline structure: all stages export prompt generators and
+    // completion detectors. The actual resume-command logic is tested in
+    // create-resilience.test.ts (commitResumedStage, resume command format).
     expect(STAGES.length).toBe(8);
     expect(STAGES[0].prompt).toBeInstanceOf(Function);
     expect(STAGES[0].isComplete).toBeInstanceOf(Function);
+    for (const s of STAGES) {
+      expect(s.prompt).toBeInstanceOf(Function);
+      expect(s.isComplete).toBeInstanceOf(Function);
+    }
   });
 });
