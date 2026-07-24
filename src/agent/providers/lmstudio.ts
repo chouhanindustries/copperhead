@@ -62,6 +62,16 @@ export class LMStudioProvider extends OpenAIProvider {
    * id — not a placeholder — reaches run metadata and the response-cache key
    * (`modelId`, F6); two different local models must not share cache entries.
    */
+  /**
+   * Public entry point for the same discovery, so `loop.ts` can learn the real
+   * model id before it builds the response cache and the run metadata — those
+   * are constructed up front, and would otherwise record the routing string
+   * `lmstudio` and let two different local models share cache entries (F6).
+   */
+  async resolvedModelId(): Promise<string> {
+    return this.resolveModelId(await this.client());
+  }
+
   protected override async resolveModelId(client: ChatClientLike): Promise<string> {
     if (this.model) return this.model;
     if (this.discovered) return this.discovered;

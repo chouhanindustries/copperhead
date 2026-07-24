@@ -48,4 +48,13 @@ export interface Provider {
   readonly name: string;
   chat(messages: Msg[], tools: ToolSchema[], opts?: ChatOpts): Promise<Turn>;
   close?(): Promise<void>;
+  /**
+   * The concrete model id this provider will actually use, when the routing
+   * string does not name it. A backend that hosts whichever model the user
+   * loaded (`--model lmstudio`) resolves it here so run metadata records which
+   * model designed the board, and so the response-cache key distinguishes two
+   * different local models instead of replaying one's turns for the other (F6).
+   * Best-effort: the loop falls back to the routing string if this throws.
+   */
+  resolvedModelId?(): Promise<string>;
 }

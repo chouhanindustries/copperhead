@@ -222,11 +222,19 @@ async function runWithMemory(
   // condition under which we skip the CachingProvider wrap below.
   const sessionResume = process.env.COPPERHEAD_CC_SESSION_RESUME === '1' && !config.llmCache;
   let provider = opts.provider ?? (await makeProvider(opts.model, sessionResume));
+  // When the routing string does not name the model (`--model lmstudio` uses
+  // whichever model the local server has loaded), ask the provider what it will
+  // actually use. Both surfaces below are built once, up front, so without this
+  // they would record "lmstudio": run metadata could not say which model
+  // designed the board, and two different local models would share cache entries
+  // (F6). Best-effort — a failure here (e.g. server down) falls back to the
+  // routing string and is surfaced properly by the first chat() instead.
+  const effectiveModel = await provider.resolvedModelId?.().catch(() => undefined) ?? opts.model;
   // Cache every turn's response so a retried/restarted stage replays what it
   // already paid for instead of re-calling the model (repo-scoped, cross-run).
   // Skip an injected provider (tests drive scripted providers directly).
   if (config.llmCache && !opts.provider) {
-    provider = new CachingProvider(provider, path.join(repoRoot, CONFIG_DIR, 'llm-cache'), log, opts.model);
+    provider = new CachingProvider(provider, path.join(repoRoot, CONFIG_DIR, 'llm-cache'), log, effectiveModel);
   }
   providers.add(provider);
   // Held separately from `provider` (which is reassigned on failover) so the
@@ -244,7 +252,7 @@ async function runWithMemory(
     maxTurns,
     runId: path.basename(transcript.dir),
     request: opts.request,
-    model: opts.model,
+    model: effectiveModel,
     provider: provider.name,
     interactive: opts.interactive ?? false,
     input: opts.meta,

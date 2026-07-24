@@ -198,6 +198,31 @@ describe('LMStudioProvider — model id resolution', () => {
     await expect(provider.chat(messages, tools)).rejects.toThrow(/no model is loaded/);
   });
 
+  it('exposes the discovered id so run metadata and the cache key record the real model', async () => {
+    // The cache key and run metadata are built up front, before the first turn.
+    // Without this hook both would record the routing string "lmstudio", so two
+    // different local models would share cache entries (F6) and metadata could
+    // not say which model designed the board.
+    let lists = 0;
+    const provider = new LMStudioProvider({
+      client: fakeClient({ text: 'ok', models: ['google/gemma-4-12b'], onList: () => lists++ }),
+    });
+    expect(await provider.resolvedModelId?.()).toBe('google/gemma-4-12b');
+    // and it is the same single probe the turns use
+    await provider.chat(messages, tools);
+    expect(lists).toBe(1);
+  });
+
+  it('reports the explicit id without probing, via the same hook', async () => {
+    let lists = 0;
+    const provider = new LMStudioProvider({
+      model: 'llama-3.3-70b',
+      client: fakeClient({ text: 'ok', onList: () => lists++ }),
+    });
+    expect(await provider.resolvedModelId?.()).toBe('llama-3.3-70b');
+    expect(lists).toBe(0);
+  });
+
   it('never probes when the model id is given explicitly', async () => {
     let lists = 0;
     const sent: ChatRequestLike[] = [];
