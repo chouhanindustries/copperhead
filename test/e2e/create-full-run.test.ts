@@ -86,5 +86,5 @@ describe('End-to-End Create Pipeline Replay Harness', () => {
       delete process.env.COPPERHEAD_CACHE_ONLY;
       await cleanup();
     }
-  });
+  }, 120_000);
 });

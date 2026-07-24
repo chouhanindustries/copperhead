@@ -18,7 +18,6 @@ import { openspecArchive } from '../openspec/cli.js';
 import { existsSync } from 'node:fs';
 import { OpenAIProvider } from './providers/openai.js';
 import { AnthropicProvider } from './providers/anthropic.js';
-import { CachingProvider } from './cache.js';
 import { CodexProvider } from './providers/codex.js';
 import { ClaudeCodeProvider } from './providers/claude-code.js';
 import { openSynapMemory, type RunRecord, type SynapMemory } from '../memory/synap.js';
@@ -74,35 +73,38 @@ export interface RunResult {
 }
 
 export async function makeProvider(model: string, sessionResume = false): Promise<Provider> {
-  let provider: Provider;
   if (model === 'codex' || model.startsWith('codex:')) {
     const codexModel = model.startsWith('codex:') ? model.slice('codex:'.length) : undefined;
     if (codexModel === '') throw new Error('codex model override cannot be empty; use "codex" or "codex:<model-id>"');
+    // @ts-expect-error optional peer dependency
     const { Codex } = await import('@openai/codex-sdk').catch((err: unknown) => {
       throw new Error(
         'Codex provider requires the optional @openai/codex-sdk package; install it alongside Copperhead before using --model codex',
         { cause: err },
       );
     });
-    provider = new CodexProvider({
+    return new CodexProvider({
       ...(codexModel ? { model: codexModel } : {}),
       client: new Codex({
         // Use the user's installed CLI and its saved login rather than a model API key.
         codexPathOverride: process.env.COPPERHEAD_CODEX_PATH || 'codex',
       }),
     });
-  } else if (model === 'claude-code' || model.startsWith('claude-code:')) {
+  }
+  // Match claude-code before the `claude*` prefix: both `claude-code` and
+  // `claude-code:<id>` start with `claude` and would otherwise route to the
+  // Anthropic API provider.
+  if (model === 'claude-code' || model.startsWith('claude-code:')) {
     const claudeCodeModel = model.startsWith('claude-code:') ? model.slice('claude-code:'.length) : undefined;
     if (claudeCodeModel === '') {
       throw new Error('claude-code model override cannot be empty; use "claude-code" or "claude-code:<model-id>"');
     }
-    provider = new ClaudeCodeProvider(claudeCodeModel, undefined, undefined, sessionResume);
-  } else if (model === 'claude' || model.startsWith('claude')) {
-    provider = new AnthropicProvider(model === 'claude' ? undefined : model);
-  } else {
-    provider = new OpenAIProvider(model === 'gpt-5' ? undefined : model);
+    return new ClaudeCodeProvider(claudeCodeModel, undefined, undefined, sessionResume);
   }
-  return new CachingProvider(provider);
+  if (model === 'claude' || model.startsWith('claude')) {
+    return new AnthropicProvider(model === 'claude' ? undefined : model);
+  }
+  return new OpenAIProvider(model === 'gpt-5' ? undefined : model);
 }
 
 function otherProvider(current: Provider): Provider | null {
