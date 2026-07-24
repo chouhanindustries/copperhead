@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { readFile, writeFile, appendFile } from 'node:fs/promises';
+import { createRequire } from 'node:module';
 import path from 'node:path';
 import { execa } from 'execa';
 import { runAgentLoop } from '../src/agent/loop.js';
@@ -9,13 +10,34 @@ import { tempFixtureRepo } from './helpers.js';
 
 /**
  * Live agent-loop tests (AC-3.x). These call a real LLM: they run only when an
- * API key is present, and each asserts on repo state and the transcript.
- * Provider parity (AC-3.10): the suite runs for every provider with a key.
+ * provider is configured, and each asserts on repo state and the transcript.
+ * Provider parity (AC-3.10): the suite runs for every configured provider.
  */
 const providers: { model: string; key: string | undefined }[] = [
   { model: process.env.COPPERHEAD_TEST_OPENAI_MODEL ?? 'gpt-5', key: process.env.OPENAI_API_KEY },
   { model: process.env.COPPERHEAD_TEST_ANTHROPIC_MODEL ?? 'claude', key: process.env.ANTHROPIC_API_KEY },
+  {
+    model: process.env.COPPERHEAD_TEST_CODEX_MODEL ?? 'codex',
+    key: process.env.COPPERHEAD_TEST_CODEX === '1' ? 'saved-codex-login' : undefined,
+  },
+  // Saved-login Claude Code (AC-3.10, AC-3.11): runs only when a Claude Code
+  // OAuth token is present AND the optional SDK is installed; needs no
+  // ANTHROPIC_API_KEY. Gating on both avoids a hard failure when the token is
+  // set but the (undeclared) SDK dependency is missing.
+  {
+    model: process.env.COPPERHEAD_TEST_CLAUDE_CODE_MODEL ?? 'claude-code',
+    key: claudeCodeSdkInstalled() ? process.env.CLAUDE_CODE_OAUTH_TOKEN : undefined,
+  },
 ];
+
+function claudeCodeSdkInstalled(): boolean {
+  try {
+    createRequire(import.meta.url).resolve('@anthropic-ai/claude-agent-sdk');
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 async function setupRepo(): Promise<{ repo: string; cleanup: () => Promise<void> }> {
   const { repo, cleanup } = await tempFixtureRepo();
@@ -106,16 +128,17 @@ for (const { model, key } of providers) {
     );
 
     it(
-      'AC-3.6: persistent violations roll back to a byte-identical tree',
+      'AC-3.6: a structurally forced failure rolls back to a byte-identical tree',
       async () => {
         const { repo, cleanup } = await setupRepo();
         try {
-          // an impossible request with a tiny turn budget forces failure
+          // One turn forces failure structurally for every provider: edit tools
+          // cannot be exposed until a proposal validates during that first turn.
           const res = await runAgentLoop({
             repoRoot: repo,
             request: 'rename net KEY_DAH to KEY_DASH',
             model,
-            maxTurns: 2,
+            maxTurns: 1,
             log: () => {},
           });
           expect(res.outcome).toBe('failure');

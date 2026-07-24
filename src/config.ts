@@ -12,8 +12,28 @@ export interface CopperheadConfig {
   stageMaxTurns?: Record<string, number>;
   maxRepairCycles: number;
   budgets: Record<string, number>;
+  /** Per-turn watchdog (ms). A provider turn exceeding this is aborted and
+   * retried, so a hung call can't stall the run forever. <=0 disables it. */
+  turnTimeoutMs: number;
+  /** How often (ms) to emit a liveness heartbeat while a provider turn is in
+   * flight, so a slow large-output turn is distinguishable from a hung one
+   * (5.1). Fires only after the first interval, so quick turns stay silent.
+   * <=0 disables it. */
+  heartbeatMs: number;
+  /** How many times the create pipeline may auto-retry a stage that failed or
+   * ended without meeting its contract, gated by an LLM diagnosis each time. */
+  maxStageRetries: number;
+  /** Cache each turn's LLM response to disk and replay it on identical inputs,
+   * so retries/restarts reuse work already paid for. Default on. */
+  llmCache: boolean;
   /** Content hashes of generated docs, for init idempotency (AC-1.4). */
   generatedHashes?: Record<string, string>;
+  /**
+   * How the repo was bootstrapped. `"create"` marks a Mode A pipeline repo
+   * (fab gate requires DEVPLAN.md). Written by `copperhead create`; absent on
+   * init-only / hand-maintained repos.
+   */
+  origin?: 'create' | 'init';
 }
 
 export const CONFIG_DIR = '.copperhead';
@@ -24,6 +44,19 @@ export const DEFAULTS: Omit<CopperheadConfig, 'schematic' | 'board'> = {
   maxTurns: 40,
   maxRepairCycles: 5,
   budgets: {},
+  // 10 min. A single large capture turn (a full lib_symbols + instances edit,
+  // ~40k output tokens) on the claude-code provider legitimately runs several
+  // minutes; the old 5-min deadline killed those mid-flight and, because the
+  // watchdog budget is spent per stage, could fail a stage that was only slow,
+  // not hung. 10 min clears the largest observed turns while still catching a
+  // genuinely stuck subprocess.
+  turnTimeoutMs: 600000,
+  // 30s: within one interval an operator knows a turn is alive, and a full
+  // 10-min turn emits ~20 lines — enough to distinguish slow from hung without
+  // flooding the log. Quick turns (< 30s) emit nothing.
+  heartbeatMs: 30000,
+  maxStageRetries: 2,
+  llmCache: true,
 };
 
 export function configPath(repoRoot: string): string {
@@ -50,7 +83,15 @@ export async function loadConfig(repoRoot: string): Promise<CopperheadConfig> {
     ...(Object.keys(stageMaxTurns).length ? { stageMaxTurns } : {}),
     maxRepairCycles: raw.maxRepairCycles ?? DEFAULTS.maxRepairCycles,
     budgets: raw.budgets ?? {},
+    turnTimeoutMs: typeof raw.turnTimeoutMs === 'number' ? raw.turnTimeoutMs : DEFAULTS.turnTimeoutMs,
+    heartbeatMs: typeof raw.heartbeatMs === 'number' ? raw.heartbeatMs : DEFAULTS.heartbeatMs,
+    maxStageRetries:
+      Number.isInteger(raw.maxStageRetries) && (raw.maxStageRetries as number) >= 0
+        ? (raw.maxStageRetries as number)
+        : DEFAULTS.maxStageRetries,
+    llmCache: raw.llmCache !== false,
     ...(raw.generatedHashes ? { generatedHashes: raw.generatedHashes } : {}),
+    ...(raw.origin === 'create' || raw.origin === 'init' ? { origin: raw.origin } : {}),
   };
 }
 
@@ -70,18 +111,27 @@ export interface ResolvedModel {
  * Accepted values (same set for `--model`, COPPERHEAD_MODEL, and `model` in
  * .copperhead/config.json):
  *
- * - `claude`  : the Anthropic provider on its default model.
- * - `claude-*`: any Anthropic model id, passed through verbatim, e.g.
+ * - `claude-code`     : the Claude Code saved-login provider on its default
+ *                       model. Needs NO API key — it reuses the logged-in Claude
+ *                       Code CLI / CLAUDE_CODE_OAUTH_TOKEN via the Agent SDK.
+ * - `claude-code:<id>`: the same provider on a specific model id.
+ * - `claude`  : the Anthropic API provider on its default model.
+ * - `claude-*`: any Anthropic API model id, passed through verbatim, e.g.
  *               `claude-opus-4-5`. Anything starting with `claude` routes here.
+ * - `codex`   : the locally installed Codex CLI using its saved ChatGPT login.
+ * - `codex:*` : Codex CLI with an explicit model id, e.g. `codex:gpt-5.6`.
  * - `gpt-5`   : the OpenAI provider on its default model.
  * - anything else: sent to the OpenAI provider verbatim as a model id, e.g.
  *               `gpt-5-mini` or `o3`.
  *
  * Routing is prefix-based, not a fixed list (see makeProvider in agent/loop.ts),
- * so a model released after this build still works without a code change. The
- * cost is that a typo like `claud-sonnet-5` silently routes to OpenAI and fails
- * there. The chosen provider must have its key set: ANTHROPIC_API_KEY for
- * `claude*`, OPENAI_API_KEY otherwise.
+ * matched top to bottom: `claude-code`/`claude-code:<id>` is checked BEFORE the
+ * `claude*` prefix, so it is never captured by the Anthropic API route. A model
+ * released after this build still works without a code change. The cost is that
+ * a typo like `claud-sonnet-5` silently routes to OpenAI and fails there.
+ * Anthropic and direct OpenAI providers require their API keys; `codex` requires
+ * a locally installed and authenticated Codex CLI, and `claude-code` requires a
+ * Claude Code login (CLAUDE_CODE_OAUTH_TOKEN); neither needs a model API key.
  */
 export function resolveModel(flag: string | undefined, config: CopperheadConfig, env = process.env): ResolvedModel {
   if (flag) return { model: flag, source: 'flag' };
@@ -90,6 +140,6 @@ export function resolveModel(flag: string | undefined, config: CopperheadConfig,
   if (env.OPENAI_API_KEY) return { model: 'gpt-5', source: 'openai-key' };
   if (env.ANTHROPIC_API_KEY) return { model: 'claude', source: 'anthropic-key' };
   throw new Error(
-    'no model configured: pass --model, set COPPERHEAD_MODEL, set model in .copperhead/config.json, or provide OPENAI_API_KEY/ANTHROPIC_API_KEY',
+    'no model configured: pass --model codex (uses your local Codex login), set COPPERHEAD_MODEL, set model in .copperhead/config.json, or provide OPENAI_API_KEY/ANTHROPIC_API_KEY',
   );
 }

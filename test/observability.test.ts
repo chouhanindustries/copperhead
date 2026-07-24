@@ -3,8 +3,8 @@ import { mkdir, readFile, writeFile, chmod, rm } from 'node:fs/promises';
 import path from 'node:path';
 import { execa } from 'execa';
 import { runAgentLoop, type RunOptions } from '../src/agent/loop.js';
-import type { Provider, Turn } from '../src/agent/types.js';
-import { InteractiveRenderer, makeRenderer } from '../src/agent/render.js';
+import type { ChatOpts, Provider, Turn } from '../src/agent/types.js';
+import { InteractiveRenderer, makeRenderer, plainRenderer } from '../src/agent/render.js';
 import { tempFixtureRepo } from './helpers.js';
 
 /** Replays a fixed script of turns; the last turn repeats forever. */
@@ -269,6 +269,64 @@ describe('interactive renderer (task 5.7)', () => {
       expect(second).toContain('copperhead v9.9.9'); // header still renders
       expect(second).toContain('turn 1/1'); // status line still renders
       expect(second).toContain('turn-budget-exhausted'); // outcome line still renders
+    } finally {
+      await cleanup();
+    }
+  });
+});
+
+describe('liveness heartbeat distinguishes slow from hung (5.1)', () => {
+  it('plain renderer emits an elapsed + streamed line', () => {
+    const lines: string[] = [];
+    const r = plainRenderer((l) => lines.push(l));
+    r.heartbeat({ elapsedMs: 90000, streamedChars: 44000 });
+    expect(lines[0]).toContain('still working');
+    expect(lines[0]).toContain('1m30s');
+    expect(lines[0]).toContain('44.0k chars streamed');
+    // before any output has streamed, it still signals liveness
+    r.heartbeat({ elapsedMs: 20000, streamedChars: 0 });
+    expect(lines[1]).toContain('20s elapsed');
+    expect(lines[1]).toContain('no output yet');
+  });
+
+  it('interactive status line grows with streamed output, then clears next turn', () => {
+    let written = '';
+    const fake = { write: (c: string) => (written += c), columns: 200 };
+    const r = new InteractiveRenderer(fake);
+    r.turnStart(1, 40, 0, 0);
+    r.status('thinking');
+    r.heartbeat({ elapsedMs: 30000, streamedChars: 12300 });
+    expect(written).toContain('~12.3k ch');
+    // a fresh turn resets the streamed-output volume (no stale carryover)
+    written = '';
+    r.turnStart(2, 40, 1000, 200);
+    expect(written).not.toContain('~12.3k ch');
+    r.finish('done');
+  });
+
+  it('the loop fires a heartbeat while a slow provider turn is in flight', async () => {
+    const { repo, cleanup } = await tempFixtureRepo();
+    try {
+      await mkdir(path.join(repo, '.copperhead'), { recursive: true });
+      // Tiny interval so the test does not have to wait a real 30s.
+      await writeFile(path.join(repo, '.copperhead', 'config.json'), JSON.stringify({ heartbeatMs: 25 }), 'utf8');
+
+      // Reports streamed output immediately, then stays "in flight" long enough
+      // for several heartbeat intervals to fire before returning.
+      class SlowStreamingProvider implements Provider {
+        readonly name = 'scripted';
+        async chat(_m: unknown, _t: unknown, opts?: ChatOpts): Promise<Turn> {
+          opts?.onStream?.(12300);
+          await new Promise((res) => setTimeout(res, 150));
+          return spin('a');
+        }
+      }
+
+      const lines: string[] = [];
+      await runAgentLoop(loopOpts(repo, new SlowStreamingProvider(), lines, { maxTurns: 1, allowDirty: true }));
+      const beats = lines.filter((l) => l.includes('still working'));
+      expect(beats.length).toBeGreaterThan(0);
+      expect(beats.some((l) => l.includes('12.3k'))).toBe(true);
     } finally {
       await cleanup();
     }

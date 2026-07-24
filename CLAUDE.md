@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **copperhead** — "Cursor for circuit boards": a TypeScript CLI agent that designs and edits real KiCad projects (`.kicad_sch`/`.kicad_pcb` s-expression files), keeps markdown design docs as memory, and verifies its own work with `kicad-cli` ERC/DRC. Apache-2.0, Node ≥ 20.
 
-**Current state: Phase 1 implemented, pending live verification.** The CLI builds and runs (`init`, `check`/`verify`, `do`, `sync`, `create`), and the offline test suite is green. What remains is live-LLM verification: the AC-3.x integration tests exist but skip without an API key, so the agent-loop acceptance criteria have not been observed passing. See the status note at the top of `openspec/changes/build-copperhead-phase-1/tasks.md` for the exact split.
+**Current state: Phase 1 implemented, pending full live verification.** The CLI builds and runs (`init`, `check`/`verify`, `do`, `sync`, `create`), and the offline test suite is green. Live AC-3.x integration tests run only for explicitly configured providers: API keys enable the direct OpenAI/Anthropic paths, and `COPPERHEAD_TEST_CODEX=1` enables the local saved-login Codex path. See the status note at the top of `openspec/changes/build-copperhead-phase-1/tasks.md` for the exact split.
 
 ## Sources of truth
 
@@ -33,7 +33,7 @@ openspec instructions <artifact> --change <name> --json  # rules/template for an
 
 ## Architecture (per SPEC.md §2)
 
-CLI (commander) → provider-agnostic agent loop → three tool families: file tools (read/edit/search, sandboxed to repo root), KiCad tools (`kicad-cli` ERC/DRC/SVG as subprocess), memory tools (docs + constraint registry). Layout: `src/cli.ts`, `src/commands/` (check, sync, create), `src/agent/` (loop, providers/openai+anthropic, prompts, tools), `src/kicad/` (cli wrapper, read-only sexp parser, report normalizer), `src/memory/` (scaffold, drift), `test/fixtures/` (tiny known-good KiCad project). Build: tsc → `dist/`, bin `copperhead`; tests: vitest (LLM-touching integration tests run only when an API key env var is present).
+CLI (commander) → provider-agnostic agent loop → three tool families: file tools (read/edit/search, sandboxed to repo root), KiCad tools (`kicad-cli` ERC/DRC/SVG as subprocess), memory tools (docs + constraint registry). Layout: `src/cli.ts`, `src/commands/` (check, sync, create), `src/agent/` (loop, OpenAI/Anthropic/local-Codex providers, prompts, tools), `src/kicad/` (cli wrapper, read-only sexp parser, report normalizer), `src/memory/` (scaffold, drift), `test/fixtures/` (tiny known-good KiCad project). Build: tsc → `dist/`, bin `copperhead`; tests: vitest (LLM-touching integration tests run only when their provider is explicitly configured).
 
 Two invariants shape everything (SPEC.md §1.3):
 
