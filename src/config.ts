@@ -111,6 +111,8 @@ export interface ResolvedModel {
  * Accepted values (same set for `--model`, COPPERHEAD_MODEL, and `model` in
  * .copperhead/config.json):
  *
+ * - `cursor`          : the Cursor Agent CLI using saved login (`agent login`).
+ * - `cursor:<id>`     : the same provider on a specific model id.
  * - `claude-code`     : the Claude Code saved-login provider on its default
  *                       model. Needs NO API key — it reuses the logged-in Claude
  *                       Code CLI / CLAUDE_CODE_OAUTH_TOKEN via the Agent SDK.
@@ -131,7 +133,8 @@ export interface ResolvedModel {
  * a typo like `claud-sonnet-5` silently routes to OpenAI and fails there.
  * Anthropic and direct OpenAI providers require their API keys; `codex` requires
  * a locally installed and authenticated Codex CLI, and `claude-code` requires a
- * Claude Code login (CLAUDE_CODE_OAUTH_TOKEN); neither needs a model API key.
+ * Claude Code login (CLAUDE_CODE_OAUTH_TOKEN); `cursor` requires `agent login`.
+ * None of the saved-login providers need a model API key.
  */
 export function resolveModel(flag: string | undefined, config: CopperheadConfig, env = process.env): ResolvedModel {
   if (flag) return { model: flag, source: 'flag' };
@@ -140,6 +143,6 @@ export function resolveModel(flag: string | undefined, config: CopperheadConfig,
   if (env.OPENAI_API_KEY) return { model: 'gpt-5', source: 'openai-key' };
   if (env.ANTHROPIC_API_KEY) return { model: 'claude', source: 'anthropic-key' };
   throw new Error(
-    'no model configured: pass --model codex (uses your local Codex login), set COPPERHEAD_MODEL, set model in .copperhead/config.json, or provide OPENAI_API_KEY/ANTHROPIC_API_KEY',
+    'no model configured: pass --model codex or --model cursor (saved CLI login), set COPPERHEAD_MODEL, set model in .copperhead/config.json, or provide OPENAI_API_KEY/ANTHROPIC_API_KEY',
   );
 }
