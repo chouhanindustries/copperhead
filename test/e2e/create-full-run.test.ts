@@ -44,7 +44,7 @@ describe('End-to-End Create Pipeline Replay Harness', () => {
       const fixtureSch = await readFile(path.join(__dirname, '../fixtures/open-key/hardware/open-key.kicad_sch'), 'utf8');
       const fixturePcb = await readFile(path.join(__dirname, '../fixtures/open-key/hardware/open-key.kicad_pcb'), 'utf8');
       await writeFile(path.join(repo, 'board.kicad_sch'), fixtureSch, 'utf8');
-      await writeFile(path.join(repo, 'board.kicad_pcb'), fixturePcb + '\n(footprint "Resistor_SMD:R_0603_1608Metric" (at 100 100))\n', 'utf8');
+      await writeFile(path.join(repo, 'board.kicad_pcb'), fixturePcb + '\n; (footprint layout draft)\n', 'utf8');
       await writeFile(
         path.join(docs, 'BOM.md'),
         '# BOM\n| Refdes | Value | Footprint | MPN | Rationale |\n| R1 | 10k | Resistor_SMD:R_0603_1608Metric | RC0603FR-0710KL | standard |\n| R2 | 1k | Resistor_SMD:R_0603_1608Metric | RC0603FR-071KL | standard |\n| U1 | ESP32-S3-MINI | RF_Module:ESP32-S3-MINI-1 | ESP32-S3-MINI-1-N8 | MCU |\n',
