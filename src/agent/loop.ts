@@ -2,7 +2,7 @@ import path from 'node:path';
 import { readFile, writeFile } from 'node:fs/promises';
 import { execa } from 'execa';
 import type { Msg, Provider, Turn } from './types.js';
-import { availableTools, dispatchTool, type RunContext } from './tools.js';
+import { availableTools, dispatchTool, newRepairProgress, type RunContext } from './tools.js';
 import { CachingProvider } from './response-cache.js';
 import { withTimeout, TurnTimeoutError } from './recovery.js';
 import { buildSystemPrompt } from './prompts.js';
@@ -202,6 +202,7 @@ async function runWithMemory(
     lastErc: null,
     lastDrc: null,
     repairCycles: 0,
+    repairProgress: newRepairProgress(),
     finishRequest: null,
   };
 
@@ -545,8 +546,15 @@ async function runWithMemory(
       messages.push({ role: 'tool', toolCallId: call.id, content: result });
     }
 
+    // Bounded stagnation, not bounded attempts: repairCycles is the worst
+    // streak of consecutive non-improving ERC/DRC reports (recordCheckForBudget),
+    // so a converging incremental build never trips this — only a check whose
+    // violation count has stopped shrinking for maxRepairCycles+1 reports does.
     if (ctx.repairCycles > config.maxRepairCycles) {
-      return fail(`repair cycles exhausted (${config.maxRepairCycles}); violations persist`, 'repair-cycles-exhausted');
+      return fail(
+        `repair cycles exhausted (more than ${config.maxRepairCycles} consecutive checks without improvement); violations persist`,
+        'repair-cycles-exhausted',
+      );
     }
 
     const remaining = budget - turn - 1;

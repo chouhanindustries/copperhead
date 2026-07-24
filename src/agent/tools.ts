@@ -20,6 +20,54 @@ export interface FinishRequest {
   summary: string;
 }
 
+/**
+ * Per-check-type repair progress. The repair budget bounds STAGNATION, not
+ * attempts: the schematic stage explicitly demands "one part, run_erc, fix,
+ * next part", so a converging design legitimately produces many failing
+ * reports whose violation counts shrink (10 -> 7 -> 5 -> 3). Only consecutive
+ * NON-IMPROVING reports of the same check (violation count >= the previous
+ * failing report of that check) count against maxRepairCycles; any improvement
+ * resets that check's streak. ERC and DRC are tracked independently so board
+ * progress can never mask a stuck schematic loop, or vice versa.
+ */
+export interface RepairProgress {
+  /** Violation count of the last FAILING report per check; null = no baseline
+   * (never failed, or reset by a clean pass). */
+  lastFailCount: { erc: number | null; drc: number | null };
+  /** Current streak of consecutive non-improving failing reports per check. */
+  stagnant: { erc: number; drc: number };
+}
+
+export function newRepairProgress(): RepairProgress {
+  return { lastFailCount: { erc: null, drc: null }, stagnant: { erc: 0, drc: 0 } };
+}
+
+/**
+ * Fold one ERC/DRC report into the repair budget. Invariant: bounded
+ * stagnation, not bounded attempts. `ctx.repairCycles` (what the loop compares
+ * to maxRepairCycles) is the WORST current stagnation streak across check
+ * types, so a run only exhausts when one check has gone maxRepairCycles+1
+ * consecutive reports without a strict improvement. The first failing report
+ * of a (re)started sequence sets the baseline and does not count.
+ */
+export function recordCheckForBudget(ctx: RunContext, report: CheckReport): void {
+  const p = ctx.repairProgress;
+  const type = report.source;
+  if (report.ok) {
+    // Clean pass: the sequence converged. Drop the baseline so a later,
+    // unrelated failure starts a fresh sequence instead of reading as a regression.
+    p.lastFailCount[type] = null;
+    p.stagnant[type] = 0;
+  } else {
+    const count = report.violations.length;
+    const prev = p.lastFailCount[type];
+    if (prev !== null && count >= prev) p.stagnant[type]++;
+    else p.stagnant[type] = 0; // first report (baseline) or strict improvement
+    p.lastFailCount[type] = count;
+  }
+  ctx.repairCycles = Math.max(p.stagnant.erc, p.stagnant.drc);
+}
+
 /** Mutable state one run threads through every tool call. */
 export interface RunContext {
   repoRoot: string;
@@ -36,7 +84,11 @@ export interface RunContext {
   decisions: string[];
   lastErc: CheckReport | null;
   lastDrc: CheckReport | null;
+  /** Worst current stagnation streak across check types (bounded stagnation,
+   * not bounded attempts). Derived by recordCheckForBudget; the loop fails the
+   * run when it exceeds config.maxRepairCycles. Never increment directly. */
   repairCycles: number;
+  repairProgress: RepairProgress;
   finishRequest: FinishRequest | null;
 }
 
@@ -309,7 +361,7 @@ export const TOOLS: ToolDef[] = [
       const report = await runErc(schPath);
       ctx.lastErc = report;
       if (report.ok) ctx.ledger.clear('erc');
-      else ctx.repairCycles++;
+      recordCheckForBudget(ctx, report);
       const out = formatViolations(report);
       // A zero-symbol schematic passes ERC with 0 violations — a false green
       // (3.2) that lets a premature finish look verified (an empty sheet also
@@ -357,7 +409,7 @@ export const TOOLS: ToolDef[] = [
       const report = await runDrc(path.join(ctx.repoRoot, ctx.config.board));
       ctx.lastDrc = report;
       if (report.ok) ctx.ledger.clear('drc');
-      else ctx.repairCycles++;
+      recordCheckForBudget(ctx, report);
       return formatViolations(report);
     },
   },
