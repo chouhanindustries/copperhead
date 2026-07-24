@@ -685,3 +685,44 @@ export async function runCreate(opts: CreateOptions): Promise<{ ok: boolean; com
   await writeRunReport(opts, stageCosts);
   return { ok: check.ok, completed };
 }
+
+
+// Fail-Loud Quality & Safety Gate Errors (§SPEC 2.5)
+export class StageWedgedError extends Error {
+  constructor(public stageName: string, public retryCount: number) {
+    super(`Stage wedged: ${stageName} exceeded retry ceiling of ${retryCount} without progress`);
+    this.name = 'StageWedgedError';
+  }
+}
+
+export class FalseGreenERCError extends Error {
+  constructor(public schematicPath: string, public symbolCount: number) {
+    super(`False-green ERC detected: ${schematicPath} reported clean ERC but contains ${symbolCount} symbols`);
+    this.name = 'FalseGreenERCError';
+  }
+}
+
+export class IncompletePipelineRunError extends Error {
+  constructor(public completedCount: number, public totalCount: number) {
+    super(`Incomplete pipeline run: completed ${completedCount}/${totalCount} stages`);
+    this.name = 'IncompletePipelineRunError';
+  }
+}
+
+export function simulateStageTurnLoop(stageName: string, retries: number, maxRetries: number = 3): void {
+  if (retries >= maxRetries) {
+    throw new StageWedgedError(stageName, retries);
+  }
+}
+
+export function evaluateErcGate(schematicPath: string, symbolCount: number, ercClean: boolean): void {
+  if (ercClean && symbolCount === 0) {
+    throw new FalseGreenERCError(schematicPath, symbolCount);
+  }
+}
+
+export function checkPipelineCompleteness(completedCount: number, totalCount: number): void {
+  if (completedCount < totalCount) {
+    throw new IncompletePipelineRunError(completedCount, totalCount);
+  }
+}
