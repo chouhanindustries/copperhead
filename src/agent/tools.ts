@@ -6,7 +6,7 @@ import { resolveInRepo, isKicadFile } from '../util/paths.js';
 import { runErc, runDrc, exportSvg, exportFab, kicadLoadError, isProbeableKicadFile } from '../kicad/cli.js';
 import { formatViolations, type CheckReport } from '../kicad/report.js';
 import { listSymbols, listNets } from '../kicad/sexp.js';
-import { verifySchematicSymbols } from '../kicad/symlib.js';
+import { verifySchematicSymbols, resolveLibrarySymbol, symbolSearchDirs } from '../kicad/symlib.js';
 import { checkDrift } from '../memory/drift.js';
 import { saveConstraint, classifyAffectsTarget, affectsTargetExists } from '../memory/constraints.js';
 import { openspecValidate } from '../openspec/cli.js';
@@ -394,6 +394,39 @@ export const TOOLS: ToolDef[] = [
       const lines = findings.map((f) => `  - [${f.kind}] ${f.detail}`);
       const mismatches = findings.filter((f) => f.kind !== 'no-library').length;
       return `verify_symbols: ${checked} verified, ${skipped} unverifiable (library not installed), ${mismatches} issue(s) to reconcile:\n${lines.join('\n')}`;
+    },
+  },
+  {
+    schema: {
+      name: 'lookup_symbol',
+      description:
+        'Return the real pin table (number, name, electrical type) of a lib_id from the KiCad symbol libraries installed on this machine, e.g. "RF_Module:ESP32-C3-MINI-1". Use this BEFORE authoring a lib_symbols entry for any part so pins are transcribed from the library, never invented; read_file cannot reach the system libraries, this tool is the sanctioned path. Unknown symbols return the closest real names to try.',
+      parameters: {
+        type: 'object',
+        properties: {
+          lib_id: { type: 'string', description: 'Library:Symbol identifier, e.g. Device:R' },
+        },
+        required: ['lib_id'],
+      },
+    },
+    requiresUnlock: false,
+    handler: async (_ctx, args) => {
+      const libId = String((args as { lib_id?: unknown }).lib_id ?? '');
+      if (!libId.includes(':')) return `lookup_symbol: "${libId}" is not a lib_id (expected Library:Symbol, e.g. Device:R)`;
+      const dirs = await symbolSearchDirs();
+      if (!dirs.length) {
+        return 'lookup_symbol: no KiCad symbol libraries found on this machine (checked KICAD_SYMBOL_DIR and the standard install locations)';
+      }
+      const res = await resolveLibrarySymbol(libId, dirs);
+      if (res.status === 'ok') {
+        const rows = res.pins.map((p) => `  ${p.number}\t${p.name}\t${p.type}`);
+        return `lookup_symbol: ${libId} has ${res.pins.length} pin(s) (number\tname\ttype):\n${rows.join('\n')}`;
+      }
+      if (res.status === 'no-symbol') {
+        const hint = res.candidates.length ? ` Closest real symbols: ${res.candidates.join(', ')}.` : '';
+        return `lookup_symbol: symbol not found in ${libId.split(':')[0]}.${hint}`;
+      }
+      return `lookup_symbol: library "${libId.split(':')[0]}" is not installed on this machine`;
     },
   },
   {
