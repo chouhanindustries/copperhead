@@ -292,7 +292,7 @@ It's a loop, and it looks a lot like pair-programming, except the codebase is a 
 2. **Plan.** Agent states, in one short block: what will change, which files are affected, which constraints are at risk (e.g. sleep-current budget).
 3. **Edit.** Agent uses tools to modify KiCad files and docs. Edits to `.kicad_sch`/`.kicad_pcb` are **text edits on the s-expression source** (search/replace with context anchors) — no full-file regeneration, ever. Same net names and refdes everywhere.
 4. **Verify.** Agent runs `run_erc` (always) and `run_drc` (if the .kicad_pcb changed). Parses violations.
-5. **Repair.** If violations: fix and re-run, up to `maxRepairCycles` (default 5). If still failing: revert to the pre-run snapshot and report failure with the violation list.
+5. **Repair.** If violations: fix and re-run. `maxRepairCycles` (default 5) counts consecutive ERC/DRC checks that fail to reduce the violation count; the first failing check establishes the baseline and an improving check resets the streak. If violations remain non-improving past the budget: revert to the pre-run snapshot and report failure with the violation list.
 6. **Propagate.** Agent runs `check_drift`; any doc that references a changed value/part/pin must be updated in the same run.
 7. **Rationale.** Every non-trivial decision gets a one-line "why" written into the relevant doc.
 8. **Commit.** `git commit` with a structured message (`copperhead: <request>\n\n<summary of edits + verification result>`). Requires clean working tree at start (§7 safety).
@@ -306,7 +306,7 @@ It's a loop, and it looks a lot like pair-programming, except the codebase is a 
 | `write_file` | (path, content) → ok | New files only (docs); refuses to overwrite .kicad_* |
 | `search` | (regex, glob?) → matches | ripgrep-style over repo |
 | `list_symbols` | (sch_path) → [{ref, value, footprint, sheet}] | From s-expression parse |
-| `list_nets` | (sch_path) → [net names] | |
+| `list_nets` | (sch_path) → [net names] | Labels and net-naming power symbols; mid-segment labels are connected, `PWR_FLAG` is not a net name |
 | `run_erc` | () → {violations: [...]} | `kicad-cli sch erc --format json --exit-code-violations` |
 | `run_drc` | () → {violations: [...]} | `kicad-cli pcb drc --format json --exit-code-violations` |
 | `export_svg` | (sch\|pcb) → path | For viewer + before/after diffing |
@@ -340,7 +340,7 @@ interface Provider {
 
 ### 4.5 Budgets & failure modes
 
-- `maxTurns` default 40; `maxRepairCycles` 5; per-run token budget logged
+- `maxTurns` default 40; `maxRepairCycles` 5 consecutive non-improving ERC/DRC checks; per-run token budget logged
 - On turn-budget exhaustion in an attended (TTY) run: print run stats (turns, files touched, open obligations, token usage) and ask whether to continue with more turns; declining, or a non-TTY run, fails as below. The extension can repeat; each is a fresh decision with fresh numbers.
 - On any unrecoverable failure: preserve the touched work as a git stash entry named `copperhead failed run <run-id>`, restore the snapshot, print the stash ref and transcript path, exit 1
 - Rate-limit (429): exponential backoff ×3, then fail over to the other provider if a key exists
@@ -404,7 +404,7 @@ Format: Given / When / Then. "Fixture" = the open-telegraph repo (or the tiny te
 
 - **AC-1.1** Given a KiCad repo with no `docs/`, when `copperhead init` runs, then `docs/SPEC.md`, `BOM.md`, `PINOUT.md`, `SUBSYSTEMS.md`, `LAYOUT.md` and `.copperhead/config.json` exist.
 - **AC-1.2** BOM.md contains one row per schematic symbol with real refdes, value, and footprint parsed from the `.kicad_sch` — not placeholders. Row count equals `list_symbols` count.
-- **AC-1.3** PINOUT.md contains the MCU's actual pin-to-net assignments parsed from the schematic.
+- **AC-1.3** PINOUT.md contains the MCU's actual pin-to-net assignments parsed from the schematic. Legal mid-segment labels and T-junction endpoints resolve to their connected net; the ERC-only `PWR_FLAG` symbol never replaces that net name.
 - **AC-1.4** Re-running `init` on the same repo exits 0 and changes no hand-edited file (idempotent). With modified docs and no `--force`, it refuses and lists what it would overwrite.
 - **AC-1.5** On a repo with no `.kicad_sch`, exits non-zero with a clear message (no stack trace).
 
@@ -422,8 +422,8 @@ Format: Given / When / Then. "Fixture" = the open-telegraph repo (or the tiny te
 - **AC-3.2 (constraint reasoning)** `do "move the key input to a different RTC-capable pin"` → chosen pin is RTC-capable AND not a strapping pin (GPIO0/3/45/46 on ESP32-S3); transcript shows the strapping table was consulted; schematic + PINOUT.md agree; ERC exit 0.
 - **AC-3.3 (add part)** `do "add a second RGB LED"` → new symbol with unique refdes, valid footprint from the existing library set, net connected to a real GPIO; BOM.md gains a row with MPN flagged `UNVERIFIED` and a one-line rationale; ERC exit 0.
 - **AC-3.4 (budget refusal)** `do "add a 100kΩ pullup on KEY_DAH"` (which would leak ~33 µA against the 25 µA budget) → agent **refuses or proposes an alternative**, citing the budget from SPEC.md. It must not silently comply. This is the money demo.
-- **AC-3.5 (repair loop)** Given an edit that first produces an ERC violation, the transcript shows: violation parsed → targeted fix → re-run → pass, within `maxRepairCycles`.
-- **AC-3.6 (rollback)** If violations persist after `maxRepairCycles`, working tree equals the pre-run state (`git status` clean, files byte-identical), exit non-zero, transcript path printed.
+- **AC-3.5 (repair loop)** Given an edit that first produces an ERC violation, the transcript shows: violation parsed → targeted fix → re-run → pass. The first failing check and every check with fewer violations are progress; only consecutive non-improving checks spend `maxRepairCycles`.
+- **AC-3.6 (rollback)** If violations fail to improve for more than `maxRepairCycles` consecutive checks, working tree equals the pre-run state (`git status` clean, files byte-identical), exit non-zero, transcript path printed.
 - **AC-3.7 (surgical edits)** For every run above: the `.kicad_sch` diff touches only the s-expressions relevant to the change — file not regenerated (assert: < 5% of lines changed for AC-3.1).
 - **AC-3.8 (dirty tree)** With uncommitted changes and no `--allow-dirty`: refuses to start.
 - **AC-3.9 (dry run)** `--dry-run` prints the proposed diff and writes nothing.

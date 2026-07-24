@@ -30,7 +30,7 @@ Written by `copperhead init`. Every key is optional; the defaults below apply wh
 | `docs` | `"docs/"` | The design docs directory: [docs-as-memory](/concepts/docs-as-memory/). |
 | `model` | `null` | Default model. Overridden by `--model` and `COPPERHEAD_MODEL`. |
 | `maxTurns` | `40` | Turn budget per run. |
-| `maxRepairCycles` | `5` | ERC/DRC repair attempts before the run rolls back to the git snapshot. |
+| `maxRepairCycles` | `5` | Consecutive ERC/DRC attempts with no reduction in violations before the run rolls back to the git snapshot. The first failing check and improving checks do not spend this budget. |
 | `budgets` | `{}` | Free-form hard constraints, surfaced verbatim into every run's system prompt. |
 
 There is also a `generatedHashes` key, maintained by copperhead. It records content hashes of the generated docs so `init` can tell an untouched file from a hand-edited one. Do not edit it by hand.

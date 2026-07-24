@@ -144,6 +144,12 @@ export interface CreateOptions {
   briefPath: string;
   model: string;
   interactive?: boolean;
+  /**
+   * Deterministic replay seam: supplies the recorded provider turns for one
+   * stage while leaving the production loop, tools, gates, commits, and final
+   * check intact. Normal CLI runs never set this.
+   */
+  replayProvider?: (stageName: string) => Provider;
   /** Forwarded to each stage's run (attended continue-on-exhaustion prompt). */
   onBudgetExhausted?: (stats: BudgetExhaustedStats) => Promise<number>;
   log: (s: string) => void;
@@ -599,6 +605,7 @@ export async function runCreate(opts: CreateOptions): Promise<{ ok: boolean; com
         allowDirty: true, // stages build on each other's uncommitted state within the pipeline
         ...(stageTurns !== undefined ? { maxTurns: stageTurns } : {}),
         ...(opts.onBudgetExhausted ? { onBudgetExhausted: opts.onBudgetExhausted } : {}),
+        ...(opts.replayProvider ? { provider: opts.replayProvider(stage.name) } : {}),
         log: opts.log,
         ...(opts.renderer ? { renderer: opts.renderer } : {}),
         meta: {

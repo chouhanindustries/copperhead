@@ -1,7 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import path from 'node:path';
+import { readFile, writeFile } from 'node:fs/promises';
 import { listSymbols, listNets, pinNets, parseSexp } from '../src/kicad/sexp.js';
-import { FIXTURE } from './helpers.js';
+import { FIXTURE, tempFixtureRepo } from './helpers.js';
 
 const SCH = path.join(FIXTURE, 'hardware', 'open-key.kicad_sch');
 
@@ -37,5 +38,69 @@ describe('sexp parser', () => {
     const r2 = new Map(pins.filter((p) => p.ref === 'R2').map((p) => [p.pinNumber, p.net]));
     expect(r2.get('1')).toBe('KEY_DAH');
     expect(r2.get('2')).toBe('GND');
+  });
+
+  it('connects a mid-segment label and does not rename its net to PWR_FLAG', async () => {
+    const { repo, cleanup } = await tempFixtureRepo();
+    try {
+      const sch = path.join(repo, 'hardware', 'open-key.kicad_sch');
+      let text = await readFile(sch, 'utf8');
+      text = text
+        .replace(
+          '    (symbol "fixture:ESP32-S3-MINI"',
+          `    (symbol "power:PWR_FLAG"
+      (property "Reference" "#FLG" (at 0 1.27 0)
+        (effects (font (size 1.27 1.27)) hide)
+      )
+      (property "Value" "PWR_FLAG" (at 0 -1.27 0)
+        (effects (font (size 1.27 1.27)))
+      )
+      (symbol "PWR_FLAG_1_1"
+        (pin power_in line (at 0 0 0) (length 0)
+          (name "pwr" (effects (font (size 1.27 1.27))))
+          (number "1" (effects (font (size 1.27 1.27))))
+        )
+      )
+    )
+    (symbol "fixture:ESP32-S3-MINI"`,
+        )
+        .replace(
+          '  (global_label "3V3" (shape input) (at 127 91.44 180)',
+          `  (wire
+    (pts (xy 127 91.44) (xy 132.08 91.44))
+    (stroke (width 0) (type default))
+    (uuid "f0000000-0000-4000-8000-000000000001")
+  )
+  (global_label "3V3" (shape input) (at 129.54 91.44 180)`,
+        )
+        .replace(
+          '  (sheet_instances',
+          `  (symbol
+    (lib_id "power:PWR_FLAG")
+    (at 132.08 91.44 0)
+    (unit 1)
+    (exclude_from_sim no)
+    (in_bom no)
+    (on_board no)
+    (dnp no)
+    (uuid "f0000000-0000-4000-8000-000000000002")
+    (property "Reference" "#FLG01" (at 132.08 90.17 0)
+      (effects (font (size 1.27 1.27)) hide)
+    )
+    (property "Value" "PWR_FLAG" (at 132.08 89.535 0)
+      (effects (font (size 1.27 1.27)))
+    )
+    (pin "1" (uuid "f0000000-0000-4000-8000-000000000003"))
+  )
+  (sheet_instances`,
+        );
+      await writeFile(sch, text, 'utf8');
+
+      const pins = await pinNets(sch);
+      expect(pins.find((pin) => pin.ref === 'U1' && pin.pinName === '3V3')?.net).toBe('3V3');
+      expect(await listNets(sch)).not.toContain('PWR_FLAG');
+    } finally {
+      await cleanup();
+    }
   });
 });

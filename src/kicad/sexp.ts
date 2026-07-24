@@ -176,6 +176,26 @@ export function pinAbsolute(
 
 const round = (n: number): number => Math.round(n * 10000) / 10000;
 const key = (x: number, y: number): string => `${round(x)},${round(y)}`;
+interface Point {
+  x: number;
+  y: number;
+}
+
+interface Segment {
+  a: Point;
+  b: Point;
+}
+
+function pointOnSegment(point: Point, segment: Segment): boolean {
+  const { a, b } = segment;
+  const dx = b.x - a.x;
+  const dy = b.y - a.y;
+  const cross = (point.x - a.x) * dy - (point.y - a.y) * dx;
+  if (Math.abs(cross) > 1e-6) return false;
+  const dot = (point.x - a.x) * dx + (point.y - a.y) * dy;
+  const lengthSquared = dx * dx + dy * dy;
+  return dot >= -1e-6 && dot <= lengthSquared + 1e-6;
+}
 
 class UnionFind {
   private parent = new Map<string, string>();
@@ -225,6 +245,10 @@ function symbolsOf(sheet: ParsedSheet): { node: SexpNode[]; sym: SchematicSymbol
 }
 
 const isPowerSymbol = (libId: string): boolean => libId.startsWith('power:');
+// PWR_FLAG declares that a net is externally driven for ERC; unlike GND, +3V3,
+// and other power symbols, its value is not the electrical net's name.
+const namesPowerNet = (libId: string): boolean =>
+  isPowerSymbol(libId) && libId !== 'power:PWR_FLAG';
 
 /** One row per real component (power symbols excluded), across all sheets. */
 export async function listSymbols(rootSch: string): Promise<SchematicSymbol[]> {
@@ -250,7 +274,7 @@ export async function listNets(rootSch: string): Promise<string[]> {
       }
     }
     for (const { sym } of symbolsOf(sheet)) {
-      if (isPowerSymbol(sym.libId)) names.add(sym.value);
+      if (namesPowerNet(sym.libId)) names.add(sym.value);
     }
   }
   return [...names].sort();
@@ -276,22 +300,43 @@ export async function pinNets(rootSch: string): Promise<PinNet[]> {
     const pinDefs = libPinDefs(sheet.root);
     const uf = new UnionFind();
     const netNameAt = new Map<string, string>();
+    const segments: Segment[] = [];
+    const connectionPoints: Point[] = [];
 
     for (const w of children(sheet.root, 'wire')) {
       const pts = children(child(w, 'pts') ?? [], 'xy').map((xy) => ({
         x: parseFloat(atomAt(xy, 1) ?? '0'),
         y: parseFloat(atomAt(xy, 2) ?? '0'),
       }));
+      connectionPoints.push(...pts);
       for (let i = 1; i < pts.length; i++) {
-        uf.union(key(pts[0]!.x, pts[0]!.y), key(pts[i]!.x, pts[i]!.y));
+        const a = pts[i - 1]!;
+        const b = pts[i]!;
+        segments.push({ a, b });
+        uf.union(key(a.x, a.y), key(b.x, b.y));
       }
+    }
+    for (const junction of children(sheet.root, 'junction')) {
+      const at = child(junction, 'at');
+      if (!at) continue;
+      const point = {
+        x: parseFloat(atomAt(at, 1) ?? '0'),
+        y: parseFloat(atomAt(at, 2) ?? '0'),
+      };
+      connectionPoints.push(point);
+      uf.find(key(point.x, point.y));
     }
     for (const kind of ['label', 'global_label', 'hierarchical_label']) {
       for (const l of children(sheet.root, kind)) {
         const name = atomAt(l, 1);
         const at = child(l, 'at');
         if (!name || !at) continue;
-        const k = key(parseFloat(atomAt(at, 1) ?? '0'), parseFloat(atomAt(at, 2) ?? '0'));
+        const point = {
+          x: parseFloat(atomAt(at, 1) ?? '0'),
+          y: parseFloat(atomAt(at, 2) ?? '0'),
+        };
+        connectionPoints.push(point);
+        const k = key(point.x, point.y);
         uf.find(k);
         netNameAt.set(k, name);
       }
@@ -303,11 +348,23 @@ export async function pinNets(rootSch: string): Promise<PinNet[]> {
       for (const pin of defs) {
         const abs = pinAbsolute(sym.at, mirror, pin);
         const k = key(abs.x, abs.y);
+        connectionPoints.push(abs);
         uf.find(k);
-        if (isPowerSymbol(sym.libId)) {
+        if (namesPowerNet(sym.libId)) {
           netNameAt.set(k, sym.value);
-        } else {
+        } else if (!isPowerSymbol(sym.libId)) {
           symPins.push({ sym, pin, k });
+        }
+      }
+    }
+
+    // KiCad permits labels, pins, and T-junction endpoints anywhere along a
+    // wire segment, not only at the segment's serialized endpoints. Join every
+    // explicit connection point that lies on a segment before resolving names.
+    for (const point of connectionPoints) {
+      for (const segment of segments) {
+        if (pointOnSegment(point, segment)) {
+          uf.union(key(point.x, point.y), key(segment.a.x, segment.a.y));
         }
       }
     }
