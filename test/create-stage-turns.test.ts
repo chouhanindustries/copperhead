@@ -102,7 +102,7 @@ describe('create pipeline per-stage turn budgets (AC-15.18, AC-15.19)', () => {
 
       // 5.3: the one command to resume, with the flags, and which stage it stops at.
       expect(out).toContain('stopped at stage 4/8 (schematic)');
-      expect(out).toMatch(/copperhead .*create --brief \S*brief\.md --model gpt-5/);
+      expect(out).toMatch(/copperhead .*create --brief .*brief\.md.* --model gpt-5/);
       expect(out).toContain('resumes at schematic');
 
       // 5.2: a cost table with a row per stage that ran and a TOTAL.

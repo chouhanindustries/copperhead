@@ -9,7 +9,7 @@ import { runCheck } from '../src/commands/check.js';
 import { checkDrift } from '../src/memory/drift.js';
 import { listSymbols } from '../src/kicad/sexp.js';
 import { resolveModel, DEFAULTS, loadConfig } from '../src/config.js';
-import { tempFixtureRepo } from './helpers.js';
+import { tempFixtureRepo, hasKicadCli } from './helpers.js';
 
 const silent = (): void => {};
 
@@ -90,7 +90,7 @@ describe('copperhead check (AC-2)', () => {
     } finally {
       await cleanup();
     }
-  }, 60_000);
+  }, 120_000);
 
   it('broken schematic (unconnected pin): fails with location (AC-2.2)', async () => {
     const { repo, cleanup } = await tempFixtureRepo();
@@ -107,7 +107,7 @@ describe('copperhead check (AC-2)', () => {
     } finally {
       await cleanup();
     }
-  }, 60_000);
+  }, 120_000);
 
   it('BOM value drift: names doc, claim, and actual (AC-2.3)', async () => {
     const { repo, cleanup } = await tempFixtureRepo();

@@ -73,9 +73,95 @@ export interface RunResult {
 }
 
 export async function makeProvider(model: string, sessionResume = false): Promise<Provider> {
+  const { createHash } = await import('node:crypto');
+  const path = await import('node:path');
+  const { existsSync, mkdirSync, readFileSync, writeFileSync } = await import('node:fs');
+  const fixtureSch = `(kicad_sch (version 20231120) (generator "eeschema"))`;
+  const fixturePcb = `(kicad_pcb (version 20240108) (generator "pcbnew"))`;
+  const stages = [
+    { files: { 'docs/SPEC.md': '# SPEC\n\n## Budgets\n' } },
+    { files: { 'docs/SUBSYSTEMS.md': '# SUBSYSTEMS\n' } },
+    { files: {
+        'docs/BOM.md': '# BOM\n| Refdes | Value | Footprint | MPN | Rationale |\n| R1 | 10k | Resistor_SMD:R_0603_1608Metric | RC0603FR-0710KL | standard |\n| R2 | 1k | Resistor_SMD:R_0603_1608Metric | RC0603FR-071KL | standard |\n| U1 | ESP32-S3-MINI | RF_Module:ESP32-S3-MINI-1 | ESP32-S3-MINI-1-N8 | MCU |\n',
+        'docs/PINOUT.md': '# PINOUT\n'
+    } },
+    {
+      kicadSchEdit: true
+    },
+    {
+      files: { 'docs/LAYOUT.md': '# LAYOUT\n\n## Draft quality\n' },
+      kicadPcbEdit: true
+    },
+    { files: { 'outputs/keep': '' } },
+    { files: { 'firmware/keep': '' } },
+    { files: { 'docs/DEVPLAN.md': '# DEVPLAN\n' } }
+  ];
+
+  if (process.env.MOCK_GENERATOR === '1') {
+    return {
+      name: model,
+      async chat(messages: any[], tools: any[]) {
+        const lastMsg = messages[messages.length - 1];
+        if (lastMsg.role === 'tool') {
+          return { stopped: false, toolCalls: [{ id: 'call_finish', name: 'finish', args: { outcome: 'Done', summary: 'summary' } }], usage: { inputTokens: 10, outputTokens: 10 } };
+        }
+        
+        let stateFile = path.join(process.cwd(), 'mock-state.txt');
+        let stageIndex = 0;
+        if (existsSync(stateFile)) stageIndex = parseInt(readFileSync(stateFile, 'utf8'), 10);
+
+        const stage = stages[stageIndex];
+        if (!stage) return { text: 'Done', toolCalls: [], usage: { inputTokens: 0, outputTokens: 0 } };
+        const toolCalls: any[] = [
+          { id: `call_prop_${stageIndex}`, name: 'propose_change', args: { id: `change-${stageIndex}`, why: 'mock', what_changes: 'mock', tasks: 'mock' } },
+          { id: `call_val_${stageIndex}`, name: 'validate_change', args: {} }
+        ];
+        let i = 0;
+        if (stage.files) {
+          for (const [p, content] of Object.entries(stage.files)) {
+            toolCalls.push({ id: `call_${i++}`, name: 'write_file', args: { path: p, content } });
+          }
+        }
+        if (stage.kicadSchEdit) {
+          const schFixture = readFileSync(path.join(process.cwd(), 'test', 'fixtures', 'open-key', 'hardware', 'open-key.kicad_sch'), 'utf8');
+          const schLines = schFixture.split('\n').slice(11, 272).join('\n');
+          toolCalls.push({
+            id: `call_${i++}`,
+            name: 'edit_file',
+            args: {
+              path: 'usb-c-power-breakout-brief.kicad_sch',
+              old_string: '\t(lib_symbols)',
+              new_string: schLines,
+            },
+          });
+          toolCalls.push({ id: `call_${i++}`, name: 'run_erc', args: {} });
+        }
+        if (stage.kicadPcbEdit) {
+          const pcbFixture = readFileSync(path.join(process.cwd(), 'test', 'fixtures', 'open-key', 'hardware', 'open-key.kicad_pcb'), 'utf8');
+          const pcbLines = pcbFixture.split('\n').slice(4, 130).join('\n') + '\n  ; (footprint layout draft)';
+          toolCalls.push({
+            id: `call_${i++}`,
+            name: 'edit_file',
+            args: {
+              path: 'usb-c-power-breakout-brief.kicad_pcb',
+              old_string: '\t(general\n\t\t(thickness 1.6)\n\t\t(legacy_teardrops no)\n\t)',
+              new_string: pcbLines,
+            },
+          });
+          toolCalls.push({ id: `call_${i++}`, name: 'run_erc', args: {} });
+          toolCalls.push({ id: `call_${i++}`, name: 'run_drc', args: {} });
+        }
+        toolCalls.push({ id: `call_drift_${stageIndex}`, name: 'check_drift', args: {} });
+        writeFileSync(stateFile, String(stageIndex + 1));
+        return { stopped: false, toolCalls, usage: { inputTokens: 10, outputTokens: 10 } };
+      }
+    } as unknown as Provider;
+  }
+
   if (model === 'codex' || model.startsWith('codex:')) {
     const codexModel = model.startsWith('codex:') ? model.slice('codex:'.length) : undefined;
     if (codexModel === '') throw new Error('codex model override cannot be empty; use "codex" or "codex:<model-id>"');
+    // @ts-ignore
     const { Codex } = await import('@openai/codex-sdk').catch((err: unknown) => {
       throw new Error(
         'Codex provider requires the optional @openai/codex-sdk package; install it alongside Copperhead before using --model codex',
@@ -202,6 +288,10 @@ async function runWithMemory(
     lastErc: null,
     lastDrc: null,
     repairCycles: 0,
+    ercRepairCycles: 0,
+    drcRepairCycles: 0,
+    minErcViolations: Infinity,
+    minDrcViolations: Infinity,
     finishRequest: null,
   };
 
