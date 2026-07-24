@@ -16,6 +16,7 @@ import { openspecArchive } from '../openspec/cli.js';
 import { existsSync } from 'node:fs';
 import { OpenAIProvider } from './providers/openai.js';
 import { AnthropicProvider } from './providers/anthropic.js';
+import { CachingProvider } from './cache.js';
 import { openSynapMemory, type RunRecord, type SynapMemory } from '../memory/synap.js';
 
 /** What the user sees at the moment they decide whether to keep going. */
@@ -64,10 +65,13 @@ export interface RunResult {
 }
 
 export function makeProvider(model: string): Provider {
+  let provider: Provider;
   if (model === 'claude' || model.startsWith('claude')) {
-    return new AnthropicProvider(model === 'claude' ? undefined : model);
+    provider = new AnthropicProvider(model === 'claude' ? undefined : model);
+  } else {
+    provider = new OpenAIProvider(model === 'gpt-5' ? undefined : model);
   }
-  return new OpenAIProvider(model === 'gpt-5' ? undefined : model);
+  return new CachingProvider(provider);
 }
 
 function otherProvider(current: Provider): Provider | null {
@@ -152,6 +156,10 @@ async function runWithMemory(opts: RunOptions, memory: SynapMemory | null): Prom
     lastErc: null,
     lastDrc: null,
     repairCycles: 0,
+    ercRepairCycles: 0,
+    drcRepairCycles: 0,
+    lastErcViolations: Infinity,
+    lastDrcViolations: Infinity,
     finishRequest: null,
   };
 

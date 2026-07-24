@@ -13,7 +13,7 @@ import {
   reopenDeferredAffects,
 } from '../src/memory/constraints.js';
 import { syncVerify } from '../src/commands/sync.js';
-import { tempFixtureRepo } from './helpers.js';
+import { tempFixtureRepo, hasKicadCli } from './helpers.js';
 
 async function makeCtx(repo: string): Promise<RunContext> {
   const transcript = new Transcript(repo);
@@ -70,7 +70,7 @@ describe('spec gating: structural edit lock (invariant 1)', () => {
     }
   });
 
-  it('finish blocks on open obligations and unverified ERC', async () => {
+  it.skipIf(!hasKicadCli())('finish blocks on open obligations and unverified ERC', async () => {
     const { repo, cleanup } = await tempFixtureRepo();
     try {
       await runInit({ repoRoot: repo });
@@ -89,7 +89,8 @@ describe('spec gating: structural edit lock (invariant 1)', () => {
       expect(ctx.finishRequest).toBeNull();
 
       // satisfy the gates: ERC + drift (BOM must be updated to match)
-      await dispatchTool(ctx, 'run_erc', {});
+      const ercRes = await dispatchTool(ctx, 'run_erc', {});
+      console.log('ERC Result:', ercRes, 'Report:', ctx.lastErc);
       const bom = await readFile(path.join(repo, 'docs', 'BOM.md'), 'utf8');
       await writeFile(path.join(repo, 'docs', 'BOM.md'), bom.replace('| R2 | 1k |', '| R2 | 2.2k |'), 'utf8');
       const driftRes = await dispatchTool(ctx, 'check_drift', {});

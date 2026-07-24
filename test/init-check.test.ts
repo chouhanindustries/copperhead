@@ -9,7 +9,7 @@ import { runCheck } from '../src/commands/check.js';
 import { checkDrift } from '../src/memory/drift.js';
 import { listSymbols } from '../src/kicad/sexp.js';
 import { resolveModel, DEFAULTS, loadConfig } from '../src/config.js';
-import { tempFixtureRepo } from './helpers.js';
+import { tempFixtureRepo, hasKicadCli } from './helpers.js';
 
 const silent = (): void => {};
 
@@ -77,7 +77,7 @@ describe('copperhead init (AC-1)', () => {
 });
 
 describe('copperhead check (AC-2)', () => {
-  it('clean fixture: everything green (AC-2.1) and stable JSON keys (AC-2.4)', async () => {
+  it.skipIf(!hasKicadCli())('clean fixture: everything green (AC-2.1) and stable JSON keys (AC-2.4)', async () => {
     const { repo, cleanup } = await tempFixtureRepo();
     try {
       await runInit({ repoRoot: repo });
@@ -92,7 +92,7 @@ describe('copperhead check (AC-2)', () => {
     }
   }, 60_000);
 
-  it('broken schematic (unconnected pin): fails with location (AC-2.2)', async () => {
+  it.skipIf(!hasKicadCli())('broken schematic (unconnected pin): fails with location (AC-2.2)', async () => {
     const { repo, cleanup } = await tempFixtureRepo();
     try {
       await runInit({ repoRoot: repo });
@@ -124,7 +124,7 @@ describe('copperhead check (AC-2)', () => {
     }
   });
 
-  it('pre-commit hook blocks a desynced hand edit at git commit', async () => {
+  it.skipIf(!hasKicadCli())('pre-commit hook blocks a desynced hand edit at git commit', async () => {
     const { repo, cleanup } = await tempFixtureRepo();
     try {
       await runInit({ repoRoot: repo });
@@ -174,7 +174,7 @@ describe('check is LLM-free by construction (AC-2.1)', () => {
 });
 
 describe('fab export (create stage 6 tooling)', () => {
-  it('produces gerbers, drill, dxf, and svg for the fixture board', async () => {
+  it.skipIf(!hasKicadCli())('produces gerbers, drill, dxf, and svg for the fixture board', async () => {
     const { repo, cleanup } = await tempFixtureRepo();
     try {
       const { exportFab } = await import('../src/kicad/cli.js');

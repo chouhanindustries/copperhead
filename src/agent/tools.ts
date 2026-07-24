@@ -36,6 +36,10 @@ export interface RunContext {
   lastErc: CheckReport | null;
   lastDrc: CheckReport | null;
   repairCycles: number;
+  ercRepairCycles: number;
+  drcRepairCycles: number;
+  lastErcViolations: number;
+  lastDrcViolations: number;
   finishRequest: FinishRequest | null;
 }
 
@@ -48,8 +52,7 @@ export interface ToolDef {
 
 const str = (args: Record<string, unknown>, key: string): string => {
   const v = args[key];
-  if (typeof v !== 'string' || v === '') throw new Error(`missing required string arg "${key}"`);
-  return v;
+  return typeof v === 'string' ? v : '';
 };
 
 function markTouched(ctx: RunContext, rel: string): void {
@@ -225,11 +228,14 @@ export const TOOLS: ToolDef[] = [
       // boards are probeable; .kicad_pro/.kicad_sym/.kicad_mod edits must not
       // be probed (a sch/pcb probe rejects them wholesale).
       const before = isProbeableKicadFile(rel) ? await readFile(abs, 'utf8') : null;
+      const target = typeof args.target === 'string' ? args.target : (typeof args.old_string === 'string' ? args.old_string : '');
+      if (!target) throw new Error('missing required string arg "target" or "old_string"');
+      const replacement = typeof args.replacement === 'string' ? args.replacement : (typeof args.new_string === 'string' ? args.new_string : '');
       const res = await toolEditFile(
         ctx.repoRoot,
         rel,
-        str(args, 'old_string'),
-        args.new_string as string,
+        target,
+        replacement,
         args.replace_all === true,
       );
       if (before !== null) {
@@ -283,8 +289,21 @@ export const TOOLS: ToolDef[] = [
         return 'no schematic configured; ERC does not apply yet — skip it until a schematic exists and is set in .copperhead/config.json';
       const report = await runErc(path.join(ctx.repoRoot, ctx.config.schematic));
       ctx.lastErc = report;
-      if (report.ok) ctx.ledger.clear('erc');
-      else ctx.repairCycles++;
+      if (report.ok) {
+        ctx.ledger.clear('erc');
+        ctx.ercRepairCycles = 0;
+        ctx.lastErcViolations = 0;
+      } else {
+        const count = report.violations.length;
+        const prev = ctx.lastErcViolations ?? Infinity;
+        if (count < prev) {
+          ctx.ercRepairCycles = 0;
+        } else {
+          ctx.ercRepairCycles = (ctx.ercRepairCycles ?? 0) + 1;
+        }
+        ctx.lastErcViolations = count;
+      }
+      ctx.repairCycles = Math.max(ctx.ercRepairCycles ?? 0, ctx.drcRepairCycles ?? 0);
       return formatViolations(report);
     },
   },
@@ -300,8 +319,21 @@ export const TOOLS: ToolDef[] = [
         return 'no board configured; DRC does not apply yet — skip it until a board exists and is set in .copperhead/config.json';
       const report = await runDrc(path.join(ctx.repoRoot, ctx.config.board));
       ctx.lastDrc = report;
-      if (report.ok) ctx.ledger.clear('drc');
-      else ctx.repairCycles++;
+      if (report.ok) {
+        ctx.ledger.clear('drc');
+        ctx.drcRepairCycles = 0;
+        ctx.lastDrcViolations = 0;
+      } else {
+        const count = report.violations.length;
+        const prev = ctx.lastDrcViolations ?? Infinity;
+        if (count < prev) {
+          ctx.drcRepairCycles = 0;
+        } else {
+          ctx.drcRepairCycles = (ctx.drcRepairCycles ?? 0) + 1;
+        }
+        ctx.lastDrcViolations = count;
+      }
+      ctx.repairCycles = Math.max(ctx.ercRepairCycles ?? 0, ctx.drcRepairCycles ?? 0);
       return formatViolations(report);
     },
   },

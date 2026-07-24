@@ -3,9 +3,19 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execa } from 'execa';
+import { execSync } from 'node:child_process';
 
 export const FIXTURE = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures', 'open-key');
 export const REPORTS = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures', 'reports');
+
+export function hasKicadCli(): boolean {
+  try {
+    execSync('kicad-cli version', { stdio: 'ignore' });
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 /** Copy the open-key fixture into a fresh temp dir and git-init it. */
 export async function tempFixtureRepo(): Promise<{ repo: string; cleanup: () => Promise<void> }> {
