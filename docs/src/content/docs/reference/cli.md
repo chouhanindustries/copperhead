@@ -57,7 +57,7 @@ copperhead do "<change request>" [options]
 
 | Option | Description |
 | --- | --- |
-| `--model <model>` | `codex`, `gpt-5`, `claude`, `claude-code`, or a provider-specific model id. `codex` uses the saved local Codex login; `claude-code` uses your logged-in Claude Code (no `ANTHROPIC_API_KEY`). See [Configuration](/reference/configuration/#saved-login-claude-code). |
+| `--model <model>` | `codex`, `gpt-5`, `claude`, `claude-code`, `lmstudio`, or a provider-specific model id. `codex` uses the saved local Codex login; `claude-code` uses your logged-in Claude Code (no `ANTHROPIC_API_KEY`); `lmstudio` uses a local LM Studio server (no key at all). See [Configuration](/reference/configuration/#saved-login-claude-code) and [Local models](/reference/configuration/#local-models-lm-studio). |
 | `--max-turns <n>` | Turn budget for this run. Overrides `maxTurns` from config. |
 | `--allow-dirty` | Permit a dirty working tree. The snapshot is taken with `git stash create`. |
 | `--dry-run` | Propose the diff and write nothing. |
@@ -116,7 +116,7 @@ copperhead create --brief brief.md [--model <model>] [--interactive]
 | Option | Description |
 | --- | --- |
 | `--brief <file>` | **Required.** The product brief, in markdown. |
-| `--model <model>` | `codex`, `gpt-5`, `claude`, or `claude-code` (saved-login Claude Code, no `ANTHROPIC_API_KEY`). |
+| `--model <model>` | `codex`, `gpt-5`, `claude`, `claude-code` (saved-login Claude Code, no `ANTHROPIC_API_KEY`), or `lmstudio` (local LM Studio server, no key). |
 | `--interactive` | Re-enable the human gates: spec approval, and a pause before export. |
 
 Exits 1 if any stage fails to complete, 0 when the pipeline finishes.
