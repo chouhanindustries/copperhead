@@ -10,6 +10,7 @@ The create pipeline explicitly asks the agent to build a schematic one part at a
 - Make the drift net parser honor labels and explicit junction points placed in the middle of wire segments, and prevent `PWR_FLAG` from renaming its net.
 - Keep the existing bounded rollback after more than `maxRepairCycles` non-improving checks.
 - Add focused regression coverage for the observed live sequence, true stagnation, clean resets, and independent ERC/DRC progress.
+- Suggest an exact full lib ID when a requested symbol is installed in a different vendor library.
 - Add deterministic cache-backed production-loop coverage for all eight stages, missing final output, a wedged ERC loop, and an empty-schematic false green.
 - Provide the aggregate `npm run lint` command named by the bounty acceptance criteria.
 - Clarify the repair-budget contract in configuration documentation and the canonical specification.

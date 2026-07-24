@@ -17,6 +17,14 @@ const DEVICE_LIB = `(kicad_symbol_lib (version 20251024) (generator test)
   (symbol "R_Small" (extends "R"))
 )`;
 
+const VENDOR_LIB = `(kicad_symbol_lib (version 20251024) (generator test)
+  (symbol "Gadget"
+    (symbol "Gadget_1_1"
+      (pin passive line (at 0 0 0) (length 1.27) (name "A") (number "1"))
+    )
+  )
+)`;
+
 // A schematic whose lib_symbols mixes a faithful copy, a wrong-pin-count copy, a
 // nonexistent lib_id, and one whose library is not installed here.
 function schematic(): string {
@@ -53,6 +61,7 @@ describe('symlib (I9: verify symbols against the installed KiCad library)', () =
   beforeAll(async () => {
     libDir = await mkdtemp(path.join(tmpdir(), 'copperhead-symlib-test-'));
     await writeFile(path.join(libDir, 'Device.kicad_sym'), DEVICE_LIB, 'utf8');
+    await writeFile(path.join(libDir, 'Vendor.kicad_sym'), VENDOR_LIB, 'utf8');
     const work = await mkdtemp(path.join(tmpdir(), 'copperhead-sch-test-'));
     schPath = path.join(work, 'x.kicad_sch');
     await writeFile(schPath, schematic(), 'utf8');
@@ -84,6 +93,11 @@ describe('symlib (I9: verify symbols against the installed KiCad library)', () =
     const r = await resolveLibrarySymbol('Device:R_Nonexistent', [libDir]);
     expect(r.status).toBe('no-symbol');
     if (r.status === 'no-symbol') expect(r.candidates).toContain('R'); // substring match
+  });
+
+  it('suggests the full lib_id when an exact symbol exists in another installed library', async () => {
+    const r = await resolveLibrarySymbol('Device:Gadget', [libDir]);
+    expect(r).toEqual({ status: 'no-symbol', candidates: ['Vendor:Gadget'] });
   });
 
   it('reports no-library when the library file is missing', async () => {

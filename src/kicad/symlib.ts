@@ -118,6 +118,43 @@ function librarySymbols(root: SexpNode[]): Map<string, SexpNode[]> {
 }
 
 /**
+ * Find an exact symbol name in other installed libraries. Vendor packages
+ * commonly ship a part that the schematic initially claims belongs to a stock
+ * KiCad library (for example RF_Module:ESP32-C3-MINI-1 actually lives in
+ * PCM_Espressif). Searching only the claimed file leaves the model with no
+ * actionable replacement even though an authoritative symbol is installed.
+ *
+ * This is intentionally exact-name only: fuzzy matching across hundreds of
+ * libraries would produce noisy, unrelated suggestions. Same-library fuzzy
+ * candidates remain available below for KiCad's ordinary rename cases.
+ */
+async function exactCrossLibraryCandidates(name: string, claimedLib: string, dirs: string[]): Promise<string[]> {
+  const candidates: string[] = [];
+  const needle = `(symbol "${name}"`;
+  for (const dir of dirs) {
+    let files: string[];
+    try {
+      files = (await readdir(dir)).filter((file) => file.endsWith('.kicad_sym'));
+    } catch {
+      continue;
+    }
+    for (const file of files) {
+      const lib = file.slice(0, -'.kicad_sym'.length);
+      if (!lib || lib === claimedLib) continue;
+      try {
+        if ((await readFile(path.join(dir, file), 'utf8')).includes(needle)) {
+          candidates.push(`${lib}:${name}`);
+          if (candidates.length >= 8) return candidates;
+        }
+      } catch {
+        // One unreadable optional library must not hide candidates in others.
+      }
+    }
+  }
+  return candidates;
+}
+
+/**
  * Resolve a `lib_id` (e.g. `Device:R`) to the real library part's pins.
  * `extends` derived symbols inherit their base's pins, so we follow one such
  * link (loop-guarded). Returns the pins, or — when the exact symbol is absent —
@@ -160,7 +197,11 @@ export async function resolveLibrarySymbol(
       return lk.includes(q) || q.includes(lk);
     })
     .slice(0, 8);
-  return { status: 'no-symbol', candidates };
+  if (candidates.length) return { status: 'no-symbol', candidates };
+  return {
+    status: 'no-symbol',
+    candidates: await exactCrossLibraryCandidates(name, lib, dirs),
+  };
 }
 
 export interface SymbolFinding {
