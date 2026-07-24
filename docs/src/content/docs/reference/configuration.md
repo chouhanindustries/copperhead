@@ -92,6 +92,7 @@ Accepted model values (routing is by prefix, matched top to bottom):
 
 | Value | Provider | Key |
 | --- | --- | --- |
+| `codex` / `codex:<id>` | Codex CLI, saved login | none (uses your logged-in Codex CLI / ChatGPT login) |
 | `claude-code` / `claude-code:<id>` | Claude Code, saved login | none (uses `CLAUDE_CODE_OAUTH_TOKEN` / your logged-in CLI) |
 | `claude` / `claude-<id>` | Anthropic API | `ANTHROPIC_API_KEY` |
 | `gpt-5` / anything else | OpenAI API | `OPENAI_API_KEY` |
