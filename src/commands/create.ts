@@ -19,6 +19,7 @@ import { sweepStaleTempDirs, pruneHistoryDir } from '../util/tmp.js';
 import { assertDiskSpace, DEFAULT_MIN_FREE_BYTES } from '../util/preflight.js';
 import { runCheck } from './check.js';
 import { emitCreateJlcpcbBom } from './export.js';
+import { dirHasContent, verifyOutputsStage, verifyFirmwareStage } from './create-enhancements.js';
 
 /**
  * Mode A (`copperhead create`, SPEC §2.5): staged pipeline, each stage a
@@ -121,19 +122,41 @@ export const STAGES: Stage[] = [
   },
   {
     name: 'outputs',
-    isComplete: (root) => existsSync(path.join(root, 'outputs')),
+    isComplete: async (root) => {
+      // Shallow existsSync check is not sufficient: an empty outputs/ directory
+      // should not count as complete (false-positive fixes #23). Verify at least
+      // the core fab artifacts exist: gerber files, drill files, and BOM CSV.
+      const config = await loadConfig(root);
+      const result = await verifyOutputsStage(root);
+      return result.ok;
+    },
     prompt: () =>
       'Stage 6: outputs package. Export into outputs/: gerbers+drill (JLC profile), DXF and STEP outline, SVG renders (export_svg), and an ordering BOM.csv generated from BOM.md (refdes, MPN, qty). Every export must succeed.',
   },
   {
     name: 'firmware',
-    isComplete: (root) => existsSync(path.join(root, 'firmware')),
+    isComplete: async (root) => {
+      // Shallow existsSync check is not sufficient: an empty firmware/ directory
+      // should not count as complete (false-positive fixes #23). Verify at least
+      // one source file exists (.c, .cpp, .py).
+      const result = await verifyFirmwareStage(root);
+      return result.ok;
+    },
     prompt: () =>
       'Stage 7: firmware scaffold. Generate firmware/ for the chosen MCU HAL: pins.h generated from PINOUT.md (single source of truth), driver stubs, and one working happy path. If the vendor toolchain is available, the build must pass; if not, note "not compiled here" explicitly in DEVPLAN.md.',
   },
   {
     name: 'devplan',
-    isComplete: (root, docs) => docExists(root, path.join(docs, 'DEVPLAN.md')),
+    isComplete: async (root, docs) => {
+      // DEVPLAN.md must have more than just a placeholder heading.
+      // A valid devplan has actionable content (bring-up steps, test points, risks).
+      if (!docHasContent(root, path.join(docs, 'DEVPLAN.md'), '## Bring-up')) {
+        if (!docHasContent(root, path.join(docs, 'DEVPLAN.md'), '## Risk')) {
+          return false;
+        }
+      }
+      return true;
+    },
     prompt: () =>
       'Stage 8: DEVPLAN.md. Write docs/DEVPLAN.md: bring-up steps in order, test points and what to meter first, risk list, and the prototype order plan.',
   },
