@@ -82,8 +82,8 @@ export async function runCheck(repoRoot: string, log: (s: string) => void): Prom
 
   return {
     ok,
-    erc: erc ? { ok: erc.ok, violations: erc.violations.length } : null,
-    drc: drc ? { ok: drc.ok, violations: drc.violations.length } : null,
+    erc: erc ? { ok: erc.ok, violations: erc.violations.filter((v) => v.severity === 'error').length } : null,
+    drc: drc ? { ok: drc.ok, violations: drc.violations.filter((v) => v.severity === 'error').length } : null,
     drift: { ok: drift.length === 0, mismatches: drift, ...(driftWarning ? { warning: driftWarning } : {}) },
     openspec,
     constraints: { ok: constraintViolations.length === 0, violations: constraintViolations },
