@@ -36,13 +36,7 @@ interface Stage {
 
 const docExists = (repoRoot: string, rel: string) => existsSync(path.join(repoRoot, rel));
 
-async function docHasContent(repoRoot: string, rel: string, marker: string): Promise<boolean> {
-  const p = path.join(repoRoot, rel);
-  if (!existsSync(p)) return false;
-  return (await readFile(p, 'utf8')).includes(marker);
-}
-
-// Heading-aware variant of docHasContent: matches any Markdown heading whose
+// Heading-aware completion marker: matches any Markdown heading whose
 // text contains `word`, ignoring heading level, leading numbering ("3."), and
 // trailing decoration ("Budgets and constraints (...)"). Stage prompts don't
 // dictate exact heading text, so a literal `.includes('## Budgets')` produces
@@ -114,7 +108,10 @@ export const STAGES: Stage[] = [
       const p = path.join(root, config.board);
       if (!existsSync(p)) return false;
       if (!(await readFile(p, 'utf8')).includes('(footprint')) return false;
-      return docHasContent(root, path.join(docs, 'LAYOUT.md'), '## Draft quality');
+      // Same heading-aware match as spec-seed (PIPELINE-ISSUES.md Issue 1): a
+      // valid doc may title the section e.g. "## 5. Draft quality notes", which
+      // a literal '## Draft quality' substring check would reject forever.
+      return docHasHeading(root, path.join(docs, 'LAYOUT.md'), 'Draft quality');
     },
     prompt: () =>
       'Stage 5: first-draft layout. Rule-driven placement written as real coordinates: connectors on edges, decoupling at IC pins, ESD at connectors, keepouts honored. Route power and short critical nets; leave the rest as ratsnest. Every routed net must pass run_drc. Then write the "## Draft quality" section in LAYOUT.md: exactly what is fine and what a human or specialist tool should redo. Non-optimal is acceptable; unlabeled non-optimal is not.',
