@@ -20,6 +20,7 @@ import { OpenAIProvider } from './providers/openai.js';
 import { AnthropicProvider } from './providers/anthropic.js';
 import { CodexProvider } from './providers/codex.js';
 import { ClaudeCodeProvider } from './providers/claude-code.js';
+import { LMStudioProvider } from './providers/lmstudio.js';
 import { openSynapMemory, type RunRecord, type SynapMemory } from '../memory/synap.js';
 
 /** What the user sees at the moment they decide whether to keep going. */
@@ -100,17 +101,27 @@ export async function makeProvider(model: string, sessionResume = false): Promis
     }
     return new ClaudeCodeProvider(claudeCodeModel, undefined, undefined, sessionResume);
   }
+  // Local OpenAI-compatible server (LM Studio). Matched before the OpenAI
+  // fallthrough so it is never sent to api.openai.com, and it needs no API key.
+  if (model === 'lmstudio' || model.startsWith('lmstudio:')) {
+    const lmstudioModel = model.startsWith('lmstudio:') ? model.slice('lmstudio:'.length) : undefined;
+    if (lmstudioModel === '') {
+      throw new Error('lmstudio model override cannot be empty; use "lmstudio" or "lmstudio:<model-id>"');
+    }
+    return new LMStudioProvider({ ...(lmstudioModel ? { model: lmstudioModel } : {}) });
+  }
   if (model === 'claude' || model.startsWith('claude')) {
     return new AnthropicProvider(model === 'claude' ? undefined : model);
   }
-  return new OpenAIProvider(model === 'gpt-5' ? undefined : model);
+  return new OpenAIProvider(model === 'gpt-5' ? {} : { model });
 }
 
 function otherProvider(current: Provider): Provider | null {
   // Only the two keyed providers fail over to each other. A rate-limited
-  // 'claude-code' run returns null here (no silent fallback to a paid API).
+  // 'claude-code' or 'lmstudio' run returns null here (no silent fallback to a
+  // paid API — a local run in particular must never become a billed one).
   if (current.name === 'openai' && process.env.ANTHROPIC_API_KEY) return new AnthropicProvider();
-  if (current.name === 'anthropic' && process.env.OPENAI_API_KEY) return new OpenAIProvider();
+  if (current.name === 'anthropic' && process.env.OPENAI_API_KEY) return new OpenAIProvider({});
   return null;
 }
 
@@ -211,11 +222,19 @@ async function runWithMemory(
   // condition under which we skip the CachingProvider wrap below.
   const sessionResume = process.env.COPPERHEAD_CC_SESSION_RESUME === '1' && !config.llmCache;
   let provider = opts.provider ?? (await makeProvider(opts.model, sessionResume));
+  // When the routing string does not name the model (`--model lmstudio` uses
+  // whichever model the local server has loaded), ask the provider what it will
+  // actually use. Both surfaces below are built once, up front, so without this
+  // they would record "lmstudio": run metadata could not say which model
+  // designed the board, and two different local models would share cache entries
+  // (F6). Best-effort — a failure here (e.g. server down) falls back to the
+  // routing string and is surfaced properly by the first chat() instead.
+  const effectiveModel = await provider.resolvedModelId?.().catch(() => undefined) ?? opts.model;
   // Cache every turn's response so a retried/restarted stage replays what it
   // already paid for instead of re-calling the model (repo-scoped, cross-run).
   // Skip an injected provider (tests drive scripted providers directly).
   if (config.llmCache && !opts.provider) {
-    provider = new CachingProvider(provider, path.join(repoRoot, CONFIG_DIR, 'llm-cache'), log, opts.model);
+    provider = new CachingProvider(provider, path.join(repoRoot, CONFIG_DIR, 'llm-cache'), log, effectiveModel);
   }
   providers.add(provider);
   // Held separately from `provider` (which is reassigned on failover) so the
@@ -233,7 +252,7 @@ async function runWithMemory(
     maxTurns,
     runId: path.basename(transcript.dir),
     request: opts.request,
-    model: opts.model,
+    model: effectiveModel,
     provider: provider.name,
     interactive: opts.interactive ?? false,
     input: opts.meta,

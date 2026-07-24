@@ -28,6 +28,13 @@ const providers: { model: string; key: string | undefined }[] = [
     model: process.env.COPPERHEAD_TEST_CLAUDE_CODE_MODEL ?? 'claude-code',
     key: claudeCodeSdkInstalled() ? process.env.CLAUDE_CODE_OAUTH_TOKEN : undefined,
   },
+  // Local LM Studio (AC-3.10, AC-3.12): opt-in, because it needs a running local
+  // server with a tool-capable model loaded and there is no credential whose
+  // presence could imply that. Same shape as the COPPERHEAD_TEST_CODEX gate.
+  {
+    model: process.env.COPPERHEAD_TEST_LMSTUDIO_MODEL ?? 'lmstudio',
+    key: process.env.COPPERHEAD_TEST_LMSTUDIO === '1' ? 'local-lmstudio-server' : undefined,
+  },
 ];
 
 function claudeCodeSdkInstalled(): boolean {

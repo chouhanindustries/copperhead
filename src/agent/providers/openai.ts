@@ -1,20 +1,93 @@
 import type { ChatOpts, Msg, Provider, ToolSchema, Turn, ToolCall } from '../types.js';
 
-export class OpenAIProvider implements Provider {
-  readonly name = 'openai';
+/** The slice of an OpenAI-compatible chat completion this provider reads. */
+export interface ChatCompletionLike {
+  choices: Array<{ message: { content?: string | null; tool_calls?: unknown[] } }>;
+  usage?: { prompt_tokens?: number; completion_tokens?: number } | null;
+}
 
-  constructor(
-    private readonly model = 'gpt-5',
-    private readonly apiKey = process.env.OPENAI_API_KEY,
-  ) {
+/** The request body this provider sends. Named so the fields stay compile-checked
+ *  even though the client itself is only structurally typed. */
+export interface ChatRequestLike {
+  model: string;
+  max_completion_tokens: number;
+  messages: unknown[];
+  tools?: Array<{
+    type: 'function';
+    function: { name: string; description: string; parameters: unknown };
+  }>;
+}
+
+/**
+ * Structural subset of the `openai` SDK client we depend on. Declared locally so
+ * tests can inject a fake and run with no network — the same seam
+ * `CodexProviderOptions.client` gives the Codex path.
+ */
+export interface ChatClientLike {
+  chat: { completions: { create(body: ChatRequestLike): Promise<ChatCompletionLike> } };
+  models: { list(): Promise<{ data: Array<{ id: string }> }> };
+}
+
+export interface OpenAIProviderOptions {
+  /** Model id. Defaults to `gpt-5` for this provider. */
+  model?: string;
+  /** Defaults to `OPENAI_API_KEY`. Must be non-empty. */
+  apiKey?: string;
+  /** Override the API host. Omitted for the real OpenAI API; set by subclasses
+   *  that talk to an OpenAI-compatible server (see `lmstudio.ts`). */
+  baseURL?: string;
+  /** Production leaves this unset and the SDK client is built lazily; tests
+   *  inject a fake so no network call is made. */
+  client?: ChatClientLike;
+}
+
+export class OpenAIProvider implements Provider {
+  // Widened to `string` so a subclass can narrow it to its own provider name.
+  // The name is load-bearing: `otherProvider` in loop.ts only fails over between
+  // 'openai' and 'anthropic', so any other name is structurally no-fallback.
+  readonly name: string = 'openai';
+
+  protected readonly model: string | undefined;
+  protected readonly apiKey: string | undefined;
+  protected readonly baseURL: string | undefined;
+  private readonly injectedClient: ChatClientLike | undefined;
+  /** Memoized so a run builds one client instead of one per turn. */
+  private clientPromise: Promise<ChatClientLike> | undefined;
+
+  constructor(opts: OpenAIProviderOptions = {}) {
+    this.model = opts.model;
+    this.apiKey = opts.apiKey ?? process.env.OPENAI_API_KEY;
+    this.baseURL = opts.baseURL;
+    this.injectedClient = opts.client;
+    // Subclasses that authenticate differently satisfy this by passing their own
+    // non-empty placeholder (the SDK requires a string), never a cloud key.
     if (!this.apiKey) throw new Error('OPENAI_API_KEY is not set');
   }
 
+  protected async client(): Promise<ChatClientLike> {
+    if (this.injectedClient) return this.injectedClient;
+    if (!this.clientPromise) {
+      this.clientPromise = (async () => {
+        const { default: OpenAI } = await import('openai');
+        return new OpenAI({
+          apiKey: this.apiKey,
+          ...(this.baseURL ? { baseURL: this.baseURL } : {}),
+        }) as unknown as ChatClientLike;
+      })();
+    }
+    return this.clientPromise;
+  }
+
+  /** The model id to send. Overridable so a backend that hosts whatever model
+   *  the user has loaded can discover it at call time (see `lmstudio.ts`). */
+  protected async resolveModelId(_client: ChatClientLike): Promise<string> {
+    return this.model ?? 'gpt-5';
+  }
+
   async chat(messages: Msg[], tools: ToolSchema[], opts: ChatOpts = {}): Promise<Turn> {
-    const { default: OpenAI } = await import('openai');
-    const client = new OpenAI({ apiKey: this.apiKey });
+    const client = await this.client();
     const res = await client.chat.completions.create({
-      model: this.model,
+      model: await this.resolveModelId(client),
       max_completion_tokens: opts.maxTokens ?? 8192,
       messages: messages.map((m) => {
         switch (m.role) {

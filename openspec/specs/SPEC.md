@@ -73,7 +73,8 @@ copperhead/
 │   │   ├── providers/
 │   │   │   ├── openai.ts   # GPT-5 via OpenAI SDK (tool calling)
 │   │   │   ├── anthropic.ts# Claude via Anthropic SDK
-│   │   │   └── codex.ts    # local Codex CLI via official SDK + saved login
+│   │   │   ├── codex.ts    # local Codex CLI via official SDK + saved login
+│   │   │   └── lmstudio.ts # local LM Studio server (OpenAI-compatible, no key)
 │   │   ├── prompts.ts      # system prompt + task templates
 │   │   └── tools.ts        # tool schemas + dispatch
 │   ├── kicad/
@@ -92,7 +93,7 @@ copperhead/
 ├── docs/                   # this spec, architecture notes
 ├── package.json            # bin: { "copperhead": "dist/cli.js" }
 ├── tsconfig.json
-├── .env.example            # OPENAI_API_KEY= / ANTHROPIC_API_KEY= / CLAUDE_CODE_OAUTH_TOKEN=
+├── .env.example            # OPENAI_API_KEY= / ANTHROPIC_API_KEY= / CLAUDE_CODE_OAUTH_TOKEN= / LMSTUDIO_BASE_URL=
 └── LICENSE                 # Apache-2.0
 ```
 
@@ -242,7 +243,7 @@ copperhead init [--path hardware/]
     extracted from the schematic. Idempotent; never overwrites
     hand-edited docs without --force.
 
-copperhead do "<change request>" [--model codex|gpt-5|claude] [--max-turns N]
+copperhead do "<change request>" [--model codex|gpt-5|claude|claude-code|lmstudio] [--max-turns N]
     The core loop. See §4.
 
 copperhead check          (alias: copperhead verify)
@@ -335,7 +336,8 @@ interface Provider {
 - `anthropic.ts`: Claude via messages API + tool use
 - `codex.ts`: locally installed Codex CLI via the official SDK and saved `codex login` authentication; Codex runs read-only and returns structured Copperhead tool requests
 - `claude-code.ts`: saved-login Claude Code via the Claude Agent SDK: a reasoning-only backend (no SDK tools, built-ins disabled, isolated cwd) mapped onto the single-turn `Provider` seam so the loop stays the driver. Selected by `--model claude-code` / `claude-code:<id>` (routed ahead of the `claude*` prefix); needs no `ANTHROPIC_API_KEY` (uses `CLAUDE_CODE_OAUTH_TOKEN` / the logged-in CLI); never falls back to a keyed provider. `@anthropic-ai/claude-agent-sdk` ships as an `optionalDependency` (its `@anthropic-ai/sdk >=0.93.0` peer is satisfied by copperhead's bumped core SDK), lazily imported and only loaded when `claude-code` is selected.
-- Selection: `--model` flag > `COPPERHEAD_MODEL` env > config.json > default (whichever key is present)
+- `lmstudio.ts`: a local OpenAI-compatible model server (LM Studio, and via `LMSTUDIO_BASE_URL` also Ollama/vLLM/llama.cpp). Subclasses `openai.ts` to reuse its chat and tool-call mapping, changing only the endpoint (default `http://localhost:1234/v1`), the credential, and local-server diagnostics. Selected by `--model lmstudio` / `lmstudio:<id>` (routed ahead of the catch-all OpenAI route); needs **no API key of any kind** and no vendor account — the credential sent is a literal placeholder, never `OPENAI_API_KEY`, so a local run cannot carry a cloud key to the configured host; never falls back to a keyed provider. Bare `lmstudio` discovers the loaded model once per run so the real id reaches run metadata and the response-cache key. Requires a tool-capable model; no new dependency (reuses the required `openai` package).
+- Selection: `--model` flag > `COPPERHEAD_MODEL` env > config.json > default (whichever key is present). A local server is never auto-detected — model resolution is synchronous and network-free, so `lmstudio` must be selected explicitly.
 - All providers must pass the same integration test on the fixture repo
 
 ### 4.5 Budgets & failure modes
@@ -427,8 +429,9 @@ Format: Given / When / Then. "Fixture" = the open-telegraph repo (or the tiny te
 - **AC-3.7 (surgical edits)** For every run above: the `.kicad_sch` diff touches only the s-expressions relevant to the change — file not regenerated (assert: < 5% of lines changed for AC-3.1).
 - **AC-3.8 (dirty tree)** With uncommitted changes and no `--allow-dirty`: refuses to start.
 - **AC-3.9 (dry run)** `--dry-run` prints the proposed diff and writes nothing.
-- **AC-3.10 (provider parity)** AC-3.1 passes with `--model codex`, `--model gpt-5`, `--model claude`, and `--model claude-code` when each provider is configured.
+- **AC-3.10 (provider parity)** AC-3.1 passes with `--model codex`, `--model gpt-5`, `--model claude`, `--model claude-code`, and `--model lmstudio` when each provider is configured.
 - **AC-3.11 (saved login)** With `--model claude-code`, a logged-in Claude Code (`CLAUDE_CODE_OAUTH_TOKEN` set) and **no** `ANTHROPIC_API_KEY`/`OPENAI_API_KEY`, a `do` run completes through the normal verify/commit path; copperhead reads no credential store; and no key material appears in the transcript, summary, or tree (AC-4.1 holds). A missing optional dependency or an unauthenticated install fails through the rollback path with an actionable error, not a raw stack trace.
+- **AC-3.12 (local model)** With `--model lmstudio`, a local LM Studio server serving a tool-capable model, and **no** `OPENAI_API_KEY`/`ANTHROPIC_API_KEY`, a `do` run completes through the normal verify/commit path with zero requests to any cloud model host. The credential sent to the local endpoint is a fixed placeholder, never the value of `OPENAI_API_KEY` even when one is set, and a failing or rate-limited local run never fails over to a keyed provider (`otherProvider` returns null for it). Bare `lmstudio` discovers the loaded model once and records that id in run metadata and the response-cache key; `lmstudio:<id>` skips discovery. An unreachable server, a server with no model loaded, and a model that rejects tool calls each fail through the rollback path with an actionable error naming the endpoint, not a raw stack trace; every other error keeps its status for retry classification. `LMSTUDIO_BASE_URL` redirects the endpoint to any other OpenAI-compatible local server. `check` makes no request to the local server (AC-2.1 holds).
 
 ### AC-4 · Safety
 

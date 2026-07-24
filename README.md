@@ -33,7 +33,7 @@ npm install -g copperhead   # or: npx copperhead check
 
 - Node.js ≥ 20
 - [KiCad](https://www.kicad.org/) ≥ 8 with `kicad-cli` on PATH
-- One model backend: a locally installed, ChatGPT-authenticated [Codex CLI](https://learn.chatgpt.com/docs/codex/cli), a logged-in Claude Code (see [Saved login](#saved-login-claude-code)), or `ANTHROPIC_API_KEY`/`OPENAI_API_KEY` in the environment. `check` never calls an LLM.
+- One model backend: a locally installed, ChatGPT-authenticated [Codex CLI](https://learn.chatgpt.com/docs/codex/cli), a logged-in Claude Code (see [Saved login](#saved-login-claude-code)), a local LM Studio server (see [Local models](#local-models-lm-studio)), or `ANTHROPIC_API_KEY`/`OPENAI_API_KEY` in the environment. `check` never calls an LLM.
 
 ## Quick start
 
@@ -95,7 +95,7 @@ copperhead export bom --supplier jlcpcb   # supplier-ready ordering file from do
 
 Global flags: `--repo <path>` (default: cwd) and `--json` for machine-readable output. `do` and `create` take `--model` and `--interactive`; `do` also takes `--dry-run`, `--max-turns`, and `--allow-dirty`.
 
-`--model` accepts `gpt-5` (OpenAI), `claude` / `claude-<id>` (Anthropic API), `claude-code` / `claude-code:<id>` (Claude Code, saved login), and `codex` / `codex:<id>` (Codex CLI, saved login). Routing is by prefix; `claude-code` is matched before the `claude` prefix.
+`--model` accepts `gpt-5` (OpenAI), `claude` / `claude-<id>` (Anthropic API), `claude-code` / `claude-code:<id>` (Claude Code, saved login), `codex` / `codex:<id>` (Codex CLI, saved login), and `lmstudio` / `lmstudio:<id>` (a local LM Studio server, no key). Routing is by prefix; `claude-code` is matched before the `claude` prefix, and `lmstudio` before the OpenAI catch-all.
 
 ### Saved login (Claude Code)
 
@@ -110,6 +110,21 @@ copperhead do "add reverse-polarity protection on VIN" --model claude-code
 The Claude Agent SDK ships as an optional dependency, so a normal install pulls it in. copperhead loads it only when you select `claude-code`, and prints an actionable error if it is missing (for example after `npm install --omit=optional`), telling you to add it with `npm i @anthropic-ai/claude-agent-sdk`.
 
 copperhead never reads, copies, or logs the credential; the CLI owns authentication. A missing dependency or an unauthenticated install fails with an actionable message and touches nothing.
+
+### Local models (LM Studio)
+
+`--model lmstudio` runs copperhead against a model on your own machine — for privacy-sensitive designs, offline or air-gapped work, and zero marginal cost. [LM Studio](https://lmstudio.ai/) serves an OpenAI-compatible endpoint, so copperhead reuses its existing chat and tool-call mapping and just changes the host.
+
+```bash
+# in LM Studio: load a tool-capable model, then Developer ▸ Start Server
+copperhead do "add reverse-polarity protection on VIN" --model lmstudio
+```
+
+No API key is involved and nothing leaves your machine: copperhead sends a placeholder credential rather than your `OPENAI_API_KEY`, so a local run cannot carry a cloud key to the configured host. A local run also never falls back to a cloud provider, even when a cloud key is set and the local server is failing.
+
+The model **must support function/tool calling** — every action copperhead takes is a tool call. Plain `lmstudio` uses whichever model the server has loaded; `lmstudio:<model-id>` names one explicitly.
+
+`LMSTUDIO_BASE_URL` (default `http://localhost:1234/v1`) points at any other OpenAI-compatible local server — Ollama, vLLM, llama.cpp.
 
 ### Ordering (`export bom`)
 
