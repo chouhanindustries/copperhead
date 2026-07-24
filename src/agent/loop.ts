@@ -76,7 +76,6 @@ export async function makeProvider(model: string, sessionResume = false): Promis
   if (model === 'codex' || model.startsWith('codex:')) {
     const codexModel = model.startsWith('codex:') ? model.slice('codex:'.length) : undefined;
     if (codexModel === '') throw new Error('codex model override cannot be empty; use "codex" or "codex:<model-id>"');
-    // @ts-expect-error optional peer dependency
     const { Codex } = await import('@openai/codex-sdk').catch((err: unknown) => {
       throw new Error(
         'Codex provider requires the optional @openai/codex-sdk package; install it alongside Copperhead before using --model codex',

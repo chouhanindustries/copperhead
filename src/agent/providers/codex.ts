@@ -1,7 +1,6 @@
 import { mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-// @ts-expect-error optional peer dependency
 import type { ThreadOptions, TurnOptions, Usage } from '@openai/codex-sdk';
 import type { ChatOpts, Msg, Provider, ToolCall, ToolSchema, Turn } from '../types.js';
 
@@ -71,7 +70,7 @@ export class CodexProvider implements Provider {
     const workingDirectory = await this.ensureWorkingDirectory();
     if (!this.thread) {
       this.thread = this.client.startThread({
-        model: this.model,
+        ...(this.model ? { model: this.model } : {}),
         workingDirectory,
         skipGitRepoCheck: true,
         sandboxMode: 'read-only',
