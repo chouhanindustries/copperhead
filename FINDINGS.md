@@ -79,3 +79,30 @@ The run is currently in stage 4 (schematic, run `2026-07-24T10-05-50-017Z`). Slo
 - **TODO F-6 (any stage): session/turn limits.** Watch: turn cap (`turns <=40`) or provider session limit treated as a hard error vs graceful resume; long silent stretches already observed (9m30s with no tool result at `run1.log:820-841`).
 - **TODO F-7 (whole run): temp/`.history/` growth and cache behavior.** Watch: disk buildup between attempts; also `0% cache hits` reported after every stage (`run1.log:281`, `run1.log:624`, `run1.log:813`), a candidate INEFFICIENCY if the llm-cache is written but never read during create.
 - **TODO F-8 (stages 7-8, firmware and dev-plan): completion contract and final exit code.** Watch: final stage committed, process exits 0, `.copperhead/runs/*` summary written.
+
+## F-4 BLOCKER: `copperhead check` preflight passes with zero KiCad symbol libraries installed, guaranteeing a stage 4 dead end
+
+- **Where:** preflight (`copperhead check` and the create pipeline's startup banner) vs `src/kicad/symlib.ts` `symbolSearchDirs()`.
+- **Symptom:** on a host where `kicad-cli` is on PATH but the stock symbol libraries are not at a known location (this machine: KiCad.app under `~/Applications`, so the hardcoded `/Applications/KiCad/...` default missed; `KICAD_SYMBOL_DIR` unset), `copperhead check` and the run banner report the environment as wired up. The run then proceeds through stages 1 to 3 (42m30s, 162.6k tokens) before stage 4 discovers there is no pin oracle. From the stage 4 attempt 1 summary (`.copperhead/runs/2026-07-24T10-05-50-017Z/summary.md`):
+
+  ```text
+  ... two direct verify_symbols calls both return 0 verified / 8 unverifiable, incl. Device:R and power:GND ...
+  NO authoritative pin source exists in this environment.
+  ```
+
+- **Suggested (P1):** preflight should probe `symbolSearchDirs()` and report loudly (in `check` and in the create startup banner) when zero symbol libraries are found, with the same fix-it guidance style the kicad-cli-missing error already has (install location hints plus `KICAD_SYMBOL_DIR`). A three-second probe would have saved three stage attempts and roughly three hours.
+- **Status:** open. Reproduced; environment corrected via `KICAD_SYMBOL_DIR` for the resumed run.
+
+## F-5 INEFFICIENCY: the recovery supervisor retries a reasoned refusal as if it were a transient failure
+
+- **Where:** create stage retry loop (`src/commands/create.ts` diagnosis path), stage 4 attempts 1 to 3.
+- **Symptom:** attempt 1 ended in a deliberate, well-argued REFUSAL (missing pin oracle, see F-4) that named the exact unblock options ("install the KiCad stock symbol libraries ... OR add the six IC datasheet pin tables"). The supervisor still retried: attempt 2 burned the full 40-turn budget against the same wall (`.copperhead/runs/2026-07-24T11-09-43-347Z/summary.md`: "turn budget exhausted (40 turns, 14 files touched but unverified)"), and attempt 3 died on provider turn timeouts (`.copperhead/runs/2026-07-24T13-15-55-261Z/summary.md`: "provider turns timed out 4x (>600000ms each)"). Neither retry could have succeeded: the blocker was environmental, not behavioral.
+- **Suggested (P2):** when a run ends in an explicit refusal that names an environmental precondition, the diagnosis step should classify it as abort-with-remediation (surface the model's own unblock instructions and stop), not retry. The refusal text is already structured enough to detect (the run summary carries it).
+- **Status:** open. The refusal itself is the integrity gates working as designed and deserves credit; only the retry policy around it is wasteful.
+
+## F-6 NOTE: turn watchdog fires per turn but the pipeline offers no mid-run signal that a stage is burning attempts against a fixed wall
+
+- **Where:** observability of the create pipeline under failure (stage 4, attempts 1 to 3, roughly 3 hours wall time).
+- **Symptom:** from the outside (a CI job or an operator tailing the log), the only distinguishable states during the 3-hour stage 4 arc were "running" and, ultimately, exit 1. The per-attempt outcomes (refused / turn-budget exhausted / 4x turn timeout) were visible only in per-run `summary.md` files after the fact. stdout is also block-buffered when redirected to a file, so the final attempts' output never reached the log on the crash.
+- **Suggested (P3):** flush stage attempt outcomes to stdout as single unbuffered lines when each attempt ends (attempt number, outcome class, one-line reason), so an operator or CI harness can act after attempt 1 rather than after attempt 3.
+- **Status:** open.
