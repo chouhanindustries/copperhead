@@ -63,6 +63,7 @@ The constraint registry: machine-readable counterparts to the constraints stated
 | `CLAUDE_CODE_OAUTH_TOKEN` | Optional. Saved-login token for `--model claude-code` (see below). Minted by `claude setup-token`; lets you run against a Claude subscription with no `ANTHROPIC_API_KEY`. |
 | `COPPERHEAD_MODEL` | Default model. Overrides config, overridden by `--model`. |
 | `COPPERHEAD_CODEX_PATH` | Optional path to a `codex` executable. Defaults to `codex` on `PATH`; the SDK-bundled launcher is a fallback. |
+| `COPPERHEAD_CURSOR_PATH` | Optional path to the Cursor Agent CLI (`agent` / `cursor-agent`). Defaults to `agent` on `PATH`. |
 | `SYNAP_API_KEY` | Optional. Enables cross-run memory. Absent, copperhead behaves exactly as before and makes no Synap calls. |
 | `SYNAP_USER_ID` | Optional memory scope. Defaults to your `git config user.email`. |
 | `SYNAP_CUSTOMER_ID` | Optional memory scope. Defaults to `copperhead`; only matters on B2B Synap instances. |
@@ -93,6 +94,8 @@ Accepted model values (routing is by prefix, matched top to bottom):
 | Value | Provider | Key |
 | --- | --- | --- |
 | `claude-code` / `claude-code:<id>` | Claude Code, saved login | none (uses `CLAUDE_CODE_OAUTH_TOKEN` / your logged-in CLI) |
+| `cursor` / `cursor:<id>` | Cursor Agent CLI, saved login | none (`agent login`) |
+| `codex` / `codex:<id>` | Codex CLI, saved login | none (local Codex login) |
 | `claude` / `claude-<id>` | Anthropic API | `ANTHROPIC_API_KEY` |
 | `gpt-5` / anything else | OpenAI API | `OPENAI_API_KEY` |
 
@@ -108,6 +111,15 @@ One-time setup:
 2. Be logged into Claude Code, then run `claude setup-token` and export the result as `CLAUDE_CODE_OAUTH_TOKEN` (use `--model claude-code:<id>` to pick a specific model).
 
 Authentication stays entirely with the CLI: copperhead never reads, copies, or logs the credential. A missing dependency or an unauthenticated install fails with an actionable message and leaves your tree untouched, and a rate-limited `claude-code` run never silently falls back to a billed API provider.
+
+### Saved login (Cursor Agent)
+
+`--model cursor` drives the Cursor Agent CLI with your saved login from `agent login`, so you can run copperhead with **no model API keys**. Cursor runs in plan mode with sandbox enabled; copperhead maps tool calls through the same JSON prompt protocol as `claude-code` and keeps every mutation inside its own gated loop.
+
+1. Run `agent login` and verify with `agent status`.
+2. Run copperhead with `--model cursor` (use `--model cursor:<id>` for an explicit model).
+
+If `agent` is not on `PATH`, set `COPPERHEAD_CURSOR_PATH`. A rate-limited `cursor` run never silently falls back to a billed API provider.
 
 ## Files copperhead writes
 
