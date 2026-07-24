@@ -3,15 +3,17 @@ import { readFile, writeFile } from 'node:fs/promises';
 import { execa } from 'execa';
 import type { Msg, Provider, Turn } from './types.js';
 import { availableTools, dispatchTool, type RunContext } from './tools.js';
+import { CachingProvider } from './response-cache.js';
+import { withTimeout, TurnTimeoutError } from './recovery.js';
 import { buildSystemPrompt } from './prompts.js';
 import { loadConstraints, reopenDeferredAffects } from '../memory/constraints.js';
-import { loadConfig, type CopperheadConfig } from '../config.js';
+import { loadConfig, CONFIG_DIR, type CopperheadConfig } from '../config.js';
 import { Transcript, type ExitPath, type RunStats } from './transcript.js';
 import { collectRunMeta, renderCliHeader, type RunMeta, type RunMetaInput } from './runmeta.js';
 import { plainRenderer, fmtDuration, fmtTokens, type ProgressRenderer } from './render.js';
 import { ObligationsLedger } from './ledger.js';
 import { gitPreflight, isDirty, snapshot, restore, commitAll, changedFiles, preserveFailedRun } from '../util/git.js';
-import { withRetry, isRateLimit } from '../util/retry.js';
+import { withRetry, isRateLimit, sessionLimit } from '../util/retry.js';
 import { openspecArchive } from '../openspec/cli.js';
 import { existsSync } from 'node:fs';
 import { OpenAIProvider } from './providers/openai.js';
@@ -63,9 +65,14 @@ export interface RunResult {
   transcriptDir: string;
   filesTouched: string[];
   commit: string | null;
+  /** Cost/telemetry for this run. Surfaced by the create pipeline's per-stage
+   *  cost table (5.2) so the expensive stages are obvious across runs. */
+  stats: RunStats;
+  /** Number of turns served from the on-disk response cache (5.2). */
+  cacheHits: number;
 }
 
-export async function makeProvider(model: string): Promise<Provider> {
+export async function makeProvider(model: string, sessionResume = false): Promise<Provider> {
   if (model === 'codex' || model.startsWith('codex:')) {
     const codexModel = model.startsWith('codex:') ? model.slice('codex:'.length) : undefined;
     if (codexModel === '') throw new Error('codex model override cannot be empty; use "codex" or "codex:<model-id>"');
@@ -91,7 +98,7 @@ export async function makeProvider(model: string): Promise<Provider> {
     if (claudeCodeModel === '') {
       throw new Error('claude-code model override cannot be empty; use "claude-code" or "claude-code:<model-id>"');
     }
-    return new ClaudeCodeProvider(claudeCodeModel);
+    return new ClaudeCodeProvider(claudeCodeModel, undefined, undefined, sessionResume);
   }
   if (model === 'claude' || model.startsWith('claude')) {
     return new AnthropicProvider(model === 'claude' ? undefined : model);
@@ -198,8 +205,23 @@ async function runWithMemory(
     finishRequest: null,
   };
 
-  let provider = opts.provider ?? (await makeProvider(opts.model));
+  // Session resume for claude-code (1.1) is only correct when the response cache
+  // is off: the cache replays turns a resumed session never saw. So enable it
+  // only when the env flag is set AND config.llmCache is disabled — the same
+  // condition under which we skip the CachingProvider wrap below.
+  const sessionResume = process.env.COPPERHEAD_CC_SESSION_RESUME === '1' && !config.llmCache;
+  let provider = opts.provider ?? (await makeProvider(opts.model, sessionResume));
+  // Cache every turn's response so a retried/restarted stage replays what it
+  // already paid for instead of re-calling the model (repo-scoped, cross-run).
+  // Skip an injected provider (tests drive scripted providers directly).
+  if (config.llmCache && !opts.provider) {
+    provider = new CachingProvider(provider, path.join(repoRoot, CONFIG_DIR, 'llm-cache'), log, opts.model);
+  }
   providers.add(provider);
+  // Held separately from `provider` (which is reassigned on failover) so the
+  // final cache-hit count survives a mid-run provider switch (5.2).
+  const cachingProvider = provider instanceof CachingProvider ? provider : null;
+  const cacheHits = (): number => cachingProvider?.cacheHits ?? 0;
 
   // Deterministic, LLM-free metadata block: collected once, rendered onto all
   // three surfaces (run-start event, summary ## Environment, CLI header) so
@@ -277,6 +299,8 @@ async function runWithMemory(
   const perTurn: { turn: number; in: number; out: number }[] = [];
   let plan: string | null = null;
   let nudges = 0;
+  let turnTimeouts = 0;
+  const maxTurnTimeouts = 3;
 
   const stats = (exitPath: ExitPath): RunStats => ({
     exitPath,
@@ -356,6 +380,8 @@ async function runWithMemory(
       transcriptDir: transcript.dir,
       filesTouched: [],
       commit: null,
+      stats: runStats,
+      cacheHits: cacheHits(),
     };
   };
 
@@ -388,15 +414,64 @@ async function runWithMemory(
       await transcript.event('budget-extended', { extraTurns: extra, budget, ...exhaustStats });
       log(`turn budget extended by ${extra} (now ${budget})`);
     }
+    // Advertise EVERY tool each turn; dispatchTool enforces the edit-unlock gate
+    // live at call time. Hiding locked edit tools from the turn catalog meant a
+    // model that unlocked (validate_change) and edited in the SAME reply had its
+    // edit silently dropped in parsing — the call named a tool the turn had not
+    // advertised, so it was treated as prose, executed nothing, and returned no
+    // error. The model then "verified" against an unchanged file (an empty
+    // schematic even passes ERC) and finished believing it had succeeded.
+    // Structural lock (SPEC.md §1.3 invariant 1): the edit tools stay OUT of the
+    // advertised list until a proposal validates (`editsUnlocked`), so the model
+    // is gated by omission, not by prompt text. `dispatchTool` re-checks the same
+    // `availableTools(ctx)` live, so this is defense in depth. A premature edit is
+    // simply not offered; once `validate_change` unlocks, the next turn advertises
+    // the edit tools. (Earlier this advertised every tool to let a same-turn
+    // propose→validate→edit batch through, but that traded the spec's structural
+    // guarantee for one saved turn — not worth it.)
     const tools = availableTools(ctx).map((t) => t.schema);
     r.turnStart(turn + 1, maxTurns, tokensIn, tokensOut);
     r.status('thinking');
     let res: Turn;
+    // Liveness heartbeat (5.1): a large-output turn can legitimately run several
+    // minutes, which is otherwise indistinguishable from a hung subprocess until
+    // the watchdog fires. Emit a periodic elapsed/streamed signal so an operator
+    // can tell the two apart. Fires only after the first interval, so quick turns
+    // stay silent; `unref` keeps it from holding the event loop open.
+    const turnStartMs = Date.now();
+    let streamedChars = 0;
+    const heartbeat =
+      config.heartbeatMs > 0
+        ? setInterval(
+            () => r.heartbeat({ elapsedMs: Date.now() - turnStartMs, streamedChars }),
+            config.heartbeatMs,
+          )
+        : null;
+    heartbeat?.unref?.();
     try {
-      res = await withRetry(() => provider.chat(messages, tools), {
-        onRetry: (attempt) => log(`rate limited; retry ${attempt}`),
-      });
+      res = await withRetry(
+        () =>
+          withTimeout(
+            () => provider.chat(messages, tools, { onStream: (chars) => (streamedChars = chars) }),
+            config.turnTimeoutMs,
+            () => provider.close?.(),
+          ),
+        { onRetry: (attempt) => log(`rate limited; retry ${attempt}`) },
+      );
     } catch (err) {
+      if (err instanceof TurnTimeoutError) {
+        // A hung provider turn: the watchdog aborted the in-flight call and tore
+        // down its subprocess. Retry the same turn a bounded number of times
+        // before giving up, so a transient hang self-heals instead of stalling
+        // the run forever.
+        if (turnTimeouts++ < maxTurnTimeouts) {
+          log(`turn exceeded ${config.turnTimeoutMs}ms; aborted the hung call and retrying (${turnTimeouts}/${maxTurnTimeouts})`);
+          await transcript.event('turn-timeout', { ms: config.turnTimeoutMs, attempt: turnTimeouts });
+          turn--;
+          continue;
+        }
+        return fail(`provider turns timed out ${turnTimeouts}× (>${config.turnTimeoutMs}ms each)`, 'provider-error');
+      }
       if (isRateLimit(err)) {
         const fallback = otherProvider(provider);
         if (fallback) {
@@ -408,11 +483,34 @@ async function runWithMemory(
           continue;
         }
       }
+      // A saved-login session/usage limit is not a code bug and not a 429 (2.4,
+      // I13): it names its own reset time and clears only then, and every turn
+      // so far is already in the llm-cache — so re-running after the reset
+      // replays them at ~0 tokens and resumes in place. Surface it as its own
+      // exit path with the reset time and the resume instruction, rather than a
+      // bare "provider error" the operator would read as a failure to debug.
+      const limit = sessionLimit(err);
+      if (limit) {
+        const when = limit.resetsAt ? ` (resets ${limit.resetsAt})` : '';
+        await transcript.event('session-limit', { resetsAt: limit.resetsAt, provider: provider.name });
+        return fail(
+          `${provider.name} session/usage limit reached${when} — this is a schedulable pause, not a bug. ` +
+            `Wait for the reset, then re-run the same command: completed turns replay from the cache at ~0 tokens and the run resumes where it left off.`,
+          'session-limit',
+        );
+      }
       return fail(`provider error: ${(err as Error).message}`, 'provider-error');
     } finally {
+      if (heartbeat) clearInterval(heartbeat);
       r.status(null);
     }
     turnsUsed = turn + 1;
+    // A productive turn resets the timeout budget: maxTurnTimeouts is meant to
+    // catch a turn that is genuinely, repeatedly stuck — not to cap the total
+    // number of slow-but-recoverable turns across a whole stage. Without this a
+    // long stage that merely has a few independent slow turns accumulates
+    // timeouts and hard-fails even though every one of them recovered.
+    turnTimeouts = 0;
     tokensIn += res.usage.inputTokens;
     tokensOut += res.usage.outputTokens;
     perTurn.push({ turn: turn + 1, in: res.usage.inputTokens, out: res.usage.outputTokens });
@@ -432,7 +530,9 @@ async function runWithMemory(
       if (nudges++ >= 2) return fail('model stopped calling tools without finishing', 'stalled');
       messages.push({
         role: 'user',
-        content: 'Continue using tools, or call finish({outcome, summary}) to end the run.',
+        // A near-miss malformed tool call (#I10) gets a specific steer to re-emit
+        // it; an ordinary tool-less turn gets the generic continue prompt.
+        content: res.nudge ?? 'Continue using tools, or call finish({outcome, summary}) to end the run.',
       });
       continue;
     }
@@ -502,6 +602,8 @@ async function runWithMemory(
           transcriptDir: transcript.dir,
           filesTouched: [],
           commit: null,
+          stats: runStats,
+          cacheHits: cacheHits(),
         };
       }
 
@@ -547,16 +649,32 @@ async function runWithMemory(
           transcriptDir: transcript.dir,
           filesTouched: files,
           commit: null,
+          stats: runStats,
+          cacheHits: cacheHits(),
         };
       }
 
-      await appendChangelog(repoRoot, config, {
-        changeId: ctx.changeId,
-        request: opts.request,
-        files,
-        verification,
-      });
-      ctx.ledger.clear('changelog');
+      // Bookkeeping must never cost the verified design its commit (2.1): the
+      // KiCad work passed its ERC/DRC gates, so a failure appending the changelog
+      // (a plain CHANGELOG.md read+write) is a warning, not a rollback. It stays
+      // before commitAll so, on the normal path, the entry lands in the run's
+      // single commit and a zero-edit "done" run still has something to commit;
+      // if it throws, the design is committed without a changelog line rather
+      // than sent through fail()'s rollback. The other bookkeeping — the openspec
+      // archive — is already post-commit and non-fatal below.
+      try {
+        await appendChangelog(repoRoot, config, {
+          changeId: ctx.changeId,
+          request: opts.request,
+          files,
+          verification,
+        });
+        ctx.ledger.clear('changelog');
+      } catch (err) {
+        const message = (err as Error).message;
+        log(`warning: changelog append failed (${message}); committing the verified design without a changelog entry`);
+        await transcript.event('changelog-append-failed', { error: message });
+      }
 
       const commitMsg = `copperhead: ${opts.request}\n\n${summary}\n\nVerification: ${verification}`;
       // A git failure here (e.g. `git add -A` exiting 128 on an embedded repo)
@@ -619,6 +737,8 @@ async function runWithMemory(
         transcriptDir: transcript.dir,
         filesTouched: files,
         commit,
+        stats: runStats,
+        cacheHits: cacheHits(),
       };
     }
   }

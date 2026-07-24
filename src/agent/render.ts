@@ -12,6 +12,14 @@ export interface ProgressRenderer {
   toolResult(name: string, firstLine: string): void;
   /** Busy text while a provider call is in flight; null when idle. */
   status(text: string | null): void;
+  /**
+   * Liveness signal emitted periodically while a provider turn is in flight
+   * (5.1): distinguishes a slow turn from a hung one. `elapsedMs` is time since
+   * this turn's provider call began; `streamedChars` is cumulative streamed
+   * output (0 when the provider doesn't stream — the elapsed time still tells
+   * the operator the turn is alive).
+   */
+  heartbeat(info: { elapsedMs: number; streamedChars: number }): void;
   /** Final outcome line; replaces the status line in interactive mode. */
   finish(line: string): void;
 }
@@ -41,6 +49,11 @@ export function plainRenderer(log: (line: string) => void): ProgressRenderer {
     turnStart: (turn, maxTurns, tokensIn, tokensOut) => log(turnMarker(turn, maxTurns, tokensIn, tokensOut)),
     toolResult: (name, firstLine) => log(`  [${name}] ${firstLine}`),
     status: () => {},
+    heartbeat: ({ elapsedMs, streamedChars }) =>
+      log(
+        `  … still working — ${fmtDuration(elapsedMs)} elapsed` +
+          (streamedChars ? `, ~${fmtTokens(streamedChars)} chars streamed` : ' (no output yet)'),
+      ),
     finish: (line) => log(line),
   };
 }
@@ -68,6 +81,7 @@ export class InteractiveRenderer implements ProgressRenderer {
   private maxTurns = 0;
   private tokensIn = 0;
   private tokensOut = 0;
+  private streamedChars = 0;
   private busy: string | null = null;
   private frame = 0;
   private timer: ReturnType<typeof setInterval> | null = null;
@@ -97,7 +111,11 @@ export class InteractiveRenderer implements ProgressRenderer {
       `${fmtTokens(this.tokensIn)} in / ${fmtTokens(this.tokensOut)} out`,
       fmtDuration(Date.now() - this.startMs),
     ];
-    if (this.busy) parts.push(this.busy);
+    if (this.busy) {
+      // Fold streamed-output volume into the busy segment so a large turn's
+      // status line visibly grows — a hung one stays frozen (5.1).
+      parts.push(this.streamedChars ? `${this.busy} ~${fmtTokens(this.streamedChars)} ch` : this.busy);
+    }
     const spinner = this.busy ? FRAMES[this.frame % FRAMES.length] : '·';
     const line = `${spinner} ${parts.join(' · ')}`;
     const width = this.out.columns ?? 80;
@@ -138,6 +156,7 @@ export class InteractiveRenderer implements ProgressRenderer {
     this.maxTurns = maxTurns;
     this.tokensIn = tokensIn;
     this.tokensOut = tokensOut;
+    this.streamedChars = 0; // per-turn: reset so last turn's volume doesn't linger
     this.ensureTimer();
     this.redraw();
   }
@@ -148,7 +167,15 @@ export class InteractiveRenderer implements ProgressRenderer {
 
   status(text: string | null): void {
     this.busy = text;
+    if (!text) this.streamedChars = 0; // turn's provider call ended
     if (text && !this.idle) this.ensureTimer();
+    this.redraw();
+  }
+
+  heartbeat({ streamedChars }: { elapsedMs: number; streamedChars: number }): void {
+    // The spinner timer already advances elapsed time in place; the heartbeat's
+    // job here is to fold in the latest streamed-output volume and redraw.
+    this.streamedChars = streamedChars;
     this.redraw();
   }
 
