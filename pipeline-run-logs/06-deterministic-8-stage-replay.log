@@ -1,0 +1,357 @@
+
+> copperhead@0.7.0 test
+> vitest run --run test/create-e2e.test.ts -t warms and replays
+
+
+ RUN  v3.2.7 /Users/jamilpc/codex/bounties/work/copperhead-20260724
+
+
+===== deterministic warm run =====
+stage spec-seed: running
+copperhead v0.7.0 (/Users/jamilpc/codex/bounties/work/copperhead-20260724) · kicad-cli 9.0.9 · node v24.3.0 · darwin-arm64
+run 2026-07-24T21-22-03-651Z · create · stage spec-seed (1/8) · model recorded-replay (recorded-replay, via unknown) · turns ≤20 · repo main@529b9bb clean
+[turn 1/20 · 0 in / 0 out]
+Recorded acceptance response.
+  [propose_change] proposal written to openspec/changes/replay-spec-seed/ — now call validate_change
+  [validate_change] validation passed; edit tools are now unlocked
+[turn 2/20 · 0 in / 0 out]
+Recorded acceptance response.
+  [write_file] wrote docs/SPEC.md
+  [check_drift] no schematic configured; drift vacuously clean
+  [finish] all gates satisfied; run will commit
+committed 2d152a95c1 (1 file(s))
+done · ERC not run · committed 2d152a95c1 · 1s · 0 in / 0 out
+pipeline so far: 1/8 stages · 1s · 0 out tokens · 0% cache hits
+stage architecture: running
+copperhead v0.7.0 (/Users/jamilpc/codex/bounties/work/copperhead-20260724) · kicad-cli 9.0.9 · node v24.3.0 · darwin-arm64
+run 2026-07-24T21-22-04-291Z · create · stage architecture (2/8) · model recorded-replay (recorded-replay, via unknown) · turns ≤20 · repo main@2d152a9 clean
+[turn 1/20 · 0 in / 0 out]
+Recorded acceptance response.
+  [propose_change] proposal written to openspec/changes/replay-architecture/ — now call validate_change
+  [validate_change] validation passed; edit tools are now unlocked
+[turn 2/20 · 0 in / 0 out]
+Recorded acceptance response.
+  [write_file] wrote docs/SUBSYSTEMS.md
+  [check_drift] no schematic configured; drift vacuously clean
+  [finish] all gates satisfied; run will commit
+committed b137a53528 (1 file(s))
+done · ERC not run · committed b137a53528 · 0s · 0 in / 0 out
+pipeline so far: 2/8 stages · 1s · 0 out tokens · 0% cache hits
+stage part-selection: running
+copperhead v0.7.0 (/Users/jamilpc/codex/bounties/work/copperhead-20260724) · kicad-cli 9.0.9 · node v24.3.0 · darwin-arm64
+run 2026-07-24T21-22-04-531Z · create · stage part-selection (3/8) · model recorded-replay (recorded-replay, via unknown) · turns ≤20 · repo main@b137a53 clean
+[turn 1/20 · 0 in / 0 out]
+Recorded acceptance response.
+  [propose_change] proposal written to openspec/changes/replay-part-selection/ — now call validate_change
+  [validate_change] validation passed; edit tools are now unlocked
+[turn 2/20 · 0 in / 0 out]
+Recorded acceptance response.
+  [write_file] wrote docs/BOM.md
+  [check_drift] no schematic configured; drift vacuously clean
+  [finish] all gates satisfied; run will commit
+committed 7e7eec0d2d (1 file(s))
+done · ERC not run · committed 7e7eec0d2d · 0s · 0 in / 0 out
+pipeline so far: 3/8 stages · 1s · 0 out tokens · 0% cache hits
+stage schematic: scaffolded empty KiCad project (replay-board.kicad_sch + board + project), wired into config
+stage schematic: running
+copperhead v0.7.0 (/Users/jamilpc/codex/bounties/work/copperhead-20260724) · kicad-cli 9.0.9 · node v24.3.0 · darwin-arm64
+run 2026-07-24T21-22-04-827Z · create · stage schematic (4/8) · model recorded-replay (recorded-replay, via unknown) · turns ≤20 · repo main@7e7eec0 dirty(4)
+[turn 1/20 · 0 in / 0 out]
+Recorded acceptance response.
+  [propose_change] proposal written to openspec/changes/replay-schematic/ — now call validate_change
+  [validate_change] validation passed; edit tools are now unlocked
+[turn 2/20 · 0 in / 0 out]
+Recorded acceptance response.
+  [read_file] (kicad_sch
+  [edit_file] edited replay-board.kicad_sch
+  [write_file] wrote docs/PINOUT.md
+  [run_erc] ERC: clean
+  [check_drift] drift: clean
+  [finish] all gates satisfied; run will commit
+committed a07ee4c269 (2 file(s))
+done · ERC clean · committed a07ee4c269 · 1s · 0 in / 0 out
+stage schematic: rendered 2 SVG artifact(s) into .copperhead/runs/2026-07-24T21-22-04-827Z/artifacts/
+pipeline so far: 4/8 stages · 2s · 0 out tokens · 0% cache hits
+stage layout-draft: running
+copperhead v0.7.0 (/Users/jamilpc/codex/bounties/work/copperhead-20260724) · kicad-cli 9.0.9 · node v24.3.0 · darwin-arm64
+run 2026-07-24T21-22-06-958Z · create · stage layout-draft (5/8) · model recorded-replay (recorded-replay, via unknown) · turns ≤20 · repo main@a07ee4c clean
+[turn 1/20 · 0 in / 0 out]
+Recorded acceptance response.
+  [propose_change] proposal written to openspec/changes/replay-layout-draft/ — now call validate_change
+  [validate_change] validation passed; edit tools are now unlocked
+[turn 2/20 · 0 in / 0 out]
+Recorded acceptance response.
+  [read_file] (kicad_pcb
+  [edit_file] edited replay-board.kicad_pcb
+  [write_file] wrote docs/LAYOUT.md
+  [run_erc] ERC: clean
+  [run_drc] DRC: clean
+  [check_drift] drift: clean
+  [finish] all gates satisfied; run will commit
+committed 8173ee2d22 (2 file(s))
+done · ERC clean · DRC clean · committed 8173ee2d22 · 1s · 0 in / 0 out
+stage layout-draft: rendered 2 SVG artifact(s) into .copperhead/runs/2026-07-24T21-22-06-958Z/artifacts/
+pipeline so far: 5/8 stages · 3s · 0 out tokens · 0% cache hits
+stage outputs: running
+copperhead v0.7.0 (/Users/jamilpc/codex/bounties/work/copperhead-20260724) · kicad-cli 9.0.9 · node v24.3.0 · darwin-arm64
+run 2026-07-24T21-22-08-549Z · create · stage outputs (6/8) · model recorded-replay (recorded-replay, via unknown) · turns ≤20 · repo main@8173ee2 clean
+[turn 1/20 · 0 in / 0 out]
+Recorded acceptance response.
+  [propose_change] proposal written to openspec/changes/replay-outputs/ — now call validate_change
+  [validate_change] validation passed; edit tools are now unlocked
+[turn 2/20 · 0 in / 0 out]
+Recorded acceptance response.
+  [export_outputs] produced: gerbers, drill, outline.dxf, board.step, board.svg, schematic.svg
+  [check_drift] drift: clean
+  [finish] all gates satisfied; run will commit
+committed 415b8188ef (1 file(s))
+done · ERC not run · committed 415b8188ef · 2s · 0 in / 0 out
+stage outputs: rendered 2 SVG artifact(s) into .copperhead/runs/2026-07-24T21-22-08-549Z/artifacts/
+stage outputs: emitted outputs/jlcpcb-bom.csv (JLCPCB assembly BOM)
+pipeline so far: 6/8 stages · 6s · 0 out tokens · 0% cache hits
+stage firmware: running
+copperhead v0.7.0 (/Users/jamilpc/codex/bounties/work/copperhead-20260724) · kicad-cli 9.0.9 · node v24.3.0 · darwin-arm64
+run 2026-07-24T21-22-12-413Z · create · stage firmware (7/8) · model recorded-replay (recorded-replay, via unknown) · turns ≤20 · repo main@415b818 dirty(1)
+[turn 1/20 · 0 in / 0 out]
+Recorded acceptance response.
+  [propose_change] proposal written to openspec/changes/replay-firmware/ — now call validate_change
+  [validate_change] validation passed; edit tools are now unlocked
+[turn 2/20 · 0 in / 0 out]
+Recorded acceptance response.
+  [write_file] wrote firmware/pins.h
+  [check_drift] drift: clean
+  [finish] all gates satisfied; run will commit
+committed 2a10387694 (1 file(s))
+done · ERC not run · committed 2a10387694 · 0s · 0 in / 0 out
+pipeline so far: 7/8 stages · 6s · 0 out tokens · 0% cache hits
+stage devplan: running
+copperhead v0.7.0 (/Users/jamilpc/codex/bounties/work/copperhead-20260724) · kicad-cli 9.0.9 · node v24.3.0 · darwin-arm64
+run 2026-07-24T21-22-12-687Z · create · stage devplan (8/8) · model recorded-replay (recorded-replay, via unknown) · turns ≤20 · repo main@2a10387 clean
+[turn 1/20 · 0 in / 0 out]
+Recorded acceptance response.
+  [propose_change] proposal written to openspec/changes/replay-devplan/ — now call validate_change
+  [validate_change] validation passed; edit tools are now unlocked
+[turn 2/20 · 0 in / 0 out]
+Recorded acceptance response.
+  [write_file] wrote docs/DEVPLAN.md
+  [check_drift] drift: clean
+  [finish] all gates satisfied; run will commit
+committed 0494a9cad7 (1 file(s))
+done · ERC not run · committed 0494a9cad7 · 0s · 0 in / 0 out
+pipeline so far: 8/8 stages · 6s · 0 out tokens · 0% cache hits
+ERC ✓
+DRC ✓
+drift ✓
+create pipeline complete; all checks green
+
+Per-stage cost summary (5.2):
+  Stage           Wall  Turns  Out tok  Cache
+  --------------  ----  -----  -------  -----
+  spec-seed         1s      2        0     0%
+  architecture      0s      2        0     0%
+  part-selection    0s      2        0     0%
+  schematic         1s      2        0     0%
+  layout-draft      1s      2        0     0%
+  outputs           2s      2        0     0%
+  firmware          0s      2        0     0%
+  devplan           0s      2        0     0%
+  --------------  ----  -----  -------  -----
+  TOTAL             6s     16        0     0%
+wrote run report: .copperhead/runs/REPORT.md (+ report.json)
+
+===== cache-only replay (inner provider throws on any miss) =====
+stage spec-seed: running
+copperhead v0.7.0 (/Users/jamilpc/codex/bounties/work/copperhead-20260724) · kicad-cli 9.0.9 · node v24.3.0 · darwin-arm64
+run 2026-07-24T21-22-14-248Z · create · stage spec-seed (1/8) · model recorded-replay (recorded-replay, via unknown) · turns ≤20 · repo main@529b9bb clean
+[turn 1/20 · 0 in / 0 out]
+llm-cache: replayed a cached response (hit #1, no tokens spent)
+Recorded acceptance response.
+  [propose_change] proposal written to openspec/changes/replay-spec-seed/ — now call validate_change
+  [validate_change] validation passed; edit tools are now unlocked
+[turn 2/20 · 0 in / 0 out]
+llm-cache: replayed a cached response (hit #2, no tokens spent)
+Recorded acceptance response.
+  [write_file] wrote docs/SPEC.md
+  [check_drift] no schematic configured; drift vacuously clean
+  [finish] all gates satisfied; run will commit
+committed 84e1ea268c (1 file(s))
+done · ERC not run · committed 84e1ea268c · 0s · 0 in / 0 out
+pipeline so far: 1/8 stages · 0s · 0 out tokens · 100% cache hits
+stage architecture: running
+copperhead v0.7.0 (/Users/jamilpc/codex/bounties/work/copperhead-20260724) · kicad-cli 9.0.9 · node v24.3.0 · darwin-arm64
+run 2026-07-24T21-22-14-507Z · create · stage architecture (2/8) · model recorded-replay (recorded-replay, via unknown) · turns ≤20 · repo main@84e1ea2 clean
+[turn 1/20 · 0 in / 0 out]
+llm-cache: replayed a cached response (hit #1, no tokens spent)
+Recorded acceptance response.
+  [propose_change] proposal written to openspec/changes/replay-architecture/ — now call validate_change
+  [validate_change] validation passed; edit tools are now unlocked
+[turn 2/20 · 0 in / 0 out]
+llm-cache: replayed a cached response (hit #2, no tokens spent)
+Recorded acceptance response.
+  [write_file] wrote docs/SUBSYSTEMS.md
+  [check_drift] no schematic configured; drift vacuously clean
+  [finish] all gates satisfied; run will commit
+committed a20e997d65 (1 file(s))
+done · ERC not run · committed a20e997d65 · 0s · 0 in / 0 out
+pipeline so far: 2/8 stages · 1s · 0 out tokens · 100% cache hits
+stage part-selection: running
+copperhead v0.7.0 (/Users/jamilpc/codex/bounties/work/copperhead-20260724) · kicad-cli 9.0.9 · node v24.3.0 · darwin-arm64
+run 2026-07-24T21-22-14-760Z · create · stage part-selection (3/8) · model recorded-replay (recorded-replay, via unknown) · turns ≤20 · repo main@a20e997 clean
+[turn 1/20 · 0 in / 0 out]
+llm-cache: replayed a cached response (hit #1, no tokens spent)
+Recorded acceptance response.
+  [propose_change] proposal written to openspec/changes/replay-part-selection/ — now call validate_change
+  [validate_change] validation passed; edit tools are now unlocked
+[turn 2/20 · 0 in / 0 out]
+llm-cache: replayed a cached response (hit #2, no tokens spent)
+Recorded acceptance response.
+  [write_file] wrote docs/BOM.md
+  [check_drift] no schematic configured; drift vacuously clean
+  [finish] all gates satisfied; run will commit
+committed 0a5f0bd917 (1 file(s))
+done · ERC not run · committed 0a5f0bd917 · 0s · 0 in / 0 out
+pipeline so far: 3/8 stages · 1s · 0 out tokens · 100% cache hits
+stage schematic: scaffolded empty KiCad project (replay-board.kicad_sch + board + project), wired into config
+stage schematic: running
+copperhead v0.7.0 (/Users/jamilpc/codex/bounties/work/copperhead-20260724) · kicad-cli 9.0.9 · node v24.3.0 · darwin-arm64
+run 2026-07-24T21-22-15-035Z · create · stage schematic (4/8) · model recorded-replay (recorded-replay, via unknown) · turns ≤20 · repo main@0a5f0bd dirty(4)
+[turn 1/20 · 0 in / 0 out]
+llm-cache: replayed a cached response (hit #1, no tokens spent)
+Recorded acceptance response.
+  [propose_change] proposal written to openspec/changes/replay-schematic/ — now call validate_change
+  [validate_change] validation passed; edit tools are now unlocked
+[turn 2/20 · 0 in / 0 out]
+llm-cache: replayed a cached response (hit #2, no tokens spent)
+Recorded acceptance response.
+  [read_file] (kicad_sch
+  [edit_file] edited replay-board.kicad_sch
+  [write_file] wrote docs/PINOUT.md
+  [run_erc] ERC: clean
+  [check_drift] drift: clean
+  [finish] all gates satisfied; run will commit
+committed e753d4c4a4 (2 file(s))
+done · ERC clean · committed e753d4c4a4 · 1s · 0 in / 0 out
+stage schematic: rendered 2 SVG artifact(s) into .copperhead/runs/2026-07-24T21-22-15-035Z/artifacts/
+pipeline so far: 4/8 stages · 2s · 0 out tokens · 100% cache hits
+stage layout-draft: running
+copperhead v0.7.0 (/Users/jamilpc/codex/bounties/work/copperhead-20260724) · kicad-cli 9.0.9 · node v24.3.0 · darwin-arm64
+run 2026-07-24T21-22-16-740Z · create · stage layout-draft (5/8) · model recorded-replay (recorded-replay, via unknown) · turns ≤20 · repo main@e753d4c clean
+[turn 1/20 · 0 in / 0 out]
+llm-cache: replayed a cached response (hit #1, no tokens spent)
+Recorded acceptance response.
+  [propose_change] proposal written to openspec/changes/replay-layout-draft/ — now call validate_change
+  [validate_change] validation passed; edit tools are now unlocked
+[turn 2/20 · 0 in / 0 out]
+llm-cache: replayed a cached response (hit #2, no tokens spent)
+Recorded acceptance response.
+  [read_file] (kicad_pcb
+  [edit_file] edited replay-board.kicad_pcb
+  [write_file] wrote docs/LAYOUT.md
+  [run_erc] ERC: clean
+  [run_drc] DRC: clean
+  [check_drift] drift: clean
+  [finish] all gates satisfied; run will commit
+committed 07eb55b477 (2 file(s))
+done · ERC clean · DRC clean · committed 07eb55b477 · 1s · 0 in / 0 out
+stage layout-draft: rendered 2 SVG artifact(s) into .copperhead/runs/2026-07-24T21-22-16-740Z/artifacts/
+pipeline so far: 5/8 stages · 3s · 0 out tokens · 100% cache hits
+stage outputs: running
+copperhead v0.7.0 (/Users/jamilpc/codex/bounties/work/copperhead-20260724) · kicad-cli 9.0.9 · node v24.3.0 · darwin-arm64
+run 2026-07-24T21-22-18-200Z · create · stage outputs (6/8) · model recorded-replay (recorded-replay, via unknown) · turns ≤20 · repo main@07eb55b clean
+[turn 1/20 · 0 in / 0 out]
+llm-cache: replayed a cached response (hit #1, no tokens spent)
+Recorded acceptance response.
+  [propose_change] proposal written to openspec/changes/replay-outputs/ — now call validate_change
+  [validate_change] validation passed; edit tools are now unlocked
+[turn 2/20 · 0 in / 0 out]
+llm-cache: replayed a cached response (hit #2, no tokens spent)
+Recorded acceptance response.
+  [export_outputs] produced: gerbers, drill, outline.dxf, board.step, board.svg, schematic.svg
+  [check_drift] drift: clean
+  [finish] all gates satisfied; run will commit
+committed 5a12dccb7c (1 file(s))
+done · ERC not run · committed 5a12dccb7c · 2s · 0 in / 0 out
+stage outputs: rendered 2 SVG artifact(s) into .copperhead/runs/2026-07-24T21-22-18-200Z/artifacts/
+stage outputs: emitted outputs/jlcpcb-bom.csv (JLCPCB assembly BOM)
+pipeline so far: 6/8 stages · 5s · 0 out tokens · 100% cache hits
+stage firmware: running
+copperhead v0.7.0 (/Users/jamilpc/codex/bounties/work/copperhead-20260724) · kicad-cli 9.0.9 · node v24.3.0 · darwin-arm64
+run 2026-07-24T21-22-20-535Z · create · stage firmware (7/8) · model recorded-replay (recorded-replay, via unknown) · turns ≤20 · repo main@5a12dcc dirty(1)
+[turn 1/20 · 0 in / 0 out]
+llm-cache: replayed a cached response (hit #1, no tokens spent)
+Recorded acceptance response.
+  [propose_change] proposal written to openspec/changes/replay-firmware/ — now call validate_change
+  [validate_change] validation passed; edit tools are now unlocked
+[turn 2/20 · 0 in / 0 out]
+llm-cache: replayed a cached response (hit #2, no tokens spent)
+Recorded acceptance response.
+  [write_file] wrote firmware/pins.h
+  [check_drift] drift: clean
+  [finish] all gates satisfied; run will commit
+committed 562439fde6 (1 file(s))
+done · ERC not run · committed 562439fde6 · 0s · 0 in / 0 out
+pipeline so far: 7/8 stages · 5s · 0 out tokens · 100% cache hits
+stage devplan: running
+copperhead v0.7.0 (/Users/jamilpc/codex/bounties/work/copperhead-20260724) · kicad-cli 9.0.9 · node v24.3.0 · darwin-arm64
+run 2026-07-24T21-22-20-775Z · create · stage devplan (8/8) · model recorded-replay (recorded-replay, via unknown) · turns ≤20 · repo main@562439f clean
+[turn 1/20 · 0 in / 0 out]
+llm-cache: replayed a cached response (hit #1, no tokens spent)
+Recorded acceptance response.
+  [propose_change] proposal written to openspec/changes/replay-devplan/ — now call validate_change
+  [validate_change] validation passed; edit tools are now unlocked
+[turn 2/20 · 0 in / 0 out]
+llm-cache: replayed a cached response (hit #2, no tokens spent)
+Recorded acceptance response.
+  [write_file] wrote docs/DEVPLAN.md
+  [check_drift] drift: clean
+  [finish] all gates satisfied; run will commit
+committed d12e1a6867 (1 file(s))
+done · ERC not run · committed d12e1a6867 · 0s · 0 in / 0 out
+pipeline so far: 8/8 stages · 5s · 0 out tokens · 100% cache hits
+ERC ✓
+DRC ✓
+drift ✓
+create pipeline complete; all checks green
+
+Per-stage cost summary (5.2):
+  Stage           Wall  Turns  Out tok  Cache
+  --------------  ----  -----  -------  -----
+  spec-seed         0s      2        0   100%
+  architecture      0s      2        0   100%
+  part-selection    0s      2        0   100%
+  schematic         1s      2        0   100%
+  layout-draft      1s      2        0   100%
+  outputs           2s      2        0   100%
+  firmware          0s      2        0   100%
+  devplan           0s      2        0   100%
+  --------------  ----  -----  -------  -----
+  TOTAL             5s     16        0   100%
+wrote run report: .copperhead/runs/REPORT.md (+ report.json)
+
+===== .copperhead/runs/REPORT.md =====
+# Copperhead run report
+
+Per-stage cost of the create pipeline, regenerated at the end of every run.
+Resumed stages were already complete on entry and cost nothing this run.
+
+| Stage | Wall | Turns | In | Out | Cache | Status |
+| --- | ---: | ---: | ---: | ---: | ---: | --- |
+| spec-seed | 0s | 2 | 0 | 0 | 100% | ran |
+| architecture | 0s | 2 | 0 | 0 | 100% | ran |
+| part-selection | 0s | 2 | 0 | 0 | 100% | ran |
+| schematic | 1s | 2 | 0 | 0 | 100% | ran |
+| layout-draft | 1s | 2 | 0 | 0 | 100% | ran |
+| outputs | 2s | 2 | 0 | 0 | 100% | ran |
+| firmware | 0s | 2 | 0 | 0 | 100% | ran |
+| devplan | 0s | 2 | 0 | 0 | 100% | ran |
+| **Total** | 5s | 16 | 0 | 0 | 100% |  |
+
+Slowest stage: **outputs** (2s). Most expensive: **spec-seed** (0 out tokens).
+
+ ✓ test/create-e2e.test.ts (4 tests | 3 skipped) 18015ms
+   ✓ create pipeline deterministic end-to-end replay > warms and replays all eight real stages from .copperhead/llm-cache  18014ms
+
+ Test Files  1 passed (1)
+      Tests  1 passed | 3 skipped (4)
+   Start at  23:22:02
+   Duration  18.66s (transform 210ms, setup 0ms, collect 360ms, tests 18.01s, environment 0ms, prepare 54ms)

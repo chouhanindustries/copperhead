@@ -12,7 +12,7 @@ Environment:
 - Acceptance brief: `examples/medium/esp32-soil-sensor.md`
 
 The smoke run was used to verify the toolchain and isolate the first pipeline
-blocker. The clean acceptance run uses the requested medium-complexity brief.
+blocker. The live acceptance run uses the requested medium-complexity brief.
 Run identifiers below map directly to the ignored
 `.copperhead/runs/<run-id>/transcript.jsonl` and `summary.md` artifacts.
 
@@ -119,14 +119,41 @@ Run identifiers below map directly to the ignored
 
 ## Automated regression coverage
 
-`test/create-e2e.test.ts` drives the real create orchestrator with a
-deterministic stage runner. It asserts:
+`test/create-e2e.test.ts` now runs the production `runCreate` and
+`runAgentLoop` implementations without mocking either function or any stage
+completion contract. A recorded provider supplies deterministic model turns;
+the real tool dispatcher, OpenSpec lock, KiCad load probes, ERC/DRC, drift
+gates, git commits, stage contracts, and final `copperhead check` all run.
 
-1. all eight named stages run in order and the final repository check runs;
-2. missing final-stage output returns a failed pipeline and skips the final
-   check; and
-3. an empty scaffolded schematic does not pass the schematic contract even
-   though empty-sheet ERC is clean, and no later stage runs.
+The success case first warms `.copperhead/llm-cache/`, resets its disposable
+git repository to the exact pre-run commit, and runs the same eight-stage
+pipeline again with an inner provider that throws on every call. The replay
+passes all eight stages and the final check with 16/16 turns served from the
+on-disk cache and zero inner-provider calls.
+
+The complete warm/replay console log and generated
+`.copperhead/runs/REPORT.md` are committed at
+`pipeline-run-logs/06-deterministic-8-stage-replay.log`.
+
+The negative cases prove the same production path goes red when:
+
+1. an empty scaffold reports clean ERC but has no symbols;
+2. a schematic stage repeats a non-improving ERC result until the five-cycle
+   repair budget is exhausted; and
+3. the recorded run has no final-stage response, so `DEVPLAN.md` is never
+   produced and the pipeline never reports completion.
 
 The focused repair test and the orchestrator test run in the default offline
 test suite.
+
+## Live medium-run status
+
+The medium brief progressed through stages 1–3 and exercised the real stage-4
+edit/ERC loop. The latest recovered schematic is KiCad-loadable and independently
+ERC-clean. The run did not reach stages 5–8: the saved-login Codex provider
+reached its account usage ceiling after 46 turns
+(`2026-07-24T20-54-09-269Z`; 24m39s), and Copperhead preserved the work and
+reported `session-limit` with a resumable command. A second authenticated
+provider was checked, but its organization has disabled subscription access for
+Claude Code. This report therefore does not claim a clean live medium run; the
+green eight-stage evidence above is the deterministic production-loop replay.

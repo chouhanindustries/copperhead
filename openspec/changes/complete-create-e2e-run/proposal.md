@@ -10,7 +10,7 @@ The create pipeline explicitly asks the agent to build a schematic one part at a
 - Make the drift net parser honor labels and explicit junction points placed in the middle of wire segments, and prevent `PWR_FLAG` from renaming its net.
 - Keep the existing bounded rollback after more than `maxRepairCycles` non-improving checks.
 - Add focused regression coverage for the observed live sequence, true stagnation, clean resets, and independent ERC/DRC progress.
-- Add deterministic create-orchestrator coverage for all eight stages, missing final output, and an empty schematic false green.
+- Add deterministic cache-backed production-loop coverage for all eight stages, missing final output, a wedged ERC loop, and an empty-schematic false green.
 - Provide the aggregate `npm run lint` command named by the bounty acceptance criteria.
 - Clarify the repair-budget contract in configuration documentation and the canonical specification.
 
@@ -26,6 +26,6 @@ The create pipeline explicitly asks the agent to build a schematic one part at a
 - `src/agent/tools.ts` owns the progress tracker and applies it to ERC/DRC results.
 - `src/agent/loop.ts` initializes the per-run tracker.
 - `src/kicad/sexp.ts` resolves legal mid-segment connections and distinguishes an ERC drive flag from a net-naming power symbol.
-- `test/create-e2e.test.ts` exercises the stage progression and completion gates without provider cost.
+- `test/create-e2e.test.ts` warms and replays `.copperhead/llm-cache/` through the real agent loop, tools, verification gates, commits, stage contracts, and final check without network cost.
 - `CREATE-E2E-FINDINGS.md` records evidence and recommendations from the live run.
 - Existing configuration values and rollback behavior remain compatible.
