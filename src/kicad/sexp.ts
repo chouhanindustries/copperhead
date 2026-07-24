@@ -177,6 +177,42 @@ export function pinAbsolute(
 const round = (n: number): number => Math.round(n * 10000) / 10000;
 const key = (x: number, y: number): string => `${round(x)},${round(y)}`;
 
+/**
+ * Integer coordinates in 0.1 µm units, so point-on-segment tests are exact
+ * arithmetic on integers (KiCad grid values like 1.27 mm are not exactly
+ * representable as binary floats; cross products on raw floats would need an
+ * epsilon). Schematic sheets are well under 1 m, so products stay < 2^53.
+ */
+interface IntPt {
+  x: number;
+  y: number;
+}
+const toInt = (n: number): number => Math.round(n * 10000);
+
+interface WireSegment {
+  a: IntPt;
+  b: IntPt;
+  /** UnionFind key of one endpoint; the whole wire is already one group. */
+  k: string;
+}
+
+/**
+ * True when p lies on the closed segment [a, b]: collinear (zero cross
+ * product) and within bounds (dot product between 0 and |b-a|^2). KiCad wires
+ * are straight segments, so this is the exact containment test.
+ */
+function onSegment(p: IntPt, a: IntPt, b: IntPt): boolean {
+  const abx = b.x - a.x;
+  const aby = b.y - a.y;
+  const apx = p.x - a.x;
+  const apy = p.y - a.y;
+  if (abx * apy - aby * apx !== 0) return false;
+  const len2 = abx * abx + aby * aby;
+  if (len2 === 0) return apx === 0 && apy === 0; // degenerate zero-length wire
+  const dot = apx * abx + apy * aby;
+  return dot >= 0 && dot <= len2;
+}
+
 class UnionFind {
   private parent = new Map<string, string>();
   find(k: string): string {
@@ -226,6 +262,13 @@ function symbolsOf(sheet: ParsedSheet): { node: SexpNode[]; sym: SchematicSymbol
 
 const isPowerSymbol = (libId: string): boolean => libId.startsWith('power:');
 
+/**
+ * power:PWR_FLAG is an ERC directive, not a power rail: it marks a net as
+ * intentionally powered so ERC does not flag it, and its value ("PWR_FLAG")
+ * must never be used as a net name.
+ */
+const isPwrFlag = (libId: string): boolean => libId === 'power:PWR_FLAG';
+
 /** One row per real component (power symbols excluded), across all sheets. */
 export async function listSymbols(rootSch: string): Promise<SchematicSymbol[]> {
   const sheets = await loadSheets(rootSch);
@@ -250,7 +293,8 @@ export async function listNets(rootSch: string): Promise<string[]> {
       }
     }
     for (const { sym } of symbolsOf(sheet)) {
-      if (isPowerSymbol(sym.libId)) names.add(sym.value);
+      // PWR_FLAG is an ERC directive, not a net name (see isPwrFlag).
+      if (isPowerSymbol(sym.libId) && !isPwrFlag(sym.libId)) names.add(sym.value);
     }
   }
   return [...names].sort();
@@ -277,6 +321,7 @@ export async function pinNets(rootSch: string): Promise<PinNet[]> {
     const uf = new UnionFind();
     const netNameAt = new Map<string, string>();
 
+    const segments: WireSegment[] = [];
     for (const w of children(sheet.root, 'wire')) {
       const pts = children(child(w, 'pts') ?? [], 'xy').map((xy) => ({
         x: parseFloat(atomAt(xy, 1) ?? '0'),
@@ -285,14 +330,45 @@ export async function pinNets(rootSch: string): Promise<PinNet[]> {
       for (let i = 1; i < pts.length; i++) {
         uf.union(key(pts[0]!.x, pts[0]!.y), key(pts[i]!.x, pts[i]!.y));
       }
+      for (let i = 1; i < pts.length; i++) {
+        segments.push({
+          a: { x: toInt(pts[i - 1]!.x), y: toInt(pts[i - 1]!.y) },
+          b: { x: toInt(pts[i]!.x), y: toInt(pts[i]!.y) },
+          k: key(pts[0]!.x, pts[0]!.y),
+        });
+      }
     }
+
+    // Attach a point to the connectivity graph. KiCad connects labels, pins,
+    // and junctions that touch a wire ANYWHERE along its length, not only at
+    // its endpoints, so test point-on-segment against every wire segment
+    // rather than relying on coordinate equality with an endpoint.
+    const attach = (x: number, y: number): string => {
+      const k = key(x, y);
+      uf.find(k);
+      const p: IntPt = { x: toInt(x), y: toInt(y) };
+      for (const s of segments) {
+        if (onSegment(p, s.a, s.b)) uf.union(k, s.k);
+      }
+      return k;
+    };
+
+    // Junctions explicitly join the wires that pass through or end at their
+    // position (KiCad: crossing/branching wires connect only via a junction
+    // dot). attach() unions the junction point with every wire segment it
+    // lies on, bridging those wires into one net.
+    for (const j of children(sheet.root, 'junction')) {
+      const at = child(j, 'at');
+      if (!at) continue;
+      attach(parseFloat(atomAt(at, 1) ?? '0'), parseFloat(atomAt(at, 2) ?? '0'));
+    }
+
     for (const kind of ['label', 'global_label', 'hierarchical_label']) {
       for (const l of children(sheet.root, kind)) {
         const name = atomAt(l, 1);
         const at = child(l, 'at');
         if (!name || !at) continue;
-        const k = key(parseFloat(atomAt(at, 1) ?? '0'), parseFloat(atomAt(at, 2) ?? '0'));
-        uf.find(k);
+        const k = attach(parseFloat(atomAt(at, 1) ?? '0'), parseFloat(atomAt(at, 2) ?? '0'));
         netNameAt.set(k, name);
       }
     }
@@ -302,10 +378,12 @@ export async function pinNets(rootSch: string): Promise<PinNet[]> {
       const defs = pinDefs.get(sym.libId) ?? [];
       for (const pin of defs) {
         const abs = pinAbsolute(sym.at, mirror, pin);
-        const k = key(abs.x, abs.y);
-        uf.find(k);
+        const k = attach(abs.x, abs.y);
         if (isPowerSymbol(sym.libId)) {
-          netNameAt.set(k, sym.value);
+          // Power symbols name their net via their value (power:GND -> GND),
+          // EXCEPT power:PWR_FLAG: it exists only to tell ERC a net is
+          // intentionally powered and must never contribute a net name.
+          if (!isPwrFlag(sym.libId)) netNameAt.set(k, sym.value);
         } else {
           symPins.push({ sym, pin, k });
         }
