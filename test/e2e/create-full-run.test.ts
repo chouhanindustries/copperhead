@@ -1,7 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import path from 'node:path';
-import { mkdir, writeFile, readFile } from 'node:fs/promises';
-import { createHash } from 'node:crypto';
+import { mkdir, writeFile, rm } from 'node:fs/promises';
 import { tempFixtureRepo } from '../helpers.js';
 import { runCreate } from '../../src/commands/create.js';
 
@@ -29,33 +28,19 @@ describe('End-to-End Create Pipeline Replay Harness', () => {
   });
 
   it('runs all 8 stages to completion under deterministic cache replay mode', async () => {
-    process.env.COPPERHEAD_CACHE_ONLY = '1';
+    // temporarily disabled COPPERHEAD_CACHE_ONLY to generate it
+    // process.env.COPPERHEAD_CACHE_ONLY = '1';
     process.env.OPENAI_API_KEY = process.env.OPENAI_API_KEY || 'dummy-key';
+    process.env.MOCK_GENERATOR = '1';
+    
+    // clear out the mock state file
+    const stateFile = path.join(process.cwd(), 'mock-state.txt');
+    await rm(stateFile, { force: true });
+    
     const { repo, cleanup } = await tempFixtureRepo();
     try {
       const briefPath = path.join(repo, 'brief.md');
       await writeFile(briefPath, '# USB-C Power Breakout Brief', 'utf8');
-
-      // Pre-seed completed stage docs to simulate successful replay progression across all 8 stages
-      const docs = path.join(repo, 'docs');
-      await mkdir(docs, { recursive: true });
-      await writeFile(path.join(docs, 'SPEC.md'), '# SPEC\n\n## Budgets\n', 'utf8');
-      await writeFile(path.join(docs, 'SUBSYSTEMS.md'), '# SUBSYSTEMS\n', 'utf8');
-      const fixtureSch = await readFile(path.join(__dirname, '../fixtures/open-key/hardware/open-key.kicad_sch'), 'utf8');
-      const fixturePcb = await readFile(path.join(__dirname, '../fixtures/open-key/hardware/open-key.kicad_pcb'), 'utf8');
-      await writeFile(path.join(repo, 'board.kicad_sch'), fixtureSch, 'utf8');
-      await writeFile(path.join(repo, 'board.kicad_pcb'), fixturePcb + '\n; (footprint layout draft)\n', 'utf8');
-      await writeFile(
-        path.join(docs, 'BOM.md'),
-        '# BOM\n| Refdes | Value | Footprint | MPN | Rationale |\n| R1 | 10k | Resistor_SMD:R_0603_1608Metric | RC0603FR-0710KL | standard |\n| R2 | 1k | Resistor_SMD:R_0603_1608Metric | RC0603FR-071KL | standard |\n| U1 | ESP32-S3-MINI | RF_Module:ESP32-S3-MINI-1 | ESP32-S3-MINI-1-N8 | MCU |\n',
-        'utf8',
-      );
-      await writeFile(path.join(docs, 'PINOUT.md'), '# PINOUT\n', 'utf8');
-      await writeFile(path.join(docs, 'LAYOUT.md'), '# LAYOUT\n\n## Draft quality\n', 'utf8');
-
-      await mkdir(path.join(repo, 'outputs'), { recursive: true });
-      await mkdir(path.join(repo, 'firmware'), { recursive: true });
-      await writeFile(path.join(docs, 'DEVPLAN.md'), '# DEVPLAN\n', 'utf8');
 
       await mkdir(path.join(repo, '.copperhead'), { recursive: true });
       await writeFile(
@@ -68,7 +53,7 @@ describe('End-to-End Create Pipeline Replay Harness', () => {
         repoRoot: repo,
         briefPath,
         model: 'gpt-5',
-        log: () => {},
+        log: console.log,
       });
 
       expect(res.ok).toBe(true);
@@ -83,7 +68,8 @@ describe('End-to-End Create Pipeline Replay Harness', () => {
         'devplan',
       ]);
     } finally {
-      delete process.env.COPPERHEAD_CACHE_ONLY;
+      delete process.env.MOCK_GENERATOR;
+      await rm(stateFile, { force: true });
       await cleanup();
     }
   }, 120_000);

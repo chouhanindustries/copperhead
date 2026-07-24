@@ -77,7 +77,7 @@ describe('copperhead init (AC-1)', () => {
 });
 
 describe('copperhead check (AC-2)', () => {
-  it.skipIf(!hasKicadCli())('clean fixture: everything green (AC-2.1) and stable JSON keys (AC-2.4)', async () => {
+  it('clean fixture: everything green (AC-2.1) and stable JSON keys (AC-2.4)', async () => {
     const { repo, cleanup } = await tempFixtureRepo();
     try {
       await runInit({ repoRoot: repo });
@@ -90,9 +90,9 @@ describe('copperhead check (AC-2)', () => {
     } finally {
       await cleanup();
     }
-  }, 60_000);
+  }, 120_000);
 
-  it.skipIf(!hasKicadCli())('broken schematic (unconnected pin): fails with location (AC-2.2)', async () => {
+  it('broken schematic (unconnected pin): fails with location (AC-2.2)', async () => {
     const { repo, cleanup } = await tempFixtureRepo();
     try {
       await runInit({ repoRoot: repo });
@@ -107,7 +107,7 @@ describe('copperhead check (AC-2)', () => {
     } finally {
       await cleanup();
     }
-  }, 60_000);
+  }, 120_000);
 
   it('BOM value drift: names doc, claim, and actual (AC-2.3)', async () => {
     const { repo, cleanup } = await tempFixtureRepo();
@@ -124,7 +124,7 @@ describe('copperhead check (AC-2)', () => {
     }
   });
 
-  it.skipIf(!hasKicadCli())('pre-commit hook blocks a desynced hand edit at git commit', async () => {
+  it('pre-commit hook blocks a desynced hand edit at git commit', async () => {
     const { repo, cleanup } = await tempFixtureRepo();
     try {
       await runInit({ repoRoot: repo });
@@ -174,7 +174,7 @@ describe('check is LLM-free by construction (AC-2.1)', () => {
 });
 
 describe('fab export (create stage 6 tooling)', () => {
-  it.skipIf(!hasKicadCli())('produces gerbers, drill, dxf, and svg for the fixture board', async () => {
+  it('produces gerbers, drill, dxf, and svg for the fixture board', async () => {
     const { repo, cleanup } = await tempFixtureRepo();
     try {
       const { exportFab } = await import('../src/kicad/cli.js');

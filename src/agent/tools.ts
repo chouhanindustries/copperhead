@@ -39,8 +39,8 @@ export interface RunContext {
   repairCycles: number;
   ercRepairCycles: number;
   drcRepairCycles: number;
-  lastErcViolations: number;
-  lastDrcViolations: number;
+  minErcViolations: number;
+  minDrcViolations: number;
   finishRequest: FinishRequest | null;
 }
 
@@ -53,7 +53,8 @@ export interface ToolDef {
 
 const str = (args: Record<string, unknown>, key: string): string => {
   const v = args[key];
-  return typeof v === 'string' ? v : '';
+  if (typeof v !== 'string' || v === '') throw new Error(`missing required string arg "${key}"`);
+  return v;
 };
 
 // U+FFFD (the Unicode replacement character) is what a byte sequence becomes
@@ -317,16 +318,16 @@ export const TOOLS: ToolDef[] = [
       if (report.ok) {
         ctx.ledger.clear('erc');
         ctx.ercRepairCycles = 0;
-        ctx.lastErcViolations = 0;
+        ctx.minErcViolations = 0;
       } else {
         const count = report.violations.length;
-        const prev = ctx.lastErcViolations ?? Infinity;
-        if (count < prev) {
+        const min = ctx.minErcViolations ?? Infinity;
+        if (count < min) {
           ctx.ercRepairCycles = 0;
+          ctx.minErcViolations = count;
         } else {
           ctx.ercRepairCycles = (ctx.ercRepairCycles ?? 0) + 1;
         }
-        ctx.lastErcViolations = count;
       }
       ctx.repairCycles = Math.max(ctx.ercRepairCycles ?? 0, ctx.drcRepairCycles ?? 0);
       const out = formatViolations(report);
@@ -378,16 +379,16 @@ export const TOOLS: ToolDef[] = [
       if (report.ok) {
         ctx.ledger.clear('drc');
         ctx.drcRepairCycles = 0;
-        ctx.lastDrcViolations = 0;
+        ctx.minDrcViolations = 0;
       } else {
         const count = report.violations.length;
-        const prev = ctx.lastDrcViolations ?? Infinity;
-        if (count < prev) {
+        const min = ctx.minDrcViolations ?? Infinity;
+        if (count < min) {
           ctx.drcRepairCycles = 0;
+          ctx.minDrcViolations = count;
         } else {
           ctx.drcRepairCycles = (ctx.drcRepairCycles ?? 0) + 1;
         }
-        ctx.lastDrcViolations = count;
       }
       ctx.repairCycles = Math.max(ctx.ercRepairCycles ?? 0, ctx.drcRepairCycles ?? 0);
       return formatViolations(report);
@@ -450,9 +451,9 @@ export const TOOLS: ToolDef[] = [
       // (spec-seed, architecture, part-selection all run before the schematic
       // exists): a doc edit opens the drift obligation, this is the only tool
       // that clears it, and finish refuses while any obligation is open.
-      if (!ctx.config.schematic) {
+      if (!ctx.config.schematic || !existsSync(path.join(ctx.repoRoot, ctx.config.schematic))) {
         ctx.ledger.clear('drift');
-        return 'no schematic configured; drift vacuously clean';
+        return 'no schematic exists yet; drift vacuously clean';
       }
       const mismatches = await checkDrift(ctx.repoRoot, ctx.config.docs, ctx.config.schematic);
       if (!mismatches.length) {

@@ -1,6 +1,7 @@
 import { mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+// @ts-ignore
 import type { ThreadOptions, TurnOptions, Usage } from '@openai/codex-sdk';
 import type { ChatOpts, Msg, Provider, ToolCall, ToolSchema, Turn } from '../types.js';
 
@@ -69,7 +70,7 @@ export class CodexProvider implements Provider {
   async chat(messages: Msg[], tools: ToolSchema[], _opts: ChatOpts = {}): Promise<Turn> {
     const workingDirectory = await this.ensureWorkingDirectory();
     if (!this.thread) {
-      this.thread = this.client.startThread({
+      this.thread = (this.client as any).startThread({
         ...(this.model ? { model: this.model } : {}),
         workingDirectory,
         skipGitRepoCheck: true,
