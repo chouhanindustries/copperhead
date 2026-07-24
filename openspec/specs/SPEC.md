@@ -344,7 +344,7 @@ interface Provider {
 - `maxTurns` default 40; `maxRepairCycles` 5; per-run token budget logged
 - On turn-budget exhaustion in an attended (TTY) run: print run stats (turns, files touched, open obligations, token usage) and ask whether to continue with more turns; declining, or a non-TTY run, fails as below. The extension can repeat; each is a fresh decision with fresh numbers.
 - On any unrecoverable failure: preserve the touched work as a git stash entry named `copperhead failed run <run-id>`, restore the snapshot, print the stash ref and transcript path, exit 1
-- Rate-limit (429): exponential backoff ×3, then fail over to the other provider if a key exists
+- Rate-limit (429): exponential backoff ×3, then fail over to the other **keyed** provider (`openai` ↔ `anthropic`) if a key exists; saved-login providers (`codex`, `claude-code`, `cursor`) never fail over to a keyed or alternate provider
 - The Anthropic provider marks `cache_control` breakpoints (system prompt, last tool, last message block) so the resent conversation prefix is cached; reported input tokens include cache reads/writes
 
 ---

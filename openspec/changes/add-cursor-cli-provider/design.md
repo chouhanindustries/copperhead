@@ -2,7 +2,7 @@
 
 ## Context
 
-Spike (2026-07-24): `agent` and `cursor-agent` on PATH; `agent status` succeeds with saved login; `--print --output-format json --mode plan --trust --workspace <tmpdir>` returns a single JSON result with `result`, `session_id`, and `usage.inputTokens` / `outputTokens`; `--resume <session_id>` continues multi-turn without re-sending history.
+Spike (2026-07-24): `agent` and `cursor-agent` on PATH; `agent status` succeeds with saved login; `--print --output-format json --mode plan --trust --workspace <tmpdir>` returns a single JSON result with `result` and `session_id` (official JSON schema does not expose token usage); `--resume <session_id>` continues multi-turn without re-sending history.
 
 Cursor Agent is a full coding agent (like Claude Code), not a sandboxed SDK (like Codex). Enforcement follows **claude-code** (reasoning-only + tripwire), not Codex native `outputSchema`.
 
@@ -25,7 +25,7 @@ System + tool protocol prepended to the user prompt (CLI has no separate system 
 
 ### D2 — Authentication external; strip billed keys
 
-No `CURSOR_API_KEY` in Phase 1. Subprocess env spreads `process.env` with `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, and `CURSOR_API_KEY` set to `undefined` so saved login is not replaced by a paid key.
+No `CURSOR_API_KEY` in Phase 1. Subprocess env is an explicit allowlist (`PATH`, `HOME`, locale/temp/XDG vars, etc.) — not a spread of `process.env` — so unrelated credentials never reach the CLI and billed keys (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `CURSOR_API_KEY`) are never passed.
 
 ### D3 — No SDK dependency
 
@@ -48,5 +48,5 @@ Constructor `(model?: string, runFn?: CursorRunLike)` for offline tests.
 Default binary: `COPPERHEAD_CURSOR_PATH` or `agent`. Result shape:
 
 ```json
-{"type":"result","result":"...","session_id":"...","usage":{"inputTokens":0,"outputTokens":0}}
+{"type":"result","result":"...","session_id":"..."}
 ```

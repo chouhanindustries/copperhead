@@ -91,20 +91,25 @@ describe('CursorProvider — tool protocol', () => {
 });
 
 describe('CursorProvider — env and lifecycle', () => {
-  it('subprocessEnv strips billed API keys', () => {
+  it('subprocessEnv allowlists CLI vars and omits billed or unrelated secrets', () => {
     const prev = { ...process.env };
     process.env.ANTHROPIC_API_KEY = 'sk-test';
     process.env.OPENAI_API_KEY = 'sk-test';
     process.env.CURSOR_API_KEY = 'key';
+    process.env.AWS_SECRET_ACCESS_KEY = 'secret';
     try {
       const env = subprocessEnv();
       expect(env.ANTHROPIC_API_KEY).toBeUndefined();
       expect(env.OPENAI_API_KEY).toBeUndefined();
       expect(env.CURSOR_API_KEY).toBeUndefined();
+      expect(env.AWS_SECRET_ACCESS_KEY).toBeUndefined();
+      expect(env.PATH).toBe(process.env.PATH);
+      expect(env.HOME).toBe(process.env.HOME);
     } finally {
       process.env.ANTHROPIC_API_KEY = prev.ANTHROPIC_API_KEY;
       process.env.OPENAI_API_KEY = prev.OPENAI_API_KEY;
       process.env.CURSOR_API_KEY = prev.CURSOR_API_KEY;
+      delete process.env.AWS_SECRET_ACCESS_KEY;
     }
   });
 
@@ -117,11 +122,16 @@ describe('CursorProvider — env and lifecycle', () => {
       type: 'result',
       result: 'hello',
       session_id: 'abc',
-      usage: { inputTokens: 3, outputTokens: 4 },
     });
     const parsed = parseCursorStdout(stdout);
     expect(parsed.text).toBe('hello');
     expect(parsed.sessionId).toBe('abc');
-    expect(parsed.usage.outputTokens).toBe(4);
+    expect(parsed.usage).toEqual({ inputTokens: 0, outputTokens: 0 });
+  });
+
+  it('surfaces CLI-not-found guidance when agent binary is missing', async () => {
+    const missing = Object.assign(new Error('spawn agent ENOENT'), { code: 'ENOENT' });
+    const provider = new CursorProvider(undefined, async () => Promise.reject(missing));
+    await expect(provider.chat(messages, tools)).rejects.toThrow(/Cursor Agent CLI not found/);
   });
 });

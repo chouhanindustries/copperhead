@@ -130,14 +130,42 @@ export class CursorProvider implements Provider {
   }
 }
 
+/** Minimal env passed to the Cursor CLI subprocess (saved login via `agent login`). */
+const CURSOR_SUBPROCESS_ENV_KEYS = [
+  'PATH',
+  'HOME',
+  'USER',
+  'LOGNAME',
+  'SHELL',
+  'TMPDIR',
+  'TEMP',
+  'TMP',
+  'LANG',
+  'LC_ALL',
+  'LC_CTYPE',
+  'LC_MESSAGES',
+  'TERM',
+  'XDG_CONFIG_HOME',
+  'XDG_DATA_HOME',
+  'XDG_CACHE_HOME',
+  'XDG_RUNTIME_DIR',
+  'SystemRoot',
+  'ComSpec',
+  'APPDATA',
+  'LOCALAPPDATA',
+] as const;
+
+/** Build an allowlisted env for the Cursor Agent subprocess (no API keys or unrelated secrets). */
 export function subprocessEnv(): NodeJS.ProcessEnv {
-  const env = { ...process.env };
-  delete env.ANTHROPIC_API_KEY;
-  delete env.OPENAI_API_KEY;
-  delete env.CURSOR_API_KEY;
+  const env: NodeJS.ProcessEnv = {};
+  for (const key of CURSOR_SUBPROCESS_ENV_KEYS) {
+    const value = process.env[key];
+    if (value !== undefined) env[key] = value;
+  }
   return env;
 }
 
+/** Parse `--print --output-format json` stdout into assistant text and session id. */
 export function parseCursorStdout(stdout: string): CursorRunResult {
   const lines = stdout
     .split('\n')
@@ -145,8 +173,6 @@ export function parseCursorStdout(stdout: string): CursorRunResult {
     .filter(Boolean);
   let text = '';
   let sessionId: string | undefined;
-  let inputTokens = 0;
-  let outputTokens = 0;
 
   for (const line of lines) {
     let obj: Record<string, unknown>;
@@ -160,9 +186,6 @@ export function parseCursorStdout(stdout: string): CursorRunResult {
     if (type === 'result') {
       if (typeof obj.result === 'string') text = obj.result;
       if (typeof obj.session_id === 'string') sessionId = obj.session_id;
-      const usage = obj.usage as Record<string, unknown> | undefined;
-      if (usage && typeof usage.inputTokens === 'number') inputTokens = usage.inputTokens;
-      if (usage && typeof usage.outputTokens === 'number') outputTokens = usage.outputTokens;
       if (obj.is_error === true) {
         throw new Error(typeof obj.result === 'string' ? obj.result : 'Cursor Agent returned an error result');
       }
@@ -185,7 +208,7 @@ export function parseCursorStdout(stdout: string): CursorRunResult {
     }
   }
 
-  return { text, sessionId, usage: { inputTokens, outputTokens } };
+  return { text, sessionId, usage: { inputTokens: 0, outputTokens: 0 } };
 }
 
 function assertNoNativeMutation(obj: Record<string, unknown>): void {
@@ -203,6 +226,7 @@ function assertNoNativeMutation(obj: Record<string, unknown>): void {
   }
 }
 
+/** Default subprocess runner: invokes `agent` (or `COPPERHEAD_CURSOR_PATH`) in plan mode. */
 export async function defaultCursorRun(args: CursorRunArgs): Promise<CursorRunResult> {
   const bin = process.env.COPPERHEAD_CURSOR_PATH || 'agent';
   const fullPrompt = [args.systemPrompt, args.prompt].filter(Boolean).join('\n\n---\n\n');
@@ -232,8 +256,6 @@ export async function defaultCursorRun(args: CursorRunArgs): Promise<CursorRunRe
 }
 
 function isAuthError(err: unknown): boolean {
-  const code = (err as { code?: string }).code;
-  if (code === 'ENOENT') return true;
   const status = (err as { status?: number; exitCode?: number })?.status
     ?? (err as { exitCode?: number })?.exitCode;
   if (typeof status === 'number') return status === 401 || status === 403;

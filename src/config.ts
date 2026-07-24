@@ -143,6 +143,6 @@ export function resolveModel(flag: string | undefined, config: CopperheadConfig,
   if (env.OPENAI_API_KEY) return { model: 'gpt-5', source: 'openai-key' };
   if (env.ANTHROPIC_API_KEY) return { model: 'claude', source: 'anthropic-key' };
   throw new Error(
-    'no model configured: pass --model codex or --model cursor (saved CLI login), set COPPERHEAD_MODEL, set model in .copperhead/config.json, or provide OPENAI_API_KEY/ANTHROPIC_API_KEY',
+    'no model configured: pass --model codex, --model claude-code, or --model cursor (saved CLI login), set COPPERHEAD_MODEL, set model in .copperhead/config.json, or provide OPENAI_API_KEY/ANTHROPIC_API_KEY',
   );
 }
