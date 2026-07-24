@@ -23,6 +23,21 @@ export function formatPreflightFailure(reason: string, why: string, remedy: stri
   return [reason, '', `why it failed: ${why}`, 'to fix:', ...steps].join('\n');
 }
 
+export function isNotFoundError(err: any): boolean {
+  if (!err) return false;
+  if (err.code === 'ENOENT') return true;
+  if (process.platform === 'win32') {
+    const msg = String(err.stderr || err.message || '');
+    if (err.exitCode === 1 || err.exitCode === 9009) {
+      return (
+        msg.includes('is not recognized') ||
+        msg.includes('cannot find the path specified')
+      );
+    }
+  }
+  return false;
+}
+
 /** Default minimum free space to start a run: 2 GiB. A create run emits gerbers,
  *  STEP, SVG renders and KiCad local history; 2 GiB is comfortably above a
  *  single board's output while still catching a nearly-full disk. */

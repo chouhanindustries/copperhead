@@ -1,10 +1,11 @@
 import { describe, it, expect } from 'vitest';
-import { readFile, writeFile, appendFile } from 'node:fs/promises';
+import { readFile, writeFile, appendFile, readdir, lstat } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import path from 'node:path';
 import { execa } from 'execa';
 import { runAgentLoop } from '../src/agent/loop.js';
 import { runInit } from '../src/memory/scaffold.js';
+import { toolSearch } from '../src/agent/filetools.js';
 import { saveConstraint } from '../src/memory/constraints.js';
 import { tempFixtureRepo } from './helpers.js';
 
@@ -154,12 +155,36 @@ for (const { model, key } of providers) {
   });
 }
 
+async function scanTreeForSecret(dir: string, pattern: RegExp, root = dir): Promise<string[]> {
+  const matches: string[] = [];
+  const skip = new Set(['.git', 'node_modules', 'dist']);
+  async function walk(current: string): Promise<void> {
+    for (const entry of await readdir(current)) {
+      if (skip.has(entry)) continue;
+      const abs = path.join(current, entry);
+      const rel = path.relative(root, abs);
+      const st = await lstat(abs);
+      if (st.isSymbolicLink()) continue;
+      if (st.isDirectory()) {
+        await walk(abs);
+      } else {
+        const text = await readFile(abs, 'utf8');
+        if (pattern.test(text)) {
+          matches.push(rel);
+        }
+      }
+    }
+  }
+  await walk(dir);
+  return matches;
+}
+
 describe.skipIf(!providers.some((p) => p.key))('safety net', () => {
   it('AC-4.1: no API key material anywhere in the tree after runs', async () => {
     const { repo, cleanup } = await tempFixtureRepo();
     try {
-      const { stdout } = await execa('grep', ['-rE', 'sk-[A-Za-z0-9_-]{20,}', repo], { reject: false });
-      expect(stdout).toBe('');
+      const matches = await scanTreeForSecret(repo, /sk-[A-Za-z0-9_-]{20,}/);
+      expect(matches).toEqual([]);
     } finally {
       await cleanup();
     }
