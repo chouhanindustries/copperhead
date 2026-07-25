@@ -155,3 +155,26 @@ The run is currently in stage 4 (schematic, run `2026-07-24T10-05-50-017Z`). Slo
 - **Symptom:** the scaffold writes a fixed placeholder outline (observed 30 x 20 mm) while the brief and the constraint registry require 100 x 25 mm. Stage 5 therefore inherits a board that violates a recorded constraint before any work happens, and listed it among its blockers ("Outline 30x20 mm violates board.outline_mm (100x25 mm)").
 - **Suggested (P2):** read `board.outline_mm` from the constraint registry at bootstrap and scaffold that rectangle, or emit no outline at all and require the layout stage to draw it, so a wrong outline can never be inherited silently. Interim mitigation in this PR: the stage 5 prompt now instructs the model to correct the placeholder before placing parts.
 - **Status:** open (prompt mitigation only).
+
+## F-13 DEFECT: a session/usage limit spends a doomed diagnosis call and is then reported as "abort", losing the schedulable-pause classification
+
+- **Where:** the create stage failure path (`src/commands/create.ts` diagnosis step) vs the session-limit detection already implemented in `src/util/retry.ts` and surfaced by `src/agent/loop.ts`.
+- **Symptom:** the loop correctly identified the limit and printed the right guidance:
+
+  ```text
+  run failed: claude-code session/usage limit reached - this is a schedulable pause,
+  not a bug. Wait for the reset, then re-run the same command.
+  session-limit - ERC not run - 3s - 0 in / 0 out
+  ```
+
+  The stage runner then treated it as a generic failure and asked the model to diagnose, which needs the same exhausted provider, so the diagnosis call failed too and the outcome was reported as an abort:
+
+  ```text
+  stage layout-draft: the run ended as "failure" (session-limit); asking the model whether to retry...
+  stage layout-draft: diagnosis -> abort - diagnosis call failed: Claude Code returned an error result:
+  You've hit your monthly spend limit.
+  ```
+
+  The operator-facing verdict ("recovery supervisor recommends stopping for a human") is strictly worse than what the loop already knew: this is a pause, and the resume line printed below it is the whole remedy.
+- **Suggested (P1):** short-circuit the diagnosis step when the run's failure kind is `session-limit`: skip the provider call, keep the loop's pause wording, and exit with the resume command (optionally the reset time when the provider reported one). One conditional in the stage failure path, no new machinery.
+- **Status:** open. Reproduced on the layout-draft stage; the stage's own work was untouched because nothing had run.
