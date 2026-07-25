@@ -334,7 +334,7 @@ interface Provider {
 - `openai.ts`: GPT-5 via chat completions + tool calling (hackathon shared key)
 - `anthropic.ts`: Claude via messages API + tool use
 - `codex.ts`: locally installed Codex CLI via the official SDK and saved `codex login` authentication; Codex runs read-only and returns structured Copperhead tool requests
-- `claude-code.ts`: saved-login Claude Code via the Claude Agent SDK: a reasoning-only backend (no SDK tools, built-ins disabled, isolated cwd) mapped onto the single-turn `Provider` seam so the loop stays the driver. Selected by `--model claude-code` / `claude-code:<id>` (routed ahead of the `claude*` prefix); needs no `ANTHROPIC_API_KEY` (uses `CLAUDE_CODE_OAUTH_TOKEN` / the logged-in CLI); never falls back to a keyed provider. `@anthropic-ai/claude-agent-sdk` ships as an `optionalDependency` (its `@anthropic-ai/sdk >=0.93.0` peer is satisfied by copperhead's bumped core SDK), lazily imported and only loaded when `claude-code` is selected.
+- `claude-code.ts`: saved-login Claude Code via the Claude Agent SDK: a reasoning-only backend (no SDK tools, built-ins disabled, isolated cwd) mapped onto the single-turn `Provider` seam so the loop stays the driver. User/project/local filesystem settings and CLAUDE.md, skills, plugins, ambient MCP servers, auto-memory, permission prompts, and default session persistence are explicitly disabled so ambient user-controlled configuration cannot expand that surface; managed policy remains authoritative, and the opt-in session-resume mode is the only path that enables SDK session persistence. Selected by `--model claude-code` / `claude-code:<id>` (routed ahead of the `claude*` prefix); needs no `ANTHROPIC_API_KEY` (uses `CLAUDE_CODE_OAUTH_TOKEN` / the logged-in CLI); strips billed API/cloud auth routing from the SDK subprocess and never falls back to a keyed provider. `@anthropic-ai/claude-agent-sdk` ships as an `optionalDependency` (its `@anthropic-ai/sdk >=0.93.0` peer is satisfied by copperhead's bumped core SDK), lazily imported and only loaded when `claude-code` is selected.
 - Selection: `--model` flag > `COPPERHEAD_MODEL` env > config.json > default (whichever key is present)
 - All providers must pass the same integration test on the fixture repo
 
@@ -385,6 +385,7 @@ Acceptance: type "add a second RGB LED on an RTC-capable pin" → watch schemati
 - `.env` in `.gitignore` from first commit; keys only via env vars — never written to any file, transcript, or commit
 - Transcripts in `.copperhead/runs/` redact anything matching `sk-[A-Za-z0-9_-]+`
 - The Codex CLI's native read access and `~/.codex/sessions/` logs are outside Copperhead's enforcement/redaction boundary; the Codex path documents this host-local exposure explicitly
+- The Claude Code provider starts from the SDK's isolation mode (`settingSources: []`, strict empty MCP config, no skills/plugins, auto-memory off), disables its tools and permission prompts, and does not persist a second SDK transcript by default. It retains only saved-login authentication and clears API/cloud-routing environment variables before starting the subprocess.
 - The agent never invents MPNs: any new part must come with a datasheet-verifiable justification in BOM.md, flagged `UNVERIFIED` for human review
 
 ## 8. Phase 3 — Integrations (post-hackathon roadmap; document, don't build)
@@ -428,7 +429,7 @@ Format: Given / When / Then. "Fixture" = the open-telegraph repo (or the tiny te
 - **AC-3.8 (dirty tree)** With uncommitted changes and no `--allow-dirty`: refuses to start.
 - **AC-3.9 (dry run)** `--dry-run` prints the proposed diff and writes nothing.
 - **AC-3.10 (provider parity)** AC-3.1 passes with `--model codex`, `--model gpt-5`, `--model claude`, and `--model claude-code` when each provider is configured.
-- **AC-3.11 (saved login)** With `--model claude-code`, a logged-in Claude Code (`CLAUDE_CODE_OAUTH_TOKEN` set) and **no** `ANTHROPIC_API_KEY`/`OPENAI_API_KEY`, a `do` run completes through the normal verify/commit path; copperhead reads no credential store; and no key material appears in the transcript, summary, or tree (AC-4.1 holds). A missing optional dependency or an unauthenticated install fails through the rollback path with an actionable error, not a raw stack trace.
+- **AC-3.11 (saved login)** With `--model claude-code`, a logged-in Claude Code (`CLAUDE_CODE_OAUTH_TOKEN` set) and **no** direct/cloud API routing, a `do` run completes through the normal verify/commit path; copperhead reads no credential store; ambient user-controlled CLAUDE.md/settings, skills, plugins, MCP servers, and auto-memory cannot expand the run; the normal mode writes no second SDK transcript (the explicit session-resume opt-in may persist its SDK session); and no key material appears in the transcript, summary, or tree (AC-4.1 holds). A missing optional dependency or an unauthenticated install fails through the rollback path with an actionable error, not a raw stack trace.
 
 ### AC-4 · Safety
 

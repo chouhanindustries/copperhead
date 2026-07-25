@@ -23,16 +23,15 @@ import type { ChatOpts, Msg, Provider, ToolCall, ToolSchema, Turn } from '../typ
  * exactly the tools `availableTools(ctx)` returned for the turn.
  *
  * Auth stays external (D2): the constructor performs no API-key check and the
- * provider never reads, copies, or logs the credential — the SDK resolves
+ * provider never inspects or logs the credential value — the SDK resolves
  * CLAUDE_CODE_OAUTH_TOKEN / the logged-in CLI itself.
  */
 
 /** Structural subset of the Agent SDK's `query` surface we depend on. Declared
  * locally rather than `import type`d from the SDK on purpose: the SDK is an
- * undeclared optional dependency (design D3), so importing its types would force
- * it to be installed for `tsc` to pass — the exact coupling `codex.ts` now has.
- * Naming the options here still compile-checks our option keys (e.g. `tools`),
- * which is the safety the review asked for without the packaging cost. */
+ * optional dependency (design D3), so importing its types would make `tsc`
+ * fail after a legitimate `npm install --omit=optional`. Keep this subset
+ * aligned with the pinned SDK's exported `Options` type. */
 export type DenyResult = { behavior: 'deny'; message: string; interrupt?: boolean };
 export type AllowResult = { behavior: 'allow'; updatedInput?: Record<string, unknown> };
 export type CanUseToolLike = (
@@ -48,9 +47,21 @@ export interface QueryOptions {
   disallowedTools?: string[];
   /** Called before any tool executes; we deny everything (reasoning-only). */
   canUseTool?: CanUseToolLike;
+  /** `dontAsk` denies anything that reaches the permission layer. */
+  permissionMode?: 'dontAsk';
   cwd?: string;
   env?: Record<string, string | undefined>;
   maxTurns?: number;
+  /** Empty means no user/project/local settings or CLAUDE.md are loaded. */
+  settingSources?: Array<'user' | 'project' | 'local'>;
+  /** Only MCP servers passed in `mcpServers` may be loaded. */
+  strictMcpConfig?: boolean;
+  mcpServers?: Record<string, unknown>;
+  plugins?: Array<{ type: 'local'; path: string }>;
+  skills?: string[] | 'all';
+  settings?: { autoMemoryEnabled?: boolean };
+  /** Disabled by default; session-resume mode explicitly opts back in. */
+  persistSession?: boolean;
   /** Aborting this controller stops the query and tears down the `claude`
    * subprocess it spawned (Agent SDK `Options.abortController`). Used so the
    * watchdog's `close()` on a hung turn kills the process instead of orphaning
@@ -99,6 +110,23 @@ const DISALLOWED_BUILTINS = [
   'Task',
   'TodoWrite',
 ];
+
+/** Variables that can route the Claude CLI to a separately billed API/cloud
+ * backend instead of the saved Claude subscription login promised by
+ * `--model claude-code`. Keep `CLAUDE_CODE_OAUTH_TOKEN` intact. */
+const BILLED_AUTH_ENV = [
+  'ANTHROPIC_API_KEY',
+  'OPENAI_API_KEY',
+  'ANTHROPIC_AUTH_TOKEN',
+  'ANTHROPIC_BASE_URL',
+  'CLAUDE_CODE_USE_BEDROCK',
+  'CLAUDE_CODE_USE_VERTEX',
+  'CLAUDE_CODE_USE_FOUNDRY',
+  'CLAUDE_CODE_USE_MANTLE',
+  'CLAUDE_CODE_USE_ANTHROPIC_AWS',
+  'AWS_BEARER_TOKEN_BEDROCK',
+  'ANTHROPIC_FOUNDRY_API_KEY',
+] as const;
 
 export class ClaudeCodeProvider implements Provider {
   readonly name = 'claude-code';
@@ -165,15 +193,30 @@ export class ClaudeCodeProvider implements Provider {
           // Layered "the SDK executes nothing" defense (D1/D5):
           //  1. `tools: []` disables ALL built-in tools (Agent SDK 0.3.x docs:
           //     "[] (empty array) - Disable all built-in tools").
-          //  2. `disallowedTools` denies by name, with a wildcard, as a backstop.
-          //  3. `canUseTool` denies every tool BEFORE it runs — the permission
+          //  2. Filesystem settings, CLAUDE.md, skills, plugins, auto-memory,
+          //     and ambient MCP servers are disabled explicitly. The SDK's
+          //     current default is to load all filesystem setting sources.
+          //  3. `dontAsk` denies permission prompts and `disallowedTools`
+          //     removes every tool definition as a backstop.
+          //  4. `canUseTool` denies every tool BEFORE it runs — the permission
           //     analog to Codex's read-only sandbox — so even an unrecognized
           //     future tool cannot execute.
-          //  4. The tool_use tripwire below fails the run loudly if one is
+          //  5. The tool_use tripwire below fails the run loudly if one is
           //     emitted anyway. Any single layer failing is caught by the next.
           tools: [],
+          settingSources: [],
+          strictMcpConfig: true,
+          mcpServers: {},
+          plugins: [],
+          skills: [],
+          settings: { autoMemoryEnabled: false },
+          // The normal one-query-per-turn path must not leave a second,
+          // unredacted transcript under ~/.claude. The opt-in resume mode needs
+          // SDK persistence to reconstruct its prior session, so it opts in.
+          persistSession: this.sessionResume,
           ...(resume ? { resume } : {}),
           disallowedTools: DISALLOWED_BUILTINS,
+          permissionMode: 'dontAsk',
           canUseTool: async (toolName) => ({
             behavior: 'deny',
             message: `copperhead claude-code is reasoning-only; the SDK must not execute tools (blocked ${toolName}).`,
@@ -181,10 +224,10 @@ export class ClaudeCodeProvider implements Provider {
           }),
           cwd,
           // The SDK's `env` REPLACES the subprocess environment entirely, so
-          // inherit process.env and strip the billed API keys: a claude-code run
-          // must use the saved login and never silently a paid ANTHROPIC_API_KEY
-          // / OPENAI_API_KEY, even when one is also set (D2).
-          env: { ...process.env, ANTHROPIC_API_KEY: undefined, OPENAI_API_KEY: undefined },
+          // inherit the ordinary host environment but strip every auth/routing
+          // variable that can select a separately billed API or cloud backend.
+          // `CLAUDE_CODE_OAUTH_TOKEN` is deliberately retained (D2).
+          env: savedLoginEnv(process.env),
           maxTurns: 1,
         },
       })) {
@@ -312,6 +355,17 @@ export class ClaudeCodeProvider implements Provider {
     }
     return query;
   }
+}
+
+function savedLoginEnv(env: NodeJS.ProcessEnv): Record<string, string | undefined> {
+  const isolated: Record<string, string | undefined> = {
+    ...env,
+    // A second layer on top of settings.autoMemoryEnabled=false. This is
+    // inherited by the bundled Claude CLI before any settings are resolved.
+    CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1',
+  };
+  for (const name of BILLED_AUTH_ENV) isolated[name] = undefined;
+  return isolated;
 }
 
 function renderToolProtocol(tools: ToolSchema[]): string {

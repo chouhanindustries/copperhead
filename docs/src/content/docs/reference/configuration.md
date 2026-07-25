@@ -100,14 +100,14 @@ Accepted model values (routing is by prefix, matched top to bottom):
 
 ### Saved login (Claude Code)
 
-`--model claude-code` drives Claude Code through the [Claude Agent SDK](https://code.claude.com/docs/en/agent-sdk) and reuses your saved login (the `CLAUDE_CODE_OAUTH_TOKEN` from `claude setup-token`), so a Claude subscription user runs copperhead with **no `ANTHROPIC_API_KEY`**. copperhead uses Claude Code purely as a reasoning backend: the agent loop, its safety gates (snapshot, ERC/DRC verification, rollback, commit gate), and every file edit stay inside copperhead exactly as with the other providers.
+`--model claude-code` drives Claude Code through the [Claude Agent SDK](https://code.claude.com/docs/en/agent-sdk/overview) and reuses your saved login (the `CLAUDE_CODE_OAUTH_TOKEN` from `claude setup-token`), so a Claude subscription user runs copperhead with **no `ANTHROPIC_API_KEY`**. copperhead uses Claude Code purely as a reasoning backend: the agent loop, its safety gates (snapshot, ERC/DRC verification, rollback, commit gate), and every file edit stay inside copperhead exactly as with the other providers.
 
 One-time setup:
 
 1. The Claude Agent SDK (`@anthropic-ai/claude-agent-sdk`) ships as an optional dependency of copperhead, so a normal install includes it and no separate step is needed. If you installed with `--omit=optional` and it is missing, copperhead loads it lazily and errors actionably, telling you to add it with `npm i @anthropic-ai/claude-agent-sdk`.
 2. Be logged into Claude Code, then run `claude setup-token` and export the result as `CLAUDE_CODE_OAUTH_TOKEN` (use `--model claude-code:<id>` to pick a specific model).
 
-Authentication stays entirely with the CLI: copperhead never reads, copies, or logs the credential. A missing dependency or an unauthenticated install fails with an actionable message and leaves your tree untouched, and a rate-limited `claude-code` run never silently falls back to a billed API provider.
+Authentication stays entirely with the CLI: copperhead never inspects or logs the credential value. The SDK runs with no user/project/local filesystem settings or CLAUDE.md, skills, plugins, ambient MCP servers, auto-memory, permission prompts, or default session persistence; managed policy remains authoritative. Copperhead also clears direct API credentials, custom Anthropic endpoints, and Bedrock/Vertex/Foundry/Mantle/Anthropic-AWS routing from the SDK subprocess while retaining `CLAUDE_CODE_OAUTH_TOKEN`. A missing dependency or unauthenticated install fails actionably and leaves your tree untouched; a rate-limited run never silently falls back to a billed provider.
 
 ## Files copperhead writes
 
