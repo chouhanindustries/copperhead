@@ -190,7 +190,9 @@ describe('create pipeline: runCreate integration (mocked agent + KiCad)', () => 
       await execa('git', ['add', '-A'], { cwd: repo });
       await execa('git', ['commit', '-q', '-m', 'pre-seed'], { cwd: repo });
 
+      const requests: string[] = [];
       mockRunAgentLoop.mockImplementation(async (opts) => {
+        requests.push(opts.request);
         await writeStageArtifacts(opts.repoRoot, opts.request);
         return ok();
       });
@@ -203,6 +205,9 @@ describe('create pipeline: runCreate integration (mocked agent + KiCad)', () => 
       await runCreate({ repoRoot: repo, briefPath, model: 'gpt-5', log: (s) => lines.push(s) });
       const out = lines.join('\n');
       expect(out).toContain('already complete');
+      expect(requests).not.toContain('spec-seed');
+      expect(requests).not.toContain('architecture');
+      expect(requests).not.toContain('part-selection');
     } finally {
       await cleanup();
     }

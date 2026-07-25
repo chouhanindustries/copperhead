@@ -122,4 +122,9 @@ describe('isPowerSymbol with custom prefixes', () => {
       await cleanup();
     }
   });
+
+  it('throws an error if empty or blank prefixes are provided', () => {
+    expect(() => addPowerSymbolPrefixes([''])).toThrow('Power symbol prefixes must be non-empty');
+    expect(() => addPowerSymbolPrefixes(['   '])).toThrow('Power symbol prefixes must be non-empty');
+  });
 });

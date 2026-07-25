@@ -228,33 +228,34 @@ describe('isNotFoundError helper', () => {
 
   it('identifies Windows command missing errors under win32 platform override', () => {
     Object.defineProperty(process, 'platform', { value: 'win32' });
+    try {
+      expect(isNotFoundError({
+        exitCode: 9009,
+        stderr: "'kicad-cli' is not recognized as an internal or external command"
+      })).toBe(true);
 
-    expect(isNotFoundError({
-      exitCode: 9009,
-      stderr: "'kicad-cli' is not recognized as an internal or external command"
-    })).toBe(true);
+      expect(isNotFoundError({
+        exitCode: 1,
+        stderr: "'openspec' is not recognized as an internal or external command, operable program or batch file."
+      })).toBe(true);
 
-    expect(isNotFoundError({
-      exitCode: 1,
-      stderr: "'openspec' is not recognized as an internal or external command, operable program or batch file."
-    })).toBe(true);
+      expect(isNotFoundError({
+        exitCode: 1,
+        message: "cannot find the path specified"
+      })).toBe(true);
 
-    expect(isNotFoundError({
-      exitCode: 1,
-      message: "cannot find the path specified"
-    })).toBe(true);
+      // Negative cases
+      expect(isNotFoundError({
+        exitCode: 1,
+        stderr: "ERC violations found"
+      })).toBe(false);
 
-    // Negative cases
-    expect(isNotFoundError({
-      exitCode: 1,
-      stderr: "ERC violations found"
-    })).toBe(false);
-
-    expect(isNotFoundError({
-      exitCode: 2,
-      stderr: "some random error"
-    })).toBe(false);
-
-    Object.defineProperty(process, 'platform', { value: originalPlatform });
+      expect(isNotFoundError({
+        exitCode: 2,
+        stderr: "some random error"
+      })).toBe(false);
+    } finally {
+      Object.defineProperty(process, 'platform', { value: originalPlatform });
+    }
   });
 });

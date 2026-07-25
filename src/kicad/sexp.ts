@@ -230,7 +230,11 @@ const DEFAULT_POWER_PREFIXES: string[] = ['power:'];
 let extraPowerPrefixes: string[] = [];
 
 export function addPowerSymbolPrefixes(prefixes: string[]): void {
-  extraPowerPrefixes.push(...prefixes);
+  const trimmed = prefixes.map((p) => p.trim());
+  if (trimmed.some((p) => p.length === 0)) {
+    throw new Error('Power symbol prefixes must be non-empty');
+  }
+  extraPowerPrefixes.push(...trimmed);
 }
 
 const isPowerSymbol = (libId: string): boolean =>

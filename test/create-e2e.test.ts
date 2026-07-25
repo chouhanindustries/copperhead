@@ -128,7 +128,21 @@ describe('create pipeline: e2e stage contracts (bounty AC)', () => {
     try {
       const docs = path.join(repo, 'docs');
       await mkdir(docs, { recursive: true });
-      // No KiCad project: config.schematic is null -> not complete
+      
+      // Configure an existing, empty schematic
+      await mkdir(path.join(repo, '.copperhead'), { recursive: true });
+      await writeFile(
+        path.join(repo, '.copperhead', 'config.json'),
+        JSON.stringify({ schematic: 'hardware/board.kicad_sch', board: 'hardware/board.kicad_pcb' }),
+        'utf8'
+      );
+      await mkdir(path.join(repo, 'hardware'), { recursive: true });
+      await writeFile(
+        path.join(repo, 'hardware', 'board.kicad_sch'),
+        '(kicad_sch (version 20231120) (generator "eeschema"))',
+        'utf8'
+      );
+
       const s = STAGES[3];
       expect(s.name).toBe('schematic');
       expect(await s.isComplete(repo, 'docs')).toBe(false);
