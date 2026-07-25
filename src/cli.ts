@@ -102,6 +102,10 @@ program
   });
 
 const checkAction = async (opts: { fab?: boolean; strict?: boolean }): Promise<void> => {
+  if (opts.strict && !opts.fab) {
+    console.error('--strict requires --fab');
+    process.exit(1);
+  }
   const repo = repoOf(program.opts());
   const json = Boolean(program.opts().json);
   try {

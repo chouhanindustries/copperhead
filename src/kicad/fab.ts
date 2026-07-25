@@ -120,6 +120,11 @@ export async function runFabGateCheck(
             : undefined,
       });
     }
+  } else {
+    routingViolations.push({
+      claim: 'Routing verified via DRC',
+      actual: 'DRC report is missing or DRC failed to run',
+    });
   }
 
   const routingStatus: 'pass' | 'warn' | 'fail' =
@@ -185,7 +190,12 @@ export async function runFabGateCheck(
   const schRel = config.schematic;
   const boardRel = config.board;
 
-  if (schRel && boardRel) {
+  if (!schRel || !boardRel) {
+    matchViolations.push({
+      claim: 'Schematic and PCB configured',
+      actual: 'Schematic or PCB path is not configured',
+    });
+  } else {
     const schPath = path.join(repoRoot, schRel);
     const boardPath = path.join(repoRoot, boardRel);
 
@@ -235,6 +245,11 @@ export async function runFabGateCheck(
           });
         }
       }
+    } else {
+      matchViolations.push({
+        claim: 'Schematic and PCB files exist',
+        actual: 'Schematic or PCB file is missing',
+      });
     }
   }
 
@@ -276,6 +291,11 @@ export async function runFabGateCheck(
         actual: "Gerber and drill package is stale. Run 'copperhead export fab' to regenerate.",
       });
     }
+  } else {
+    outputViolations.push({
+      claim: 'PCB file exists for hash check',
+      actual: 'PCB file is missing or not configured',
+    });
   }
 
   const outputsStatus: 'pass' | 'warn' | 'fail' =

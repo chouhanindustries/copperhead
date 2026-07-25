@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import path from 'node:path';
 import { writeFile, readFile, mkdir } from 'node:fs/promises';
-import { tempFixtureRepo } from './helpers.js';
+import { tempFixtureRepo, hasKicadCli } from './helpers.js';
 import { runInit } from '../src/memory/scaffold.js';
 import { loadConfig } from '../src/config.js';
 import { computeFileHash, runFabGateCheck } from '../src/kicad/fab.js';
@@ -47,7 +47,7 @@ async function setupMatchingPcbAndBom(repo: string): Promise<void> {
   await writeFile(layoutPath, layoutContent, 'utf8');
 }
 
-describe('Fabrication Release Gate (check --fab)', () => {
+describe.runIf(hasKicadCli)('Fabrication Release Gate (check --fab)', () => {
   it('runs all 5 fab release gate checks on clean initialized project', async () => {
     const { repo, cleanup } = await tempFixtureRepo();
     try {

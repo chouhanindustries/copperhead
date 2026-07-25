@@ -70,7 +70,6 @@ export async function runExportBom(opts: ExportBomOptions): Promise<ExportBomRes
   const outPath = outFileFor(opts.supplier);
   await mkdir(path.join(opts.repoRoot, OUT_DIR), { recursive: true });
   await writeFile(path.join(opts.repoRoot, outPath), result.csv, 'utf8');
-  await recordExportHash(opts.repoRoot);
 
   return { ...result, supplier: opts.supplier, outPath };
 }
@@ -114,7 +113,6 @@ export async function emitCreateJlcpcbBom(repoRoot: string): Promise<string | nu
   const outPath = outFileFor('jlcpcb');
   await mkdir(path.join(repoRoot, OUT_DIR), { recursive: true });
   await writeFile(path.join(repoRoot, outPath), csv, 'utf8');
-  await recordExportHash(repoRoot);
   return outPath;
 }
 
