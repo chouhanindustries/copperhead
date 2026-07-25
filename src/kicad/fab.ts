@@ -200,8 +200,25 @@ export async function runFabGateCheck(
     const boardPath = path.join(repoRoot, boardRel);
 
     if (existsSync(schPath) && existsSync(boardPath)) {
-      const schSymbols = await listSymbols(schPath);
-      const boardFps = await listBoardFootprints(boardPath);
+      let schSymbols: SchematicSymbol[] = [];
+      try {
+        schSymbols = await listSymbols(schPath);
+      } catch (err) {
+        matchViolations.push({
+          claim: 'Schematic parses successfully',
+          actual: err instanceof Error ? err.message : String(err),
+        });
+      }
+
+      let boardFps: BoardFootprint[] = [];
+      try {
+        boardFps = await listBoardFootprints(boardPath);
+      } catch (err) {
+        matchViolations.push({
+          claim: 'PCB parses successfully',
+          actual: err instanceof Error ? err.message : String(err),
+        });
+      }
 
       const schMap = new Map<string, string>();
       for (const s of schSymbols) {

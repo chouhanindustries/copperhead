@@ -348,8 +348,8 @@ export async function listBoardFootprints(boardPath: string): Promise<BoardFootp
       }
     }
     return out;
-  } catch {
-    return [];
+  } catch (err) {
+    throw new Error(`Failed to parse PCB file: ${err instanceof Error ? err.message : String(err)}`);
   }
 }
 
