@@ -27,6 +27,13 @@ Pipeline state SHALL live in the repo (docs + files + gate results), so a killed
 - **WHEN** `create` is killed after the BOM stage and re-run
 - **THEN** it skips spec/architecture/BOM and resumes at the schematic stage
 
+### Requirement: Stage contract acceptance
+Each stage SHALL define a repo-state completion contract. `create` SHALL check that contract before skipping a stage during resume and again after a successful stage run. If the contract remains unmet, `create` SHALL preserve the partial committed work, report the unmet clause, and stop without advancing to a downstream stage.
+
+#### Scenario: Agent success without complete work
+- **WHEN** an agent reports success for a stage but the stage's repo-state contract remains unmet
+- **THEN** `create` does not start the next stage, reports the failed contract clause, and a later `create` invocation resumes the same stage
+
 ### Requirement: First-draft layout with honesty gate
 The layout stage SHALL produce rule-driven placement (real coordinates in the `.kicad_pcb`) and rule-based routing of power/critical nets, with every routed net passing DRC, and SHALL auto-write a `## Draft quality` section in LAYOUT.md listing what is done and what a human or specialist tool should redo.
 

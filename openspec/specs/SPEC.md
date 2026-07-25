@@ -155,7 +155,7 @@ Firmware scope: scaffold + pin definitions + driver stubs + one working happy-pa
 
 ### The pipeline (Mode A internally)
 
-**Run-to-completion guarantee:** once `create` starts, it always finishes with the complete output package. Gates are *quality checks the agent must satisfy*, not stops that wait for a human. By default the pipeline is fully autonomous: unstated decisions get `ASSUMED` flags, imperfect layout gets the `Draft quality` label, and the run ends with gerbers, firmware, renders, and DEVPLAN.md on disk — an end product, reviewable as a whole. `--interactive` turns the two human gates (spec approval, pre-export review) back on for users who want them.
+**Run-to-completion guarantee:** once `create` starts, it autonomously works toward the complete output package. Gates are *quality checks the agent must satisfy*, not stops that wait for a human. Each stage has a repo-state completion contract; Copperhead skips a stage only when its contract is met and re-checks it after an agent reports success. If a contract remains unmet, Copperhead preserves the partial committed work, reports the unmet clause, and exits so the next `create` run resumes that stage rather than silently advancing. By default unstated decisions get `ASSUMED` flags, imperfect layout gets the `Draft quality` label, and a successful run ends with gerbers, firmware, renders, and DEVPLAN.md on disk — an end product, reviewable as a whole. `--interactive` turns the two human gates (spec approval, pre-export review) back on for users who want them.
 
 ```
 brief.md
@@ -169,7 +169,7 @@ brief.md
   → DEVPLAN.md
 ```
 
-Each stage is a `do`-loop run with a stage-specific prompt. State lives in the repo (docs + files), so `create` is resumable: kill it at any stage, re-run, it continues from the docs.
+Each stage is a `do`-loop run with a stage-specific prompt and completion contract. State lives in the repo (docs + files), so `create` is resumable: kill it at any stage, or leave a stage contract unmet, re-run, and it continues from that stage.
 
 ### First-draft layout (explicitly non-optimal, explicitly useful)
 
