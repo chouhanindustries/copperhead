@@ -256,6 +256,44 @@ describe('create pipeline resilience (review F3)', () => {
     }
   });
 
+  it('excludes an uncommitted brief under a managed directory from resumed-stage commits', async () => {
+    const { repo, cleanup } = await tempFixtureRepo();
+    try {
+      await mkdir(path.join(repo, '.copperhead'), { recursive: true });
+      const docs = path.join(repo, 'docs');
+      await mkdir(docs, { recursive: true });
+      const briefPath = path.join(docs, 'brief.md');
+      await writeFile(briefPath, '# keep me uncommitted\n', 'utf8');
+      await writeFile(path.join(docs, 'SPEC.md'), '# s\n\n## Budgets\n', 'utf8');
+      await writeFile(path.join(docs, 'SUBSYSTEMS.md'), '# s\n', 'utf8');
+      await writeFile(path.join(docs, 'BOM.md'), '# b\n', 'utf8');
+
+      mockRunAgentLoop.mockImplementation(async () => ok()); // schematic still halts
+
+      const lines: string[] = [];
+      await runCreate({ repoRoot: repo, briefPath, model: 'gpt-5', log: (s) => lines.push(s) });
+
+      expect(lines.join('\n')).toContain('committed already-complete work');
+      const { stdout: trackedDocs } = await execa(
+        'git',
+        ['ls-files', 'docs/SPEC.md', 'docs/SUBSYSTEMS.md', 'docs/BOM.md'],
+        { cwd: repo },
+      );
+      expect(trackedDocs.split('\n').sort()).toEqual(
+        ['docs/BOM.md', 'docs/SPEC.md', 'docs/SUBSYSTEMS.md'].sort(),
+      );
+      const { stdout: briefStatus } = await execa(
+        'git',
+        ['status', '--porcelain', '--', 'docs/brief.md'],
+        { cwd: repo },
+      );
+      expect(briefStatus).toBe('?? docs/brief.md');
+      expect(await readFile(briefPath, 'utf8')).toBe('# keep me uncommitted\n');
+    } finally {
+      await cleanup();
+    }
+  });
+
   it('create preflight refuses a dirty tree that holds a foreign (non-copperhead) change', async () => {
     const { repo, cleanup } = await tempFixtureRepo();
     try {

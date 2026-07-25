@@ -210,10 +210,13 @@ async function commitResumedStage(
   opts: CreateOptions,
   config: CopperheadConfig,
   stageName: string,
+  briefGitPath: string | null,
 ): Promise<boolean> {
   if (!(await isDirty(opts.repoRoot))) return false;
   const dirty = await changedFiles(opts.repoRoot, 'HEAD');
-  const foreign = dirty.filter((f) => !isManagedPath(f, config));
+  const committable = dirty.filter((f) => f !== briefGitPath);
+  if (!committable.length) return false;
+  const foreign = committable.filter((f) => !isManagedPath(f, config));
   if (foreign.length) {
     opts.log(
       `stage ${stageName}: already-complete work is uncommitted, but the tree also has non-copperhead changes ` +
@@ -222,7 +225,11 @@ async function commitResumedStage(
     return false;
   }
   try {
-    const sha = await commitAll(opts.repoRoot, `copperhead: resume — commit completed stage ${stageName}`);
+    const sha = await commitAll(
+      opts.repoRoot,
+      `copperhead: resume — commit completed stage ${stageName}`,
+      briefGitPath ? { excludePaths: [briefGitPath] } : {},
+    );
     opts.log(`stage ${stageName}: committed already-complete work ${sha.slice(0, 10)} so a later rollback cannot wipe it (2.4)`);
     return true;
   } catch (err) {
@@ -546,6 +553,7 @@ export async function runCreate(opts: CreateOptions): Promise<{ ok: boolean; com
     !path.isAbsolute(briefRelative);
   const entryChanges = await changedFiles(opts.repoRoot, 'HEAD');
   const config = await loadConfig(opts.repoRoot);
+  const briefGitPath = briefIsInRepo ? briefRelative.split(path.sep).join('/') : null;
   const normalizedBrief = path.normalize(briefRelative);
   const otherEntryChanges = entryChanges.filter(
     (changed) => !briefIsInRepo || path.normalize(changed) !== normalizedBrief,
@@ -625,7 +633,7 @@ export async function runCreate(opts: CreateOptions): Promise<{ ok: boolean; com
     }
     if (await stage.isComplete(opts.repoRoot, config.docs)) {
       opts.log(`stage ${stage.name}: already complete (resuming past it)`);
-      const committed = await commitResumedStage(opts, config, stage.name);
+      const committed = await commitResumedStage(opts, config, stage.name, briefGitPath);
       completed.push(stage.name);
       stageCosts.push({ name: stage.name, resumed: true, wallMs: 0, turns: 0, tokensIn: 0, tokensOut: 0, cacheHits: 0 });
       await emitJlcpcbAfterOutputs(stage.name, opts);

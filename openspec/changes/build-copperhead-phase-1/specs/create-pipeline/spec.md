@@ -45,7 +45,7 @@ Pipeline state SHALL live in the repo (docs + files + gate results), so a killed
 
 #### Scenario: Untracked in-repo brief is valid input
 - **WHEN** the resolved `--brief` file is untracked inside the repository and no other path is dirty
-- **THEN** `create` accepts the input, evaluates stage completion normally, and preserves the exact brief contents if the first stage rolls back
+- **THEN** `create` accepts the input, evaluates stage completion normally, excludes the brief from automatic resumed-stage commits even under a managed directory, and preserves its exact contents if the first stage rolls back
 
 #### Scenario: Ordinary first-stage rollback remains resumable
 - **WHEN** the first stage fails or refuses without keeping failed output after OpenSpec bootstrap dirtied the tree

@@ -169,7 +169,7 @@ brief.md
   → DEVPLAN.md
 ```
 
-Each stage is a `do`-loop run with a stage-specific prompt. State lives in the repo (docs + files), so `create` is resumable: kill it after a completed stage, re-run, and it continues from the docs. At command entry, foreign uncommitted paths are refused while recognized Copperhead-managed stage artifacts may enter the resume path and must pass their stage-specific completion gate before they can be committed. The resolved `--brief` file may also be uncommitted because it is pipeline input, not inferred state, and Copperhead preserves that input across first-stage rollback. A `--keep-on-fail` stage records that its retained edits are known-unverified; while that marker exists, every dirty path other than the brief is refused before completion detection.
+Each stage is a `do`-loop run with a stage-specific prompt. State lives in the repo (docs + files), so `create` is resumable: kill it after a completed stage, re-run, and it continues from the docs. At command entry, foreign uncommitted paths are refused while recognized Copperhead-managed stage artifacts may enter the resume path and must pass their stage-specific completion gate before they can be committed. The resolved `--brief` file may also be uncommitted because it is pipeline input, not inferred state; Copperhead excludes it from automatic resumed-stage commits and preserves it across first-stage rollback. A `--keep-on-fail` stage records that its retained edits are known-unverified; while that marker exists, every dirty path other than the brief is refused before completion detection.
 
 ### First-draft layout (explicitly non-optimal, explicitly useful)
 

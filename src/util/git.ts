@@ -244,9 +244,22 @@ export async function uncommittedCount(repo: string): Promise<number> {
   return status ? status.split('\n').length : 0;
 }
 
-export async function commitAll(repo: string, message: string): Promise<string> {
+/**
+ * Commit every current change except explicitly excluded repo-relative paths.
+ * Exclusions are unstaged after `git add -A`, so tracked modifications and
+ * untracked inputs both remain in the caller's working tree.
+ */
+export async function commitAll(
+  repo: string,
+  message: string,
+  opts: { excludePaths?: string[] } = {},
+): Promise<string> {
   await ensureIgnored(repo, GIT_ADD_EXCLUDES);
   await git(repo, ['add', '-A']);
+  const excluded = opts.excludePaths?.filter(Boolean) ?? [];
+  if (excluded.length) {
+    await git(repo, ['reset', '-q', '--', ...excluded.map((p) => `:(literal)${p}`)]);
+  }
   await git(repo, ['commit', '-m', message]);
   return git(repo, ['rev-parse', 'HEAD']);
 }
