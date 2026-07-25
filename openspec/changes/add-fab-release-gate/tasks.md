@@ -6,7 +6,7 @@
 - [ ] 1.2 Implement BOM-readiness check: parse BOM.md rows, flag missing MPN/footprint as failures, `UNVERIFIED` rows as warnings
 - [ ] 1.3 Implement schematic-to-PCB match: refdes + footprint join via `list_symbols` and a board-side footprint enumerator added to `src/kicad/sexp.ts` (read-only)
 - [ ] 1.4 Implement output-freshness check: read the export hash record from `.copperhead/config.json`, recompute SHA-256 of `.kicad_pcb`, compare; distinct messages for missing outputs, missing record, and stale hash
-- [ ] 1.5 Implement documentation-presence check (LAYOUT.md `## Draft quality`, DEVPLAN.md for `create` repos)
+- [x] 1.5 Implement documentation-presence check (LAYOUT.md `## Draft quality`, DEVPLAN.md for `create` repos)
 
 ## 2. Export hash record
 

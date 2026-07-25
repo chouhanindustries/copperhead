@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { readFile, writeFile, appendFile } from 'node:fs/promises';
+import { createRequire } from 'node:module';
 import path from 'node:path';
 import { execa } from 'execa';
 import { runAgentLoop } from '../src/agent/loop.js';
@@ -19,7 +20,24 @@ const providers: { model: string; key: string | undefined }[] = [
     model: process.env.COPPERHEAD_TEST_CODEX_MODEL ?? 'codex',
     key: process.env.COPPERHEAD_TEST_CODEX === '1' ? 'saved-codex-login' : undefined,
   },
+  // Saved-login Claude Code (AC-3.10, AC-3.11): runs only when a Claude Code
+  // OAuth token is present AND the optional SDK is installed; needs no
+  // ANTHROPIC_API_KEY. Gating on both avoids a hard failure when the token is
+  // set but the (undeclared) SDK dependency is missing.
+  {
+    model: process.env.COPPERHEAD_TEST_CLAUDE_CODE_MODEL ?? 'claude-code',
+    key: claudeCodeSdkInstalled() ? process.env.CLAUDE_CODE_OAUTH_TOKEN : undefined,
+  },
 ];
+
+function claudeCodeSdkInstalled(): boolean {
+  try {
+    createRequire(import.meta.url).resolve('@anthropic-ai/claude-agent-sdk');
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 async function setupRepo(): Promise<{ repo: string; cleanup: () => Promise<void> }> {
   const { repo, cleanup } = await tempFixtureRepo();

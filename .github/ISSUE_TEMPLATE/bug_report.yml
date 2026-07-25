@@ -1,0 +1,96 @@
+name: Bug report
+description: Something in the CLI, agent loop, or KiCad integration behaves incorrectly.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for filing a bug. Please do not report security issues here: use
+        [private vulnerability reporting](https://github.com/chouhanindustries/copperhead/security/advisories/new) instead.
+
+        Scrub API keys from any logs you paste.
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you expected, and what you got instead.
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: The exact commands you ran. A minimal KiCad project or brief that triggers it helps a lot.
+      placeholder: |
+        1. copperhead init
+        2. copperhead do "add reverse-polarity protection on VIN"
+        3. ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: output
+    attributes:
+      label: Output
+      description: Relevant terminal output, ERC/DRC report, or an excerpt of the run transcript from `.copperhead/runs/`. Remove credentials first.
+      render: shell
+    validations:
+      required: false
+
+  - type: dropdown
+    id: command
+    attributes:
+      label: Which command
+      options:
+        - create
+        - do
+        - check / verify
+        - init
+        - sync
+        - other or not command-specific
+    validations:
+      required: true
+
+  - type: dropdown
+    id: backend
+    attributes:
+      label: Model backend
+      description: "`check` is LLM-free, so pick \"not applicable\" for bugs in it."
+      options:
+        - Anthropic API key
+        - OpenAI API key
+        - Codex CLI saved login
+        - Claude Code saved login
+        - Not applicable
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: copperhead version
+      description: Output of `copperhead --version`, or the commit SHA if running from source.
+      placeholder: "0.7.0"
+    validations:
+      required: true
+
+  - type: input
+    id: env
+    attributes:
+      label: Node, KiCad, and OS
+      description: Output of `node --version` and `kicad-cli --version`, plus your operating system.
+      placeholder: "node v20.11.0, kicad-cli 8.0.5, macOS 14.5"
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before submitting
+      options:
+        - label: I searched existing issues and this is not a duplicate.
+          required: true
+        - label: I removed API keys and other secrets from everything I pasted.
+          required: true

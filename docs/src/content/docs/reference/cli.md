@@ -57,7 +57,7 @@ copperhead do "<change request>" [options]
 
 | Option | Description |
 | --- | --- |
-| `--model <model>` | `codex`, `gpt-5`, `claude`, or a provider-specific model id. `codex` uses the saved local Codex login. |
+| `--model <model>` | `codex`, `gpt-5`, `claude`, `claude-code`, or a provider-specific model id. `codex` uses the saved local Codex login; `claude-code` uses your logged-in Claude Code (no `ANTHROPIC_API_KEY`). See [Configuration](/reference/configuration/#saved-login-claude-code). |
 | `--max-turns <n>` | Turn budget for this run. Overrides `maxTurns` from config. |
 | `--allow-dirty` | Permit a dirty working tree. The snapshot is taken with `git stash create`. |
 | `--keep-on-fail` | Debugging only: skip rollback after an unrecoverable failure, leave the tree dirty, and print HEAD/stash recovery instructions. Constraint refusals still roll back; failure still exits 1 and never commits. |
@@ -117,11 +117,11 @@ copperhead create --brief brief.md [--model <model>] [--interactive] [--keep-on-
 | Option | Description |
 | --- | --- |
 | `--brief <file>` | **Required.** The product brief, in markdown. |
-| `--model <model>` | `codex`, `gpt-5`, or `claude`. |
+| `--model <model>` | `codex`, `gpt-5`, `claude`, or `claude-code` (saved-login Claude Code, no `ANTHROPIC_API_KEY`). |
 | `--interactive` | Re-enable the human gates: spec approval, and a pause before export. |
-| `--keep-on-fail` | Debugging only: preserve an unrecoverable failed stage's tree and print the snapshot plus manual recovery command. Recover to a clean tree before rerunning `create`; refusals still roll back. |
+| `--keep-on-fail` | Debugging only: preserve an unrecoverable failed stage's tree and print the snapshot plus manual recovery command. Recover the retained output before rerunning `create`; refusals still roll back. |
 
-`create` requires a clean working tree at command entry so partial output cannot be mistaken for a completed stage. The resolved `--brief` file is the one exception: it may be the only uncommitted path, and copperhead preserves it across first-stage rollback. `create` exits 1 if any stage fails to complete and 0 when the pipeline finishes.
+At command entry, `create` rejects foreign user changes. Recognized Copperhead-managed artifacts from an interrupted run may resume only through their stage completion gates. The resolved `--brief` may be uncommitted, and copperhead preserves it across first-stage rollback. Output retained by `--keep-on-fail` is marked known-unverified and blocks another `create` until recovered. `create` exits 1 if any stage fails to complete and 0 when the pipeline finishes.
 
 ### Pipeline stages
 

@@ -59,7 +59,8 @@ The constraint registry: machine-readable counterparts to the constraints stated
 | Variable | Purpose |
 | --- | --- |
 | `OPENAI_API_KEY` | OpenAI credentials. |
-| `ANTHROPIC_API_KEY` | Anthropic credentials. |
+| `ANTHROPIC_API_KEY` | Anthropic API credentials. |
+| `CLAUDE_CODE_OAUTH_TOKEN` | Optional. Saved-login token for `--model claude-code` (see below). Minted by `claude setup-token`; lets you run against a Claude subscription with no `ANTHROPIC_API_KEY`. |
 | `COPPERHEAD_MODEL` | Default model. Overrides config, overridden by `--model`. |
 | `COPPERHEAD_CODEX_PATH` | Optional path to a `codex` executable. Defaults to `codex` on `PATH`; the SDK-bundled launcher is a fallback. |
 | `SYNAP_API_KEY` | Optional. Enables cross-run memory. Absent, copperhead behaves exactly as before and makes no Synap calls. |
@@ -86,6 +87,27 @@ Set any of the first three to `codex` to use the installed Codex CLI and its sav
 If `codex` is not on `PATH`, point `COPPERHEAD_CODEX_PATH` at an executable explicitly. The optional SDK includes one at `node_modules/@openai/codex/bin/codex.js`; for a global installation, `$(npm root -g)/@openai/codex/bin/codex.js` resolves its path.
 
 If none of these produce a model, the command exits with an error telling you the available ways to set one. `check` never needs a model, since it makes no LLM calls at all.
+
+Accepted model values (routing is by prefix, matched top to bottom):
+
+| Value | Provider | Key |
+| --- | --- | --- |
+| `claude-code` / `claude-code:<id>` | Claude Code, saved login | none (uses `CLAUDE_CODE_OAUTH_TOKEN` / your logged-in CLI) |
+| `claude` / `claude-<id>` | Anthropic API | `ANTHROPIC_API_KEY` |
+| `gpt-5` / anything else | OpenAI API | `OPENAI_API_KEY` |
+
+`claude-code` is matched before the `claude` prefix, so it is never captured by the Anthropic API route.
+
+### Saved login (Claude Code)
+
+`--model claude-code` drives Claude Code through the [Claude Agent SDK](https://code.claude.com/docs/en/agent-sdk) and reuses your saved login (the `CLAUDE_CODE_OAUTH_TOKEN` from `claude setup-token`), so a Claude subscription user runs copperhead with **no `ANTHROPIC_API_KEY`**. copperhead uses Claude Code purely as a reasoning backend: the agent loop, its safety gates (snapshot, ERC/DRC verification, rollback, commit gate), and every file edit stay inside copperhead exactly as with the other providers.
+
+One-time setup:
+
+1. The Claude Agent SDK (`@anthropic-ai/claude-agent-sdk`) ships as an optional dependency of copperhead, so a normal install includes it and no separate step is needed. If you installed with `--omit=optional` and it is missing, copperhead loads it lazily and errors actionably, telling you to add it with `npm i @anthropic-ai/claude-agent-sdk`.
+2. Be logged into Claude Code, then run `claude setup-token` and export the result as `CLAUDE_CODE_OAUTH_TOKEN` (use `--model claude-code:<id>` to pick a specific model).
+
+Authentication stays entirely with the CLI: copperhead never reads, copies, or logs the credential. A missing dependency or an unauthenticated install fails with an actionable message and leaves your tree untouched, and a rate-limited `claude-code` run never silently falls back to a billed API provider.
 
 ## Files copperhead writes
 

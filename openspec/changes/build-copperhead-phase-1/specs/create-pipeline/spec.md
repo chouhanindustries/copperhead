@@ -25,11 +25,15 @@ Once started, `create` SHALL always finish with the complete output package: gat
 - **THEN** the pipeline stops with a non-zero result, creates no failure commit, leaves that stage's failed tree in place, prints the snapshot refs and manual recovery command, and warns that recovery is required before rerunning
 
 ### Requirement: Resumability from repo state
-Pipeline state SHALL live in the repo (docs + files + gate results), so a killed `create` re-run SHALL continue from the first incomplete stage without redoing completed ones. Before inspecting those completion markers, `create` SHALL require a clean command-entry tree except that the resolved `--brief` input may be the sole uncommitted path. It SHALL preserve that brief across a first-stage rollback, while refusing every other dirty path so unverified partial artifacts preserved by `--keep-on-fail` cannot be mistaken for completed stages.
+Pipeline state SHALL live in the repo (docs + files + gate results), so a killed `create` re-run SHALL continue from the first incomplete stage without redoing completed ones. Before inspecting completion markers, `create` SHALL refuse foreign command-entry changes. It MAY accept recognized Copperhead-managed artifacts for stage-gated resume and SHALL accept the resolved `--brief` as uncommitted input. It SHALL preserve that brief across a first-stage rollback. A `--keep-on-fail` stage SHALL leave a durable ignored marker that makes the next `create` refuse every retained dirty path before completion detection until manual recovery leaves only the brief dirty.
 
 #### Scenario: Resume after kill
 - **WHEN** `create` is killed after the BOM stage and re-run
 - **THEN** it skips spec/architecture/BOM and resumes at the schematic stage
+
+#### Scenario: Resume managed completed artifacts
+- **WHEN** a hard-killed run leaves only Copperhead-managed stage artifacts dirty and their completion gates pass
+- **THEN** `create` may commit the completed stage through the guarded resume path and continue
 
 #### Scenario: Rerun after kept failure is blocked
 - **WHEN** a kept failed stage leaves a dirty partial marker such as `firmware/` or `outputs/` and `create` is run again
