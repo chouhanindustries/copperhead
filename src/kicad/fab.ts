@@ -4,7 +4,7 @@ import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { CopperheadConfig as Config } from '../config.js';
 import { CheckReport as DrcReport } from './report.js';
-import { listSymbols, listBoardFootprints } from './sexp.js';
+import { listSymbols, listBoardFootprints, type SchematicSymbol, type BoardFootprint } from './sexp.js';
 import { parseBom } from './bom-export.js';
 
 export interface FabViolation {
