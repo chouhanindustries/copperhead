@@ -39,6 +39,10 @@ Pipeline state SHALL live in the repo (docs + files + gate results), so a killed
 - **WHEN** a kept failed stage leaves a dirty partial marker such as `firmware/` or `outputs/` and `create` is run again
 - **THEN** `create` refuses before evaluating `isComplete`, explains that partial output may be unverified, and requires recovery to a clean tree
 
+#### Scenario: Agent success still fails the stage contract
+- **WHEN** an agent-loop run reports success and commits, but the stage's `isComplete` contract remains false
+- **THEN** default mode restores the last completed pipeline state, while `--keep-on-fail` rewinds the new commit, retains its staged files, writes the kept-failure marker, and returns non-zero
+
 #### Scenario: Untracked in-repo brief is valid input
 - **WHEN** the resolved `--brief` file is untracked inside the repository and no other path is dirty
 - **THEN** `create` accepts the input, evaluates stage completion normally, and preserves the exact brief contents if the first stage rolls back

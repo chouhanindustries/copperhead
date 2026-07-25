@@ -192,6 +192,15 @@ export async function restore(repo: string, snap: GitSnapshot): Promise<void> {
 }
 
 /**
+ * Move HEAD back to a known-good commit while retaining the current index and
+ * worktree. This turns a commit that failed an outer completion contract back
+ * into inspectable staged edits without losing any successful earlier commit.
+ */
+export async function rewindHeadKeepChanges(repo: string, head: string): Promise<void> {
+  await git(repo, ['reset', '--soft', head]);
+}
+
+/**
  * Preserve a failed run's work as a stash entry before rollback, so a failure
  * is recoverable instead of destroyed. `git stash create` alone ignores
  * untracked files (most of what a docs-stage run produces), so everything is

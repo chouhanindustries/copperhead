@@ -6,7 +6,15 @@ import { loadConfig } from '../config.js';
 import { bootstrapKicadProject } from '../kicad/bootstrap.js';
 import { exportSvg, runErc } from '../kicad/cli.js';
 import { listSymbols } from '../kicad/sexp.js';
-import { changedFiles, commitAll, gitPreflight, isDirty, restore, snapshot } from '../util/git.js';
+import {
+  changedFiles,
+  commitAll,
+  gitPreflight,
+  isDirty,
+  restore,
+  rewindHeadKeepChanges,
+  snapshot,
+} from '../util/git.js';
 import type { CopperheadConfig } from '../config.js';
 import { checkDrift } from '../memory/drift.js';
 import { runAgentLoop, makeProvider, type BudgetExhaustedStats } from '../agent/loop.js';
@@ -198,8 +206,12 @@ function isManagedPath(f: string, config: CopperheadConfig): boolean {
  * unrelated working changes are never swept into a copperhead commit; if any
  * foreign path is dirty, leave the whole thing for the human and say so.
  */
-async function commitResumedStage(opts: CreateOptions, config: CopperheadConfig, stageName: string): Promise<void> {
-  if (!(await isDirty(opts.repoRoot))) return;
+async function commitResumedStage(
+  opts: CreateOptions,
+  config: CopperheadConfig,
+  stageName: string,
+): Promise<boolean> {
+  if (!(await isDirty(opts.repoRoot))) return false;
   const dirty = await changedFiles(opts.repoRoot, 'HEAD');
   const foreign = dirty.filter((f) => !isManagedPath(f, config));
   if (foreign.length) {
@@ -207,13 +219,15 @@ async function commitResumedStage(opts: CreateOptions, config: CopperheadConfig,
       `stage ${stageName}: already-complete work is uncommitted, but the tree also has non-copperhead changes ` +
         `(${foreign.slice(0, 3).join(', ')}${foreign.length > 3 ? ', …' : ''}); leaving it uncommitted so nothing of yours is swept up`,
     );
-    return;
+    return false;
   }
   try {
     const sha = await commitAll(opts.repoRoot, `copperhead: resume — commit completed stage ${stageName}`);
     opts.log(`stage ${stageName}: committed already-complete work ${sha.slice(0, 10)} so a later rollback cannot wipe it (2.4)`);
+    return true;
   } catch (err) {
     opts.log(`stage ${stageName}: could not commit resumed work (${(err as Error).message})`);
+    return false;
   }
 }
 
@@ -563,11 +577,11 @@ export async function runCreate(opts: CreateOptions): Promise<{ ok: boolean; com
   const briefWasEntryChange =
     briefIsInRepo && entryChanges.some((changed) => path.normalize(changed) === normalizedBrief);
   const brief = await readFile(briefPath, 'utf8');
-  const pipelineStart = await snapshot(opts.repoRoot);
+  let restorePoint = await snapshot(opts.repoRoot);
 
   const restoreCommandEntry = async (): Promise<void> => {
-    await restore(opts.repoRoot, pipelineStart);
-    if (briefWasEntryChange) {
+    await restore(opts.repoRoot, restorePoint);
+    if (briefWasEntryChange && !existsSync(briefPath)) {
       // git stash create omits untracked files. Recreate the exact input after
       // rollback so a first-stage failure never deletes an in-repo brief.
       await mkdir(path.dirname(briefPath), { recursive: true });
@@ -597,7 +611,6 @@ export async function runCreate(opts: CreateOptions): Promise<{ ok: boolean; com
   if (pruned) opts.log(`startup: pruned ${pruned} old .history/ entrie(s) to cap local-history growth`);
   await openspecInit(opts.repoRoot);
   const completed: string[] = [];
-  let completedDuringThisRun = 0;
   const stageCosts: StageCost[] = [];
 
   for (const [i, stage] of STAGES.entries()) {
@@ -612,10 +625,11 @@ export async function runCreate(opts: CreateOptions): Promise<{ ok: boolean; com
     }
     if (await stage.isComplete(opts.repoRoot, config.docs)) {
       opts.log(`stage ${stage.name}: already complete (resuming past it)`);
-      await commitResumedStage(opts, config, stage.name);
+      const committed = await commitResumedStage(opts, config, stage.name);
       completed.push(stage.name);
       stageCosts.push({ name: stage.name, resumed: true, wallMs: 0, turns: 0, tokensIn: 0, tokensOut: 0, cacheHits: 0 });
       await emitJlcpcbAfterOutputs(stage.name, opts);
+      if (committed) restorePoint = await snapshot(opts.repoRoot);
       continue;
     }
     // Auto-recovery loop: run the stage, and if it fails or ends without meeting
@@ -729,11 +743,18 @@ export async function runCreate(opts: CreateOptions): Promise<{ ok: boolean; com
     stageCosts.push(cost);
 
     if (!stageDone) {
-      const keptFailure = (opts.keepOnFail ?? false) && finalOutcome === 'failure';
-      if (!keptFailure && completedDuringThisRun === 0 && finalOutcome !== 'success') {
-        // The stage rollback returns to a snapshot taken after openspecInit,
-        // so it deliberately reapplies bootstrap dirt. Restore the earlier
-        // command-entry snapshot too, while preserving an in-repo brief input.
+      const completionContractFailed = finalOutcome === 'success';
+      const keptFailure =
+        (opts.keepOnFail ?? false) && (finalOutcome === 'failure' || completionContractFailed);
+      if (keptFailure) {
+        // A successful attempt may have committed before the outer stage
+        // contract failed, even when the final attempt itself failed. Rewind
+        // every attempt from this stage while retaining its index and files.
+        await rewindHeadKeepChanges(opts.repoRoot, restorePoint.head);
+      } else if (!keptFailure) {
+        // Restore the last known-complete pipeline state. Before any stage has
+        // completed this is the command-entry snapshot, which also removes
+        // OpenSpec bootstrap dirt while preserving an in-repo brief input.
         await restoreCommandEntry();
       }
       if (keptFailure) {
@@ -753,10 +774,12 @@ export async function runCreate(opts: CreateOptions): Promise<{ ok: boolean; com
       return { ok: false, completed };
     }
     completed.push(stage.name);
-    completedDuringThisRun++;
     await renderStageArtifacts(opts, stage.name, stageTranscriptDir);
     await emitJlcpcbAfterOutputs(stage.name, opts);
     logCumulative(opts, stageCosts);
+    // Later failures roll back to this verified, completed stage instead of
+    // erasing successful work from earlier in the same create invocation.
+    restorePoint = await snapshot(opts.repoRoot);
   }
 
   const check = await runCheck(opts.repoRoot, opts.log);
