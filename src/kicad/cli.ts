@@ -1,5 +1,5 @@
 import { execa, ExecaError } from 'execa';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, mkdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { normalizeReport, type CheckReport } from './report.js';
@@ -129,6 +129,11 @@ export async function exportFab(pcbPath: string, schPath: string | null, outDir:
   if (schPath) {
     jobs.push({ artifact: 'schematic.svg', args: ['sch', 'export', 'svg', '--output', path.join(outDir, 'renders'), schPath] });
   }
+
+  // KiCad 8.0 requires output directories to exist before running export gerbers/svg
+  await mkdir(path.join(outDir, 'gerbers'), { recursive: true });
+  await mkdir(path.join(outDir, 'renders'), { recursive: true });
+
   for (const job of jobs) {
     try {
       await execa('kicad-cli', job.args);
