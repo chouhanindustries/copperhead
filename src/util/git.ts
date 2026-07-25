@@ -44,6 +44,26 @@ export interface GitSnapshot {
   stash: string | null;
 }
 
+function shellQuote(value: string): string {
+  return `'${value.replace(/'/g, `'"'"'`)}'`;
+}
+
+/**
+ * Print a copy-paste recovery sequence for the normal ignored audit-trail
+ * convention. Unstage .copperhead/runs first so a failed commit's `git add -A`
+ * cannot make reset --hard delete the very transcript being inspected.
+ * Snapshot refs are quoted so this stays shell-safe for non-hex test doubles
+ * and future git implementations.
+ */
+export function recoveryCommand(snap: GitSnapshot): string {
+  return [
+    'git reset -q -- .copperhead/runs',
+    `git reset --hard ${shellQuote(snap.head)}`,
+    'git clean -fd -e .copperhead/runs',
+    ...(snap.stash ? [`git stash apply ${shellQuote(snap.stash)}`] : []),
+  ].join(' && ');
+}
+
 async function git(repo: string, args: string[]): Promise<string> {
   const { stdout } = await execa('git', args, { cwd: repo });
   return stdout.trim();
@@ -172,6 +192,15 @@ export async function restore(repo: string, snap: GitSnapshot): Promise<void> {
 }
 
 /**
+ * Move HEAD back to a known-good commit while retaining the current index and
+ * worktree. This turns a commit that failed an outer completion contract back
+ * into inspectable staged edits without losing any successful earlier commit.
+ */
+export async function rewindHeadKeepChanges(repo: string, head: string): Promise<void> {
+  await git(repo, ['reset', '--soft', head]);
+}
+
+/**
  * Preserve a failed run's work as a stash entry before rollback, so a failure
  * is recoverable instead of destroyed. `git stash create` alone ignores
  * untracked files (most of what a docs-stage run produces), so everything is
@@ -215,9 +244,22 @@ export async function uncommittedCount(repo: string): Promise<number> {
   return status ? status.split('\n').length : 0;
 }
 
-export async function commitAll(repo: string, message: string): Promise<string> {
+/**
+ * Commit every current change except explicitly excluded repo-relative paths.
+ * Exclusions are unstaged after `git add -A`, so tracked modifications and
+ * untracked inputs both remain in the caller's working tree.
+ */
+export async function commitAll(
+  repo: string,
+  message: string,
+  opts: { excludePaths?: string[] } = {},
+): Promise<string> {
   await ensureIgnored(repo, GIT_ADD_EXCLUDES);
   await git(repo, ['add', '-A']);
+  const excluded = opts.excludePaths?.filter(Boolean) ?? [];
+  if (excluded.length) {
+    await git(repo, ['reset', '-q', '--', ...excluded.map((p) => `:(literal)${p}`)]);
+  }
   await git(repo, ['commit', '-m', message]);
   return git(repo, ['rev-parse', 'HEAD']);
 }

@@ -1,12 +1,20 @@
 import path from 'node:path';
 import { existsSync } from 'node:fs';
-import { readFile, mkdir, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, realpath, unlink, writeFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { loadConfig } from '../config.js';
 import { bootstrapKicadProject } from '../kicad/bootstrap.js';
 import { exportSvg, runErc } from '../kicad/cli.js';
 import { listSymbols } from '../kicad/sexp.js';
-import { isDirty, commitAll, changedFiles } from '../util/git.js';
+import {
+  changedFiles,
+  commitAll,
+  gitPreflight,
+  isDirty,
+  restore,
+  rewindHeadKeepChanges,
+  snapshot,
+} from '../util/git.js';
 import type { CopperheadConfig } from '../config.js';
 import { checkDrift } from '../memory/drift.js';
 import { runAgentLoop, makeProvider, type BudgetExhaustedStats } from '../agent/loop.js';
@@ -16,7 +24,7 @@ import type { RunMetaInput } from '../agent/runmeta.js';
 import { fmtDuration, fmtTokens, type ProgressRenderer } from '../agent/render.js';
 import { openspecInit } from '../openspec/cli.js';
 import { sweepStaleTempDirs, pruneHistoryDir } from '../util/tmp.js';
-import { assertDiskSpace, DEFAULT_MIN_FREE_BYTES } from '../util/preflight.js';
+import { assertDiskSpace, DEFAULT_MIN_FREE_BYTES, PreflightError } from '../util/preflight.js';
 import { runCheck } from './check.js';
 import { emitCreateJlcpcbBom } from './export.js';
 
@@ -144,6 +152,7 @@ export interface CreateOptions {
   briefPath: string;
   model: string;
   interactive?: boolean;
+  keepOnFail?: boolean;
   /** Forwarded to each stage's run (attended continue-on-exhaustion prompt). */
   onBudgetExhausted?: (stats: BudgetExhaustedStats) => Promise<number>;
   log: (s: string) => void;
@@ -197,22 +206,35 @@ function isManagedPath(f: string, config: CopperheadConfig): boolean {
  * unrelated working changes are never swept into a copperhead commit; if any
  * foreign path is dirty, leave the whole thing for the human and say so.
  */
-async function commitResumedStage(opts: CreateOptions, config: CopperheadConfig, stageName: string): Promise<void> {
-  if (!(await isDirty(opts.repoRoot))) return;
+async function commitResumedStage(
+  opts: CreateOptions,
+  config: CopperheadConfig,
+  stageName: string,
+  briefGitPath: string | null,
+): Promise<boolean> {
+  if (!(await isDirty(opts.repoRoot))) return false;
   const dirty = await changedFiles(opts.repoRoot, 'HEAD');
-  const foreign = dirty.filter((f) => !isManagedPath(f, config));
+  const committable = dirty.filter((f) => f !== briefGitPath);
+  if (!committable.length) return false;
+  const foreign = committable.filter((f) => !isManagedPath(f, config));
   if (foreign.length) {
     opts.log(
       `stage ${stageName}: already-complete work is uncommitted, but the tree also has non-copperhead changes ` +
         `(${foreign.slice(0, 3).join(', ')}${foreign.length > 3 ? ', …' : ''}); leaving it uncommitted so nothing of yours is swept up`,
     );
-    return;
+    return false;
   }
   try {
-    const sha = await commitAll(opts.repoRoot, `copperhead: resume — commit completed stage ${stageName}`);
+    const sha = await commitAll(
+      opts.repoRoot,
+      `copperhead: resume — commit completed stage ${stageName}`,
+      briefGitPath ? { excludePaths: [briefGitPath] } : {},
+    );
     opts.log(`stage ${stageName}: committed already-complete work ${sha.slice(0, 10)} so a later rollback cannot wipe it (2.4)`);
+    return true;
   } catch (err) {
     opts.log(`stage ${stageName}: could not commit resumed work (${(err as Error).message})`);
+    return false;
   }
 }
 
@@ -320,6 +342,7 @@ function resumeCommand(opts: CreateOptions): string {
   // path would break when resumed from a different directory (F6).
   parts.push('create', '--brief', shellQuote(path.resolve(opts.briefPath)), '--model', shellQuote(opts.model));
   if (opts.interactive) parts.push('--interactive');
+  if (opts.keepOnFail) parts.push('--keep-on-fail');
   return parts.join(' ');
 }
 
@@ -516,11 +539,67 @@ async function writeRunReport(opts: CreateOptions, stageCosts: StageCost[]): Pro
 }
 
 export async function runCreate(opts: CreateOptions): Promise<{ ok: boolean; completed: string[] }> {
-  const brief = await readFile(path.resolve(opts.briefPath), 'utf8');
+  // Validate the repository before examining any stage-completion marker.
+  await gitPreflight(opts.repoRoot, { allowDirty: true });
+
+  const repoRoot = await realpath(opts.repoRoot);
+  const keptFailureMarker = path.join(repoRoot, '.copperhead', 'create-kept-failure.json');
+  const briefPath = await realpath(path.resolve(opts.briefPath));
+  const briefRelative = path.relative(repoRoot, briefPath);
+  const briefIsInRepo =
+    briefRelative !== '' &&
+    briefRelative !== '..' &&
+    !briefRelative.startsWith(`..${path.sep}`) &&
+    !path.isAbsolute(briefRelative);
+  const entryChanges = await changedFiles(opts.repoRoot, 'HEAD');
+  const config = await loadConfig(opts.repoRoot);
+  const briefGitPath = briefIsInRepo ? briefRelative.split(path.sep).join('/') : null;
+  const normalizedBrief = path.normalize(briefRelative);
+  const otherEntryChanges = entryChanges.filter(
+    (changed) => !briefIsInRepo || path.normalize(changed) !== normalizedBrief,
+  );
+  const foreignEntryChanges = otherEntryChanges.filter((changed) => !isManagedPath(changed, config));
+  const rejectedEntryChanges = existsSync(keptFailureMarker) ? otherEntryChanges : foreignEntryChanges;
+
+  // Managed pipeline artifacts can be resumed through their stage-specific
+  // completion gates. Foreign user work is never swept into that flow. A
+  // --keep-on-fail marker is stricter: it says every retained edit is known
+  // unverified debug output, so refuse all non-brief dirt before isComplete().
+  if (rejectedEntryChanges.length > 0) {
+    throw new PreflightError(
+      `working tree has unsafe uncommitted paths besides the create brief; copperhead create refuses to infer completed stages from uncommitted state: ${rejectedEntryChanges.join(', ')}`,
+      'partial output from a kept failed stage can satisfy a file-existence completion check and make create skip unverified work',
+      [
+        'inspect the failed files and .copperhead/runs summary',
+        'run the printed recovery command (or commit/stash intentional work)',
+        `rerun copperhead create when git status is clean except for ${briefIsInRepo ? briefRelative : 'the resolved --brief file'}`,
+      ],
+    );
+  }
+  if (existsSync(keptFailureMarker)) {
+    // Recovery has returned the tree to a safe state (the brief may remain as
+    // the sole uncommitted input), so the stale refusal marker is no longer
+    // needed.
+    await unlink(keptFailureMarker);
+  }
+  const briefWasEntryChange =
+    briefIsInRepo && entryChanges.some((changed) => path.normalize(changed) === normalizedBrief);
+  const brief = await readFile(briefPath, 'utf8');
+  let restorePoint = await snapshot(opts.repoRoot);
+
+  const restoreCommandEntry = async (): Promise<void> => {
+    await restore(opts.repoRoot, restorePoint);
+    if (briefWasEntryChange && !existsSync(briefPath)) {
+      // git stash create omits untracked files. Recreate the exact input after
+      // rollback so a first-stage failure never deletes an in-repo brief.
+      await mkdir(path.dirname(briefPath), { recursive: true });
+      await writeFile(briefPath, brief, 'utf8');
+    }
+  };
+
   // Hashed from the content already in hand: a brief edited mid-pipeline shows
   // up as a different sha256 in the next stage's metadata (AC-8.1).
   const briefMeta = { path: opts.briefPath, sha256: createHash('sha256').update(brief).digest('hex') };
-  const config = await loadConfig(opts.repoRoot);
   // Fail fast on a nearly-full disk (4.1): a create run writes fab outputs and
   // KiCad local history and can otherwise fill the disk mid-stage, failing with
   // an opaque ENOSPC only after doing expensive work. Threshold overridable via
@@ -554,10 +633,11 @@ export async function runCreate(opts: CreateOptions): Promise<{ ok: boolean; com
     }
     if (await stage.isComplete(opts.repoRoot, config.docs)) {
       opts.log(`stage ${stage.name}: already complete (resuming past it)`);
-      await commitResumedStage(opts, config, stage.name);
+      const committed = await commitResumedStage(opts, config, stage.name, briefGitPath);
       completed.push(stage.name);
       stageCosts.push({ name: stage.name, resumed: true, wallMs: 0, turns: 0, tokensIn: 0, tokensOut: 0, cacheHits: 0 });
       await emitJlcpcbAfterOutputs(stage.name, opts);
+      if (committed) restorePoint = await snapshot(opts.repoRoot);
       continue;
     }
     // Auto-recovery loop: run the stage, and if it fails or ends without meeting
@@ -571,6 +651,7 @@ export async function runCreate(opts: CreateOptions): Promise<{ ok: boolean; com
     let guidance = '';
     let stageDone = false;
     let stageTranscriptDir = '';
+    let finalOutcome: Awaited<ReturnType<typeof runAgentLoop>>['outcome'] | undefined;
     // Cost accumulates across all attempts of the stage, so a stage that took a
     // retry to complete shows its true total in the summary (5.2).
     const stageStart = Date.now();
@@ -597,6 +678,7 @@ export async function runCreate(opts: CreateOptions): Promise<{ ok: boolean; com
           : basePrompt,
         interactive: opts.interactive ?? false,
         allowDirty: true, // stages build on each other's uncommitted state within the pipeline
+        keepOnFail: opts.keepOnFail ?? false,
         ...(stageTurns !== undefined ? { maxTurns: stageTurns } : {}),
         ...(opts.onBudgetExhausted ? { onBudgetExhausted: opts.onBudgetExhausted } : {}),
         log: opts.log,
@@ -608,6 +690,7 @@ export async function runCreate(opts: CreateOptions): Promise<{ ok: boolean; com
           brief: briefMeta,
         },
       });
+      finalOutcome = res.outcome;
 
       // Fold this attempt's cost in. Defensive reads: a run that dies very early
       // (or a scripted test double) may omit stats — never let telemetry throw.
@@ -668,6 +751,31 @@ export async function runCreate(opts: CreateOptions): Promise<{ ok: boolean; com
     stageCosts.push(cost);
 
     if (!stageDone) {
+      const completionContractFailed = finalOutcome === 'success';
+      const keptFailure =
+        (opts.keepOnFail ?? false) && (finalOutcome === 'failure' || completionContractFailed);
+      if (keptFailure) {
+        // A successful attempt may have committed before the outer stage
+        // contract failed, even when the final attempt itself failed. Rewind
+        // every attempt from this stage while retaining its index and files.
+        await rewindHeadKeepChanges(opts.repoRoot, restorePoint.head);
+      } else if (!keptFailure) {
+        // Restore the last known-complete pipeline state. Before any stage has
+        // completed this is the command-entry snapshot, which also removes
+        // OpenSpec bootstrap dirt while preserving an in-repo brief input.
+        await restoreCommandEntry();
+      }
+      if (keptFailure) {
+        await mkdir(path.dirname(keptFailureMarker), { recursive: true });
+        await writeFile(
+          keptFailureMarker,
+          JSON.stringify({ stage: stage.name, transcriptDir: stageTranscriptDir }, null, 2) + '\n',
+          'utf8',
+        );
+        opts.log(
+          `stage ${stage.name} did not complete (${finalOutcome}); recover the tree before rerunning create because partial output may look complete`,
+        );
+      }
       logResumePoint(opts, stage, i);
       printCostTable(opts, stageCosts);
       await writeRunReport(opts, stageCosts);
@@ -677,6 +785,9 @@ export async function runCreate(opts: CreateOptions): Promise<{ ok: boolean; com
     await renderStageArtifacts(opts, stage.name, stageTranscriptDir);
     await emitJlcpcbAfterOutputs(stage.name, opts);
     logCumulative(opts, stageCosts);
+    // Later failures roll back to this verified, completed stage instead of
+    // erasing successful work from earlier in the same create invocation.
+    restorePoint = await snapshot(opts.repoRoot);
   }
 
   const check = await runCheck(opts.repoRoot, opts.log);

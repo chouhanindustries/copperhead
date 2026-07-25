@@ -15,6 +15,10 @@ The agent cannot touch a KiCad file until a validated OpenSpec proposal for the 
 
 No file mutation counts as done until `kicad-cli` ERC passes, plus DRC if the board changed. On failure the agent reads the normalized report back and repairs, up to `maxRepairCycles` attempts. If it still cannot get clean, the run rolls back to the git snapshot taken before the first edit.
 
+For debugging, `do` and `create` accept `--keep-on-fail`. It skips only restore and clean after an **unrecoverable failure**, leaving the agent's exact output for inspection. Constraint/budget refusals still restore the snapshot. The run still fails, creates no commit, and retains every unmet obligation. Copperhead prints the pre-run HEAD, the stash object too when `do --allow-dirty` was used, and a shell-safe reset/clean/stash-apply sequence that first unstages `.copperhead/runs` so a failed commit cannot delete its audit trail; `summary.md` records that rollback was skipped.
+
+Recover before rerunning a kept failure. `do` refuses the dirty tree unless you explicitly choose `--allow-dirty`. `create` rejects foreign user changes, while recognized Copperhead-managed artifacts from an interrupted run may resume only after their stage completion gates pass. Its resolved `--brief` is valid uncommitted input and is preserved across first-stage rollback. A `--keep-on-fail` stage records that its retained output is known-unverified; while that marker exists, `create` rejects every dirty path other than the brief before checking stage completion. `--dry-run` and `--keep-on-fail` are mutually exclusive.
+
 Spec-gated in, verification-gated out: the design cannot drift from its requirements, because drift is a build failure.
 
 ## The sync-obligations ledger

@@ -169,7 +169,7 @@ brief.md
   → DEVPLAN.md
 ```
 
-Each stage is a `do`-loop run with a stage-specific prompt. State lives in the repo (docs + files), so `create` is resumable: kill it at any stage, re-run, it continues from the docs.
+Each stage is a `do`-loop run with a stage-specific prompt. State lives in the repo (docs + files), so `create` is resumable: kill it after a completed stage, re-run, and it continues from the docs. At command entry, foreign uncommitted paths are refused while recognized Copperhead-managed stage artifacts may enter the resume path and must pass their stage-specific completion gate before they can be committed. The resolved `--brief` file may also be uncommitted because it is pipeline input, not inferred state; Copperhead excludes it from automatic resumed-stage commits and preserves it across first-stage rollback. A `--keep-on-fail` stage records that its retained edits are known-unverified; while that marker exists, every dirty path other than the brief is refused before completion detection.
 
 ### First-draft layout (explicitly non-optimal, explicitly useful)
 
@@ -235,14 +235,14 @@ This kills the last "docs drift" failure mode: requirements (openspec) → budge
 ## 3. CLI surface (Phase 1)
 
 ```
-copperhead create --brief brief.md   # Mode A: full pipeline (§2.5)
+copperhead create --brief brief.md [--keep-on-fail]   # Mode A: full pipeline (§2.5)
 copperhead init [--path hardware/]
     Detect .kicad_sch/.kicad_pcb, parse symbols/footprints/nets,
     generate docs/ skeleton pre-filled with the real BOM and pinout
     extracted from the schematic. Idempotent; never overwrites
     hand-edited docs without --force.
 
-copperhead do "<change request>" [--model codex|gpt-5|claude] [--max-turns N]
+copperhead do "<change request>" [--model codex|gpt-5|claude] [--max-turns N] [--keep-on-fail]
     The core loop. See §4.
 
 copperhead check          (alias: copperhead verify)
@@ -292,7 +292,7 @@ It's a loop, and it looks a lot like pair-programming, except the codebase is a 
 2. **Plan.** Agent states, in one short block: what will change, which files are affected, which constraints are at risk (e.g. sleep-current budget).
 3. **Edit.** Agent uses tools to modify KiCad files and docs. Edits to `.kicad_sch`/`.kicad_pcb` are **text edits on the s-expression source** (search/replace with context anchors) — no full-file regeneration, ever. Same net names and refdes everywhere.
 4. **Verify.** Agent runs `run_erc` (always) and `run_drc` (if the .kicad_pcb changed). Parses violations.
-5. **Repair.** If violations: fix and re-run, up to `maxRepairCycles` (default 5). If still failing: revert to the pre-run snapshot and report failure with the violation list.
+5. **Repair.** If violations: fix and re-run, up to `maxRepairCycles` (default 5). If still failing: preserve the failed work in a named stash, revert to the pre-run snapshot, and report failure with the violation list. With the explicit debugging flag `--keep-on-fail`, skip failed-work stashing plus restore/clean, leave the failed index and tree for inspection, and print the snapshot refs plus a shell-safe recovery command that preserves `.copperhead/runs`; the run still fails and cannot commit. Constraint refusals still restore.
 6. **Propagate.** Agent runs `check_drift`; any doc that references a changed value/part/pin must be updated in the same run.
 7. **Rationale.** Every non-trivial decision gets a one-line "why" written into the relevant doc.
 8. **Commit.** `git commit` with a structured message (`copperhead: <request>\n\n<summary of edits + verification result>`). Requires clean working tree at start (§7 safety).
@@ -342,7 +342,7 @@ interface Provider {
 
 - `maxTurns` default 40; `maxRepairCycles` 5; per-run token budget logged
 - On turn-budget exhaustion in an attended (TTY) run: print run stats (turns, files touched, open obligations, token usage) and ask whether to continue with more turns; declining, or a non-TTY run, fails as below. The extension can repeat; each is a fresh decision with fresh numbers.
-- On any unrecoverable failure: preserve the touched work as a git stash entry named `copperhead failed run <run-id>`, restore the snapshot, print the stash ref and transcript path, exit 1
+- On any unrecoverable failure: by default preserve touched work as a git stash entry named `copperhead failed run <run-id>`, restore the snapshot, print the stash ref and transcript path, and exit 1. With `--keep-on-fail`, leave the failed tree dirty in place instead, record the skipped rollback in `summary.md`, and print the pre-run HEAD (plus the `git stash create` object for an `--allow-dirty` start) and a manual audit-preserving reset/clean/stash-apply command; exit status and commit gating are unchanged. `--dry-run` and `--keep-on-fail` are mutually exclusive, and refusals restore regardless of the flag.
 - Rate-limit (429): exponential backoff ×3, then fail over to the other provider if a key exists
 - The Anthropic provider marks `cache_control` breakpoints (system prompt, last tool, last message block) so the resent conversation prefix is cached; reported input tokens include cache reads/writes
 
@@ -380,7 +380,7 @@ Acceptance: type "add a second RGB LED on an RTC-capable pin" → watch schemati
 
 ## 7. Safety rails
 
-- Refuse to run `do` on a dirty git tree (offer `--allow-dirty` with snapshot via `git stash create`)
+- Refuse to run `do` on a dirty git tree (offer `--allow-dirty` with snapshot via `git stash create`). At `create` entry, reject foreign user changes; recognized Copperhead-managed stage artifacts may resume only through their completion gates, and an uncommitted resolved `--brief` remains valid input. `--keep-on-fail` does not weaken these preflights: a later `do` refuses intentionally preserved state unless `--allow-dirty` is supplied, while the retained-failure marker makes `create` require recovery until only its brief may remain uncommitted.
 - All file tools sandboxed to repo root; no network tools in Phase 1
 - `.env` in `.gitignore` from first commit; keys only via env vars — never written to any file, transcript, or commit
 - Transcripts in `.copperhead/runs/` redact anything matching `sk-[A-Za-z0-9_-]+`
@@ -429,6 +429,7 @@ Format: Given / When / Then. "Fixture" = the open-telegraph repo (or the tiny te
 - **AC-3.9 (dry run)** `--dry-run` prints the proposed diff and writes nothing.
 - **AC-3.10 (provider parity)** AC-3.1 passes with `--model codex`, `--model gpt-5`, `--model claude`, and `--model claude-code` when each provider is configured.
 - **AC-3.11 (saved login)** With `--model claude-code`, a logged-in Claude Code (`CLAUDE_CODE_OAUTH_TOKEN` set) and **no** `ANTHROPIC_API_KEY`/`OPENAI_API_KEY`, a `do` run completes through the normal verify/commit path; copperhead reads no credential store; and no key material appears in the transcript, summary, or tree (AC-4.1 holds). A missing optional dependency or an unauthenticated install fails through the rollback path with an actionable error, not a raw stack trace.
+- **AC-3.12 (keep failed tree for debugging)** Given a run started with `--keep-on-fail`, when any unrecoverable failure path is reached, then no commit is created, the agent's failed index/files remain in place, the CLI prominently reports the pre-run snapshot and an audit-preserving manual recovery command, `filesTouched` reflects the actual on-disk diff, and `summary.md` records that rollback was skipped. This includes a `create` agent run that reports success but fails the stage's stronger completion contract: its commit is rewound while its staged files are retained. Without the flag, AC-3.6 plus named-stash preservation remains unchanged and `create` restores the last completed pipeline state. With `--allow-dirty`, the warning and summary also name the stash snapshot and the recovery command reapplies it. Constraint refusals still restore; `--dry-run --keep-on-fail` is rejected before provider execution. A `create` rerun against the kept dirty state refuses before stage-completion detection.
 
 ### AC-4 · Safety
 

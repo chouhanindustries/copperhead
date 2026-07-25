@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import path from 'node:path';
-import { mkdir, writeFile } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { execa } from 'execa';
 import type { RunOptions, RunResult } from '../src/agent/loop.js';
 import { tempFixtureRepo } from './helpers.js';
@@ -57,6 +58,16 @@ async function writeStageDoc(repoRoot: string, request: string): Promise<void> {
   if (request.includes('spec-seed')) await writeFile(path.join(docs, 'SPEC.md'), '# s\n\n## Budgets\n', 'utf8');
   else if (request.includes('architecture')) await writeFile(path.join(docs, 'SUBSYSTEMS.md'), '# s\n', 'utf8');
   else if (request.includes('part-selection')) await writeFile(path.join(docs, 'BOM.md'), '# b\n', 'utf8');
+}
+
+/** Simulate runAgentLoop's success path committing output that still fails the
+ * create stage's stronger completion contract. */
+async function commitIncompleteSpec(repoRoot: string): Promise<void> {
+  const docs = path.join(repoRoot, 'docs');
+  await mkdir(docs, { recursive: true });
+  await writeFile(path.join(docs, 'SPEC.md'), '# incomplete\n', 'utf8');
+  await execa('git', ['add', '-A'], { cwd: repoRoot });
+  await execa('git', ['commit', '-q', '-m', 'mock: incomplete spec stage'], { cwd: repoRoot });
 }
 
 // diagnose() constructs a provider (via makeProvider) before the mocked
@@ -134,6 +145,89 @@ describe('create pipeline resilience (review F3)', () => {
     }
   });
 
+  it('rolls back a committed agent success when the stage completion contract remains unmet', async () => {
+    const { repo, cleanup } = await tempFixtureRepo();
+    try {
+      const briefPath = await seedRepo(repo);
+      const { stdout: beforeHead } = await execa('git', ['rev-parse', 'HEAD'], { cwd: repo });
+      mockRunAgentLoop.mockImplementation(async (opts) => {
+        if (opts.request.includes('spec-seed')) await commitIncompleteSpec(opts.repoRoot);
+        return ok();
+      });
+
+      const res = await runCreate({ repoRoot: repo, briefPath, model: 'gpt-5', log: () => {} });
+
+      expect(res.ok).toBe(false);
+      const { stdout: afterHead } = await execa('git', ['rev-parse', 'HEAD'], { cwd: repo });
+      expect(afterHead).toBe(beforeHead);
+      expect(existsSync(path.join(repo, 'docs', 'SPEC.md'))).toBe(false);
+      expect(await readFile(briefPath, 'utf8')).toBe('# tiny\n');
+      expect(existsSync(path.join(repo, '.copperhead', 'create-kept-failure.json'))).toBe(false);
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it('preserves earlier completed stage commits when a later completion contract fails', async () => {
+    const { repo, cleanup } = await tempFixtureRepo();
+    try {
+      const briefPath = await seedRepo(repo);
+      let lastCompletedHead = '';
+      mockRunAgentLoop.mockImplementation(async (opts) => {
+        await writeStageDoc(opts.repoRoot, opts.request);
+        await execa('git', ['add', '-A'], { cwd: opts.repoRoot });
+        await execa('git', ['commit', '-q', '-m', `mock: ${opts.request}`], { cwd: opts.repoRoot });
+        if (opts.request.includes('part-selection')) {
+          ({ stdout: lastCompletedHead } = await execa('git', ['rev-parse', 'HEAD'], { cwd: opts.repoRoot }));
+        }
+        return ok();
+      });
+
+      const res = await runCreate({ repoRoot: repo, briefPath, model: 'gpt-5', log: () => {} });
+
+      expect(res.ok).toBe(false);
+      expect(res.completed).toEqual(['spec-seed', 'architecture', 'part-selection']);
+      const { stdout: afterHead } = await execa('git', ['rev-parse', 'HEAD'], { cwd: repo });
+      expect(afterHead).toBe(lastCompletedHead);
+      expect(existsSync(path.join(repo, 'docs', 'SPEC.md'))).toBe(true);
+      expect(existsSync(path.join(repo, 'docs', 'SUBSYSTEMS.md'))).toBe(true);
+      expect(existsSync(path.join(repo, 'docs', 'BOM.md'))).toBe(true);
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it('retains but uncommits an incomplete agent success with keep-on-fail', async () => {
+    const { repo, cleanup } = await tempFixtureRepo();
+    try {
+      const briefPath = await seedRepo(repo);
+      const { stdout: beforeHead } = await execa('git', ['rev-parse', 'HEAD'], { cwd: repo });
+      mockRunAgentLoop.mockImplementation(async (opts) => {
+        if (opts.request.includes('spec-seed')) await commitIncompleteSpec(opts.repoRoot);
+        return ok();
+      });
+
+      const res = await runCreate({
+        repoRoot: repo,
+        briefPath,
+        model: 'gpt-5',
+        keepOnFail: true,
+        log: () => {},
+      });
+
+      expect(res.ok).toBe(false);
+      const { stdout: afterHead } = await execa('git', ['rev-parse', 'HEAD'], { cwd: repo });
+      expect(afterHead).toBe(beforeHead);
+      expect(await readFile(path.join(repo, 'docs', 'SPEC.md'), 'utf8')).toBe('# incomplete\n');
+      const marker = JSON.parse(
+        await readFile(path.join(repo, '.copperhead', 'create-kept-failure.json'), 'utf8'),
+      ) as { stage: string };
+      expect(marker.stage).toBe('spec-seed');
+    } finally {
+      await cleanup();
+    }
+  });
+
   it('commitResumedStage commits an already-complete, managed-only dirty tree so a later rollback cannot wipe it', async () => {
     const { repo, cleanup } = await tempFixtureRepo();
     try {
@@ -162,7 +256,45 @@ describe('create pipeline resilience (review F3)', () => {
     }
   });
 
-  it('commitResumedStage refuses to commit when the dirty tree also holds a foreign (non-copperhead) change', async () => {
+  it('excludes an uncommitted brief under a managed directory from resumed-stage commits', async () => {
+    const { repo, cleanup } = await tempFixtureRepo();
+    try {
+      await mkdir(path.join(repo, '.copperhead'), { recursive: true });
+      const docs = path.join(repo, 'docs');
+      await mkdir(docs, { recursive: true });
+      const briefPath = path.join(docs, 'brief.md');
+      await writeFile(briefPath, '# keep me uncommitted\n', 'utf8');
+      await writeFile(path.join(docs, 'SPEC.md'), '# s\n\n## Budgets\n', 'utf8');
+      await writeFile(path.join(docs, 'SUBSYSTEMS.md'), '# s\n', 'utf8');
+      await writeFile(path.join(docs, 'BOM.md'), '# b\n', 'utf8');
+
+      mockRunAgentLoop.mockImplementation(async () => ok()); // schematic still halts
+
+      const lines: string[] = [];
+      await runCreate({ repoRoot: repo, briefPath, model: 'gpt-5', log: (s) => lines.push(s) });
+
+      expect(lines.join('\n')).toContain('committed already-complete work');
+      const { stdout: trackedDocs } = await execa(
+        'git',
+        ['ls-files', 'docs/SPEC.md', 'docs/SUBSYSTEMS.md', 'docs/BOM.md'],
+        { cwd: repo },
+      );
+      expect(trackedDocs.split('\n').sort()).toEqual(
+        ['docs/BOM.md', 'docs/SPEC.md', 'docs/SUBSYSTEMS.md'].sort(),
+      );
+      const { stdout: briefStatus } = await execa(
+        'git',
+        ['status', '--porcelain', '--', 'docs/brief.md'],
+        { cwd: repo },
+      );
+      expect(briefStatus).toBe('?? docs/brief.md');
+      expect(await readFile(briefPath, 'utf8')).toBe('# keep me uncommitted\n');
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it('create preflight refuses a dirty tree that holds a foreign (non-copperhead) change', async () => {
     const { repo, cleanup } = await tempFixtureRepo();
     try {
       const briefPath = await seedRepo(repo);
@@ -175,13 +307,10 @@ describe('create pipeline resilience (review F3)', () => {
       // A user's own uncommitted file, unrelated to copperhead's managed paths.
       await writeFile(path.join(repo, 'my-notes.txt'), 'do not touch\n', 'utf8');
 
-      mockRunAgentLoop.mockImplementation(async () => ok());
-
-      const lines: string[] = [];
-      await runCreate({ repoRoot: repo, briefPath, model: 'gpt-5', log: (s) => lines.push(s) });
-
-      const out = lines.join('\n');
-      expect(out).toContain('leaving it uncommitted');
+      await expect(
+        runCreate({ repoRoot: repo, briefPath, model: 'gpt-5', log: () => {} }),
+      ).rejects.toThrow(/create refuses to infer completed stages from uncommitted state/);
+      expect(mockRunAgentLoop).not.toHaveBeenCalled();
       const { stdout } = await execa('git', ['log', '--oneline'], { cwd: repo });
       expect(stdout).not.toMatch(/resume — commit completed stage/);
     } finally {
