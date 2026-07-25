@@ -7,9 +7,10 @@ import { existsSync } from 'node:fs';
 const customTmpDir = vi.hoisted(() => {
   // Use a sub-directory in the OS temp directory to isolate this test's temp files
   // from concurrent sweeps performed by other CLI tests.
-  const os = require('node:os');
-  const path = require('node:path');
-  return path.join(os.tmpdir(), `copperhead-isolated-sweep-${process.pid}`);
+  const isWin = process.platform === 'win32';
+  const tmp = process.env.TEMP || process.env.TMP || (isWin ? 'C:\\Windows\\Temp' : '/tmp');
+  const sep = isWin ? '\\' : '/';
+  return `${tmp}${sep}copperhead-isolated-sweep-${process.pid}`;
 });
 
 vi.mock('node:os', async (importOriginal) => {
