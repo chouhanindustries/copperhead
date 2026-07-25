@@ -97,8 +97,8 @@ describe('create pipeline per-stage turn budgets (AC-15.18, AC-15.19)', () => {
       const normalizedOut = out.replace(/\\/g, '/');
 
       expect(out).toContain('stopped at stage 4/8 (schematic)');
-      // Fully relaxed regex supporting optional single quotes around paths and arguments:
-      expect(normalizedOut).toMatch(/copperhead.*create.*--brief\s+['"]?[\S/\\]+brief\.md['"]?.*--model\s+gpt-5/);
+      // Fully relaxed regex supporting optional single quotes around paths with spaces and arguments:
+      expect(normalizedOut).toMatch(/copperhead.*create.*--brief\s+['"]?[^'"]*brief\.md['"]?.*--model\s+gpt-5/);
       expect(out).toContain('resumes at schematic');
 
       expect(out).toContain('Per-stage cost summary');
