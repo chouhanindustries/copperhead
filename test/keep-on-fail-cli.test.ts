@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { execa } from 'execa';
@@ -114,6 +114,30 @@ describe('--keep-on-fail CLI wiring', () => {
     } finally {
       await cleanup();
       await rm(briefDir, { recursive: true, force: true });
+    }
+  });
+
+  it('accepts an untracked in-repo brief and preserves it across first-stage rollback', async () => {
+    const { repo, cleanup } = await tempFixtureRepo();
+    try {
+      const brief = path.join(repo, 'brief.md');
+      const contents = 'A tiny in-repo board brief\n';
+      await writeFile(brief, contents, 'utf8');
+
+      const result = await runCreate({
+        repoRoot: repo,
+        briefPath: brief,
+        model: 'gpt-5',
+        log: () => {},
+      });
+
+      expect(result.ok).toBe(false);
+      expect(runAgentLoop).toHaveBeenCalled();
+      expect(await readFile(brief, 'utf8')).toBe(contents);
+      const { stdout: status } = await execa('git', ['status', '--porcelain'], { cwd: repo });
+      expect(status).toBe('?? brief.md');
+    } finally {
+      await cleanup();
     }
   });
 });

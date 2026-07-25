@@ -1,6 +1,6 @@
 import path from 'node:path';
 import { existsSync } from 'node:fs';
-import { readFile } from 'node:fs/promises';
+import { mkdir, readFile, realpath, writeFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { loadConfig } from '../config.js';
 import { listSymbols } from '../kicad/sexp.js';
@@ -10,7 +10,7 @@ import type { RunMetaInput } from '../agent/runmeta.js';
 import type { ProgressRenderer } from '../agent/render.js';
 import { openspecInit } from '../openspec/cli.js';
 import { runCheck } from './check.js';
-import { gitPreflight, isDirty, restore, snapshot } from '../util/git.js';
+import { changedFiles, gitPreflight, restore, snapshot } from '../util/git.js';
 import { PreflightError } from '../util/preflight.js';
 
 /**
@@ -130,19 +130,51 @@ export async function runCreate(opts: CreateOptions): Promise<{ ok: boolean; com
   // invocation (notably openspec init). A dirty tree at command entry may be
   // a kept, unverified stage whose partial marker would poison isComplete().
   await gitPreflight(opts.repoRoot, { allowDirty: true });
-  if (await isDirty(opts.repoRoot)) {
+
+  const repoRoot = await realpath(opts.repoRoot);
+  const briefPath = await realpath(path.resolve(opts.briefPath));
+  const briefRelative = path.relative(repoRoot, briefPath);
+  const briefIsInRepo =
+    briefRelative !== '' &&
+    briefRelative !== '..' &&
+    !briefRelative.startsWith(`..${path.sep}`) &&
+    !path.isAbsolute(briefRelative);
+  const entryChanges = await changedFiles(opts.repoRoot, 'HEAD');
+  const normalizedBrief = path.normalize(briefRelative);
+  const otherEntryChanges = entryChanges.filter(
+    (changed) => !briefIsInRepo || path.normalize(changed) !== normalizedBrief,
+  );
+
+  // The brief is an input, not resumable pipeline state. Permit it to be the
+  // sole uncommitted path so the natural `create --brief brief.md` workflow
+  // works, while still refusing any partial output that could poison a stage
+  // completion marker.
+  if (otherEntryChanges.length > 0) {
     throw new PreflightError(
-      'working tree is dirty; copperhead create refuses to infer completed stages from uncommitted state',
+      `working tree has uncommitted paths besides the create brief; copperhead create refuses to infer completed stages from uncommitted state: ${otherEntryChanges.join(', ')}`,
       'partial output from a kept failed stage can satisfy a file-existence completion check and make create skip unverified work',
       [
         'inspect the failed files and .copperhead/runs summary',
         'run the printed recovery command (or commit/stash intentional work)',
-        'rerun copperhead create only after git status is clean',
+        `rerun copperhead create when git status is clean except for ${briefIsInRepo ? briefRelative : 'the resolved --brief file'}`,
       ],
     );
   }
+  const briefWasEntryChange =
+    briefIsInRepo && entryChanges.some((changed) => path.normalize(changed) === normalizedBrief);
+  const brief = await readFile(briefPath, 'utf8');
   const pipelineStart = await snapshot(opts.repoRoot);
-  const brief = await readFile(path.resolve(opts.briefPath), 'utf8');
+
+  const restoreCommandEntry = async (): Promise<void> => {
+    await restore(opts.repoRoot, pipelineStart);
+    if (briefWasEntryChange) {
+      // git stash create omits untracked files. Recreate the exact input after
+      // rollback so a first-stage failure never deletes an in-repo brief.
+      await mkdir(path.dirname(briefPath), { recursive: true });
+      await writeFile(briefPath, brief, 'utf8');
+    }
+  };
+
   // Hashed from the content already in hand: a brief edited mid-pipeline shows
   // up as a different sha256 in the next stage's metadata (AC-8.1).
   const briefMeta = { path: opts.briefPath, sha256: createHash('sha256').update(brief).digest('hex') };
@@ -181,11 +213,10 @@ export async function runCreate(opts: CreateOptions): Promise<{ ok: boolean; com
     if (res.outcome !== 'success') {
       const keptFailure = (opts.keepOnFail ?? false) && res.outcome === 'failure';
       if (!keptFailure && completedDuringThisRun === 0) {
-        // openspecInit can dirty an otherwise-clean repo before the first
-        // stage snapshot. If that first stage rolls back/refuses, also restore
-        // the command-entry snapshot so ordinary create resumability stays
-        // clean and the new entry preflight does not reject its own scaffold.
-        await restore(opts.repoRoot, pipelineStart);
+        // The stage rollback returns to a snapshot taken after openspecInit,
+        // so it deliberately reapplies bootstrap dirt. Restore the earlier
+        // command-entry snapshot too, while preserving an in-repo brief input.
+        await restoreCommandEntry();
       }
       if (keptFailure) {
         opts.log(

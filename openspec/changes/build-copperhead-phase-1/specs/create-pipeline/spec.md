@@ -25,7 +25,7 @@ Once started, `create` SHALL always finish with the complete output package: gat
 - **THEN** the pipeline stops with a non-zero result, creates no failure commit, leaves that stage's failed tree in place, prints the snapshot refs and manual recovery command, and warns that recovery is required before rerunning
 
 ### Requirement: Resumability from repo state
-Pipeline state SHALL live in the repo (docs + files + gate results), so a killed `create` re-run SHALL continue from the first incomplete stage without redoing completed ones. Before inspecting those completion markers, `create` SHALL require a clean command-entry tree so unverified partial artifacts preserved by `--keep-on-fail` cannot be mistaken for completed stages.
+Pipeline state SHALL live in the repo (docs + files + gate results), so a killed `create` re-run SHALL continue from the first incomplete stage without redoing completed ones. Before inspecting those completion markers, `create` SHALL require a clean command-entry tree except that the resolved `--brief` input may be the sole uncommitted path. It SHALL preserve that brief across a first-stage rollback, while refusing every other dirty path so unverified partial artifacts preserved by `--keep-on-fail` cannot be mistaken for completed stages.
 
 #### Scenario: Resume after kill
 - **WHEN** `create` is killed after the BOM stage and re-run
@@ -35,9 +35,13 @@ Pipeline state SHALL live in the repo (docs + files + gate results), so a killed
 - **WHEN** a kept failed stage leaves a dirty partial marker such as `firmware/` or `outputs/` and `create` is run again
 - **THEN** `create` refuses before evaluating `isComplete`, explains that partial output may be unverified, and requires recovery to a clean tree
 
+#### Scenario: Untracked in-repo brief is valid input
+- **WHEN** the resolved `--brief` file is untracked inside the repository and no other path is dirty
+- **THEN** `create` accepts the input, evaluates stage completion normally, and preserves the exact brief contents if the first stage rolls back
+
 #### Scenario: Ordinary first-stage rollback remains resumable
 - **WHEN** the first stage fails or refuses without keeping failed output after OpenSpec bootstrap dirtied the tree
-- **THEN** `create` restores the clean command-entry snapshot so its next invocation passes the entry preflight
+- **THEN** `create` restores the command-entry snapshot (plus the original brief when it was the allowed untracked input) so its next invocation passes the entry preflight
 
 ### Requirement: First-draft layout with honesty gate
 The layout stage SHALL produce rule-driven placement (real coordinates in the `.kicad_pcb`) and rule-based routing of power/critical nets, with every routed net passing DRC, and SHALL auto-write a `## Draft quality` section in LAYOUT.md listing what is done and what a human or specialist tool should redo.

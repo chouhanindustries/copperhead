@@ -121,7 +121,7 @@ copperhead create --brief brief.md [--model <model>] [--interactive] [--keep-on-
 | `--interactive` | Re-enable the human gates: spec approval, and a pause before export. |
 | `--keep-on-fail` | Debugging only: preserve an unrecoverable failed stage's tree and print the snapshot plus manual recovery command. Recover to a clean tree before rerunning `create`; refusals still roll back. |
 
-`create` requires a clean working tree at command entry so partial output cannot be mistaken for a completed stage. It exits 1 if any stage fails to complete and 0 when the pipeline finishes.
+`create` requires a clean working tree at command entry so partial output cannot be mistaken for a completed stage. The resolved `--brief` file is the one exception: it may be the only uncommitted path, and copperhead preserves it across first-stage rollback. `create` exits 1 if any stage fails to complete and 0 when the pipeline finishes.
 
 ### Pipeline stages
 

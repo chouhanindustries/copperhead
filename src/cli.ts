@@ -1,7 +1,6 @@
 #!/usr/bin/env node
 import { Command } from 'commander';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
 import { createInterface } from 'node:readline/promises';
 import { loadConfig, resolveModel } from './config.js';
@@ -243,9 +242,7 @@ export async function main(argv = process.argv): Promise<void> {
   await program.parseAsync(argv);
 }
 
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  main().catch((err: Error) => {
-    console.error(err.message);
-    process.exit(1);
-  });
-}
+main().catch((err: Error) => {
+  console.error(err.message);
+  process.exit(1);
+});

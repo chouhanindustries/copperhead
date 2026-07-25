@@ -169,7 +169,7 @@ brief.md
   → DEVPLAN.md
 ```
 
-Each stage is a `do`-loop run with a stage-specific prompt. State lives in the repo (docs + files), so `create` is resumable: kill it after a completed stage, re-run, and it continues from the docs. Because file existence participates in completion detection, `create` requires a clean working tree at command entry before it examines stage markers. This prevents partial, unverified files retained by `--keep-on-fail` from making a rerun skip the failed stage; the user must run the printed recovery command first.
+Each stage is a `do`-loop run with a stage-specific prompt. State lives in the repo (docs + files), so `create` is resumable: kill it after a completed stage, re-run, and it continues from the docs. Because file existence participates in completion detection, `create` requires a clean working tree at command entry before it examines stage markers, with one narrow exception: the resolved `--brief` file may itself be the only uncommitted path because it is pipeline input, not inferred state. Copperhead preserves that input across first-stage rollback. Any additional dirty path is refused, preventing partial, unverified files retained by `--keep-on-fail` from making a rerun skip the failed stage.
 
 ### First-draft layout (explicitly non-optimal, explicitly useful)
 
@@ -379,7 +379,7 @@ Acceptance: type "add a second RGB LED on an RTC-capable pin" → watch schemati
 
 ## 7. Safety rails
 
-- Refuse to run `do` on a dirty git tree (offer `--allow-dirty` with snapshot via `git stash create`). Refuse to run `create` on any dirty command-entry tree before stage-completion checks. `--keep-on-fail` does not weaken these preflights: a later `do` refuses intentionally preserved state unless `--allow-dirty` is supplied, while `create` requires recovery to a clean tree.
+- Refuse to run `do` on a dirty git tree (offer `--allow-dirty` with snapshot via `git stash create`). Refuse to run `create` when any command-entry path other than its resolved `--brief` input is dirty, before stage-completion checks. `--keep-on-fail` does not weaken these preflights: a later `do` refuses intentionally preserved state unless `--allow-dirty` is supplied, while `create` requires recovery until only its brief may remain uncommitted.
 - All file tools sandboxed to repo root; no network tools in Phase 1
 - `.env` in `.gitignore` from first commit; keys only via env vars — never written to any file, transcript, or commit
 - Transcripts in `.copperhead/runs/` redact anything matching `sk-[A-Za-z0-9_-]+`
