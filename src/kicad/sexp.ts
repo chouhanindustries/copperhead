@@ -325,3 +325,31 @@ export async function pinNets(rootSch: string): Promise<PinNet[]> {
   }
   return out;
 }
+
+export interface BoardFootprint {
+  ref: string;
+  footprint: string;
+}
+
+export async function listBoardFootprints(boardPath: string): Promise<BoardFootprint[]> {
+  try {
+    const text = await readFile(boardPath, 'utf8');
+    const roots = parseSexp(text);
+    const kicadPcb = roots.find((r) => isList(r) && tag(r) === 'kicad_pcb');
+    if (!kicadPcb || !isList(kicadPcb)) return [];
+
+    const fps = children(kicadPcb, 'footprint');
+    const out: BoardFootprint[] = [];
+    for (const fp of fps) {
+      const fpName = atomAt(fp, 1) ?? '';
+      const ref = property(fp, 'Reference');
+      if (ref) {
+        out.push({ ref, footprint: fpName });
+      }
+    }
+    return out;
+  } catch {
+    return [];
+  }
+}
+

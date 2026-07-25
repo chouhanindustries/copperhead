@@ -34,6 +34,11 @@ export interface CopperheadConfig {
    * init-only / hand-maintained repos.
    */
   origin?: 'create' | 'init';
+  /** Recorded content hash of .kicad_pcb at export time for fab gate output freshness checking. */
+  exportHash?: {
+    boardHash: string;
+    exportedAt: string;
+  };
 }
 
 export const CONFIG_DIR = '.copperhead';
