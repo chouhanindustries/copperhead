@@ -1,9 +1,9 @@
 # End-to-end coverage: findings report
 
 **Bounty:** `copperhead create` end-to-end test + smoke harness ($50)
-**Author:** AI agent via Pusuge
+**Author:** Chirag6722
 **Date:** 2026-07-25
-**PR:** https://github.com/chouhanindustries/copperhead/pull/73
+**PR:** [bounty/create-e2e-pipeline](https://github.com/Chirag6722/copperhead/pull/new/bounty/create-e2e-pipeline)
 
 ## Summary
 
