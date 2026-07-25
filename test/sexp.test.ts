@@ -39,14 +39,17 @@ describe('sexp parser', () => {
     expect(r2.get('2')).toBe('GND');
   });
 });
-import { describe, it, expect } from 'vitest';
-import { addPowerSymbolPrefixes } from '../src/kicad/sexp.js';
+import { describe, it, expect, afterEach } from 'vitest';
+import { addPowerSymbolPrefixes, resetPowerSymbolPrefixes } from '../src/kicad/sexp.js';
 import { listSymbols } from '../src/kicad/sexp.js';
 import path from 'node:path';
 import { tempFixtureRepo } from './helpers.js';
 import { mkdir, writeFile } from 'node:fs/promises';
 
 describe('isPowerSymbol with custom prefixes', () => {
+  afterEach(() => {
+    resetPowerSymbolPrefixes();
+  });
   it('default behavior: power: prefix is recognized', async () => {
     const { repo, cleanup } = await tempFixtureRepo();
     try {

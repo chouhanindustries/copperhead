@@ -237,6 +237,10 @@ export function addPowerSymbolPrefixes(prefixes: string[]): void {
   extraPowerPrefixes.push(...trimmed);
 }
 
+export function resetPowerSymbolPrefixes(): void {
+  extraPowerPrefixes = [];
+}
+
 const isPowerSymbol = (libId: string): boolean =>
   DEFAULT_POWER_PREFIXES.concat(extraPowerPrefixes).some((p) => libId.startsWith(p));
 
