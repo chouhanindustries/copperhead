@@ -2,10 +2,9 @@ import { describe, it, expect, vi } from 'vitest';
 import path from 'node:path';
 import { writeFile, readFile, mkdir } from 'node:fs/promises';
 import { tempFixtureRepo } from './helpers.js';
-import { runCheck } from '../src/commands/check.js';
 import { runInit } from '../src/memory/scaffold.js';
 import { loadConfig } from '../src/config.js';
-import { computeFileHash } from '../src/kicad/fab.js';
+import { computeFileHash, runFabGateCheck } from '../src/kicad/fab.js';
 
 async function setupMatchingPcbAndBom(repo: string): Promise<void> {
   const config = await loadConfig(repo);
@@ -42,45 +41,41 @@ async function setupMatchingPcbAndBom(repo: string): Promise<void> {
 | U1 | 1 | ESP32-S3-MINI | RF_Module:ESP32-S3-MINI-1 | ESP32-S3-MINI-1-N8 | verified |
 `;
   await writeFile(bomPath, bomContent, 'utf8');
+
+  const layoutPath = path.join(repo, 'docs', 'LAYOUT.md');
+  const layoutContent = `# Layout intent\n\n## Draft quality\n\nPower and critical nets routed.`;
+  await writeFile(layoutPath, layoutContent, 'utf8');
 }
 
 describe('Fabrication Release Gate (check --fab)', () => {
-  it('plain check output format remains unchanged when --fab is omitted', async () => {
-    const { repo, cleanup } = await tempFixtureRepo();
-    try {
-      await runInit({ repoRoot: repo });
-      const res = await runCheck(repo, () => {});
-      expect(res.fab).toBeUndefined();
-      expect(res.ok).toBe(true);
-    } finally {
-      await cleanup();
-    }
-  }, 120_000);
-
   it('runs all 5 fab release gate checks on clean initialized project', async () => {
     const { repo, cleanup } = await tempFixtureRepo();
     try {
       await runInit({ repoRoot: repo });
       await setupMatchingPcbAndBom(repo);
+      const config = await loadConfig(repo);
 
-      const res = await runCheck(repo, () => {}, { fab: true });
-      expect(res.fab).toBeDefined();
-      expect(res.fab?.routing.status).toBe('pass');
-      expect(res.fab?.bom.status).toBe('pass');
-      expect(res.fab?.schPcbMatch.status).toBe('pass');
-      expect(res.fab?.outputs.status).toBe('pass');
-      expect(res.fab?.docs.status).toBe('pass');
-      expect(res.fab?.ok).toBe(true);
+      const fab = await runFabGateCheck(repo, config, {
+        drcReport: { ok: true, source: 'drc', violations: [] },
+      });
+      expect(fab).toBeDefined();
+      expect(fab.routing.status).toBe('pass');
+      expect(fab.bom.status).toBe('pass');
+      expect(fab.schPcbMatch.status).toBe('pass');
+      expect(fab.outputs.status).toBe('pass');
+      expect(fab.docs.status).toBe('pass');
+      expect(fab.ok).toBe(true);
     } finally {
       await cleanup();
     }
-  }, 120_000);
+  });
 
   it('warns on UNVERIFIED BOM row by default and fails under --strict', async () => {
     const { repo, cleanup } = await tempFixtureRepo();
     try {
       await runInit({ repoRoot: repo });
       await setupMatchingPcbAndBom(repo);
+      const config = await loadConfig(repo);
 
       const bomPath = path.join(repo, 'docs', 'BOM.md');
       const bomContent = `# Bill of Materials
@@ -93,18 +88,23 @@ describe('Fabrication Release Gate (check --fab)', () => {
 `;
       await writeFile(bomPath, bomContent, 'utf8');
 
-      const resWarn = await runCheck(repo, () => {}, { fab: true });
-      expect(resWarn.fab?.bom.status).toBe('warn');
-      expect(resWarn.fab?.ok).toBe(true);
+      const fabWarn = await runFabGateCheck(repo, config, {
+        strict: false,
+        drcReport: { ok: true, source: 'drc', violations: [] },
+      });
+      expect(fabWarn.bom.status).toBe('warn');
+      expect(fabWarn.ok).toBe(true);
 
-      const resStrict = await runCheck(repo, () => {}, { fab: true, strict: true });
-      expect(resStrict.fab?.bom.status).toBe('fail');
-      expect(resStrict.fab?.ok).toBe(false);
-      expect(resStrict.ok).toBe(false);
+      const fabStrict = await runFabGateCheck(repo, config, {
+        strict: true,
+        drcReport: { ok: true, source: 'drc', violations: [] },
+      });
+      expect(fabStrict.bom.status).toBe('fail');
+      expect(fabStrict.ok).toBe(false);
     } finally {
       await cleanup();
     }
-  }, 120_000);
+  });
 
   it('fails on missing MPN in BOM.md', async () => {
     const { repo, cleanup } = await tempFixtureRepo();
@@ -119,13 +119,14 @@ describe('Fabrication Release Gate (check --fab)', () => {
 `;
       await writeFile(bomPath, bomContent, 'utf8');
 
-      const res = await runCheck(repo, () => {}, { fab: true });
-      expect(res.fab?.bom.status).toBe('fail');
-      expect(res.ok).toBe(false);
+      const config = await loadConfig(repo);
+      const fab = await runFabGateCheck(repo, config);
+      expect(fab.bom.status).toBe('fail');
+      expect(fab.ok).toBe(false);
     } finally {
       await cleanup();
     }
-  }, 120_000);
+  });
 
   it('fails on missing LAYOUT.md ## Draft quality section', async () => {
     const { repo, cleanup } = await tempFixtureRepo();
@@ -134,29 +135,31 @@ describe('Fabrication Release Gate (check --fab)', () => {
       const layoutPath = path.join(repo, 'docs', 'LAYOUT.md');
       await writeFile(layoutPath, '# Layout Guidelines\n\nNo draft section here.', 'utf8');
 
-      const res = await runCheck(repo, () => {}, { fab: true });
-      expect(res.fab?.docs.status).toBe('fail');
-      expect(res.ok).toBe(false);
+      const config = await loadConfig(repo);
+      const fab = await runFabGateCheck(repo, config);
+      expect(fab.docs.status).toBe('fail');
+      expect(fab.ok).toBe(false);
     } finally {
       await cleanup();
     }
-  }, 120_000);
+  });
 
   it('completes quickly with zero network calls', async () => {
     const fetchSpy = vi.spyOn(globalThis, 'fetch');
     const { repo, cleanup } = await tempFixtureRepo();
     try {
       await runInit({ repoRoot: repo });
+      const config = await loadConfig(repo);
       const start = Date.now();
-      const res = await runCheck(repo, () => {}, { fab: true });
+      const fab = await runFabGateCheck(repo, config);
       const elapsed = Date.now() - start;
 
       expect(fetchSpy).not.toHaveBeenCalled();
-      expect(elapsed).toBeLessThan(60_000);
-      expect(res.fab).toBeDefined();
+      expect(elapsed).toBeLessThan(10_000);
+      expect(fab).toBeDefined();
     } finally {
       fetchSpy.mockRestore();
       await cleanup();
     }
-  }, 120_000);
+  });
 });

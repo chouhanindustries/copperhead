@@ -37,6 +37,64 @@ export async function computeFileHash(filePath: string): Promise<string> {
   return createHash('sha256').update(content).digest('hex');
 }
 
+export const CREATE_ORIGIN = 'create';
+
+export function draftQualitySection(layoutMd: string | null): string | null {
+  if (!layoutMd) return null;
+  const match = layoutMd.match(/##\s+Draft quality\s*([\s\S]*?)(?=\n##\s+|$)/i);
+  return match ? match[1] ?? null : null;
+}
+
+export function isFilledDraftQuality(body: string): boolean {
+  const cleaned = body.replace(/<!--[\s\S]*?-->/g, '').trim();
+  return cleaned.length > 0;
+}
+
+export function isCreateProducedRepo(cfg?: { origin?: string } | null): boolean {
+  return Boolean(cfg && cfg.origin === CREATE_ORIGIN);
+}
+
+export function checkDocumentationPresence(opts: {
+  layoutMd: string | null;
+  devplanExists: boolean;
+  isCreateRepo?: boolean;
+}): FabGateCheckResult {
+  const violations: FabViolation[] = [];
+  const section = draftQualitySection(opts.layoutMd);
+  if (opts.layoutMd === null) {
+    violations.push({
+      claim: 'release-ready',
+      actual: 'LAYOUT.md missing',
+      location: 'docs/LAYOUT.md',
+    });
+  } else if (section === null) {
+    violations.push({
+      claim: 'release-ready',
+      actual: 'missing ## Draft quality section',
+      location: 'docs/LAYOUT.md',
+    });
+  } else if (!isFilledDraftQuality(section)) {
+    violations.push({
+      claim: 'release-ready',
+      actual: '## Draft quality section is empty',
+      location: 'docs/LAYOUT.md',
+    });
+  }
+
+  if (opts.isCreateRepo && !opts.devplanExists) {
+    violations.push({
+      claim: 'release-ready',
+      actual: 'missing',
+      location: 'docs/DEVPLAN.md',
+    });
+  }
+
+  return {
+    status: violations.length > 0 ? 'fail' : 'pass',
+    violations,
+  };
+}
+
 export async function runFabGateCheck(
   repoRoot: string,
   config: Config,
@@ -82,16 +140,16 @@ export async function runFabGateCheck(
       const md = await readFile(bomPath, 'utf8');
       const rows = parseBom(md);
       for (const row of rows) {
-        if (!row.mpn || row.mpn.trim() === '' || row.mpn.trim() === '-') {
-          bomViolations.push({
-            claim: `Refdes ${row.refdes} has valid MPN`,
-            actual: `Refdes ${row.refdes} missing MPN`,
-          });
-        }
         if (!row.footprint || row.footprint.trim() === '' || row.footprint.trim() === '-') {
           bomViolations.push({
             claim: `Refdes ${row.refdes} has valid footprint`,
             actual: `Refdes ${row.refdes} missing footprint`,
+          });
+        }
+        if (!row.hasMpn && !row.unverified) {
+          bomViolations.push({
+            claim: `Refdes ${row.refdes} has valid MPN`,
+            actual: `Refdes ${row.refdes} missing MPN`,
           });
         }
         if (row.unverified) {
@@ -224,41 +282,23 @@ export async function runFabGateCheck(
     outputViolations.length > 0 ? 'fail' : 'pass';
 
   // 5. Documentation presence check
-  const docViolations: FabViolation[] = [];
   const layoutPath = path.join(repoRoot, 'docs', 'LAYOUT.md');
-
-  if (!existsSync(layoutPath)) {
-    docViolations.push({
-      claim: 'docs/LAYOUT.md exists',
-      actual: 'docs/LAYOUT.md is missing',
-    });
-  } else {
-    const text = await readFile(layoutPath, 'utf8');
-    if (!text.includes('## Draft quality')) {
-      docViolations.push({
-        claim: 'LAYOUT.md has ## Draft quality section',
-        actual: 'LAYOUT.md is missing required ## Draft quality section',
-      });
-    }
-  }
-
+  const layoutMd = existsSync(layoutPath) ? await readFile(layoutPath, 'utf8') : null;
   const devplanPath = path.join(repoRoot, 'docs', 'DEVPLAN.md');
-  if (config.origin === 'create' && !existsSync(devplanPath)) {
-    docViolations.push({
-      claim: 'docs/DEVPLAN.md exists for create workflow repo',
-      actual: 'docs/DEVPLAN.md is missing',
-    });
-  }
+  const devplanExists = existsSync(devplanPath);
 
-  const docsStatus: 'pass' | 'warn' | 'fail' =
-    docViolations.length > 0 ? 'fail' : 'pass';
+  const docsRes = checkDocumentationPresence({
+    layoutMd,
+    devplanExists,
+    isCreateRepo: isCreateProducedRepo(config),
+  });
 
   const ok =
     routingStatus === 'pass' &&
     (bomStatus === 'pass' || (bomStatus === 'warn' && !strict)) &&
     schPcbMatchStatus === 'pass' &&
     outputsStatus === 'pass' &&
-    docsStatus === 'pass';
+    docsRes.status === 'pass';
 
   return {
     ok,
@@ -266,6 +306,6 @@ export async function runFabGateCheck(
     bom: { status: bomStatus, violations: bomViolations },
     schPcbMatch: { status: schPcbMatchStatus, violations: matchViolations },
     outputs: { status: outputsStatus, violations: outputViolations },
-    docs: { status: docsStatus, violations: docViolations },
+    docs: docsRes,
   };
 }
