@@ -114,7 +114,7 @@ export const STAGES: Stage[] = [
       return docHasHeading(root, path.join(docs, 'LAYOUT.md'), 'Draft quality');
     },
     prompt: () =>
-      'Stage 5: first-draft layout. Rule-driven placement written as real coordinates: connectors on edges, decoupling at IC pins, ESD at connectors, keepouts honored. Route power and short critical nets; leave the rest as ratsnest. Every routed net must pass run_drc. Then write the "## Draft quality" section in LAYOUT.md: exactly what is fine and what a human or specialist tool should redo. Non-optimal is acceptable; unlabeled non-optimal is not.',
+      'Stage 5: first-draft layout. The scaffolded board is empty apart from a placeholder outline, so placement starts by populating it: for EVERY part in BOM.md, call lookup_footprint with its footprint lib_id to read the real .kicad_mod body from the installed library, then embed that body into the board with an anchored edit and change only its (at x y rot) placement and its refdes/net references. Never author pad geometry from memory: a fabricated pad map passes DRC while being physically wrong. If lookup_footprint reports the footprint is absent, adopt one of the closest real names it suggests. Correct the placeholder outline to the size the brief and constraints require before placing parts. Rule-driven placement written as real coordinates: connectors on edges, decoupling at IC pins, ESD at connectors, keepouts honored. Route power and short critical nets; leave the rest as ratsnest. Every routed net must pass run_drc. Then write the "## Draft quality" section in LAYOUT.md: exactly what is fine and what a human or specialist tool should redo. Non-optimal is acceptable; unlabeled non-optimal is not.',
   },
   {
     name: 'outputs',

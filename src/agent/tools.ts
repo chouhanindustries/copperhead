@@ -7,6 +7,7 @@ import { runErc, runDrc, exportSvg, exportFab, kicadLoadError, isProbeableKicadF
 import { formatViolations, type CheckReport } from '../kicad/report.js';
 import { listSymbols, listNets } from '../kicad/sexp.js';
 import { verifySchematicSymbols, resolveLibrarySymbol, symbolSearchDirs } from '../kicad/symlib.js';
+import { resolveFootprint, footprintSearchDirs } from '../kicad/footprintlib.js';
 import { checkDrift } from '../memory/drift.js';
 import { saveConstraint, classifyAffectsTarget, affectsTargetExists } from '../memory/constraints.js';
 import { openspecValidate } from '../openspec/cli.js';
@@ -394,6 +395,43 @@ export const TOOLS: ToolDef[] = [
       const lines = findings.map((f) => `  - [${f.kind}] ${f.detail}`);
       const mismatches = findings.filter((f) => f.kind !== 'no-library').length;
       return `verify_symbols: ${checked} verified, ${skipped} unverifiable (library not installed), ${mismatches} issue(s) to reconcile:\n${lines.join('\n')}`;
+    },
+  },
+  {
+    schema: {
+      name: 'lookup_footprint',
+      description:
+        'Return the real .kicad_mod text and pad list of a footprint lib_id from the KiCad footprint libraries installed on this machine, e.g. "Package_SO:SOIC-8_3.9x4.9mm_P1.27mm". Use this before placing any footprint on the board: paste the returned body into the .kicad_pcb with an anchored edit and adjust only its (at x y rot), so pad numbers and geometry come from the library instead of being invented (a fabricated pad map is DRC-clean and physically wrong). read_file cannot reach the system libraries, this tool is the sanctioned path. Unknown footprints return the closest real names to try.',
+      parameters: {
+        type: 'object',
+        properties: {
+          lib_id: { type: 'string', description: 'Library:Footprint, e.g. Capacitor_SMD:C_0603_1608Metric' },
+          pads_only: { type: 'boolean', description: 'Return just the pad list, not the full body (cheap probe)' },
+        },
+        required: ['lib_id'],
+      },
+    },
+    requiresUnlock: false,
+    handler: async (_ctx, args) => {
+      const libId = String((args as { lib_id?: unknown }).lib_id ?? '');
+      if (!libId.includes(':'))
+        return `lookup_footprint: "${libId}" is not a footprint lib_id (expected Library:Footprint, e.g. Device:R -> Resistor_SMD:R_0603_1608Metric)`;
+      const dirs = await footprintSearchDirs();
+      if (!dirs.length)
+        return 'lookup_footprint: no KiCad footprint libraries found on this machine (checked KICAD_FOOTPRINT_DIR and the standard install locations)';
+      const res = await resolveFootprint(libId, dirs);
+      if (res.status === 'no-library')
+        return `lookup_footprint: library "${libId.slice(0, libId.indexOf(':'))}.pretty" is not installed on this machine`;
+      if (res.status === 'no-footprint') {
+        const hint = res.candidates.length
+          ? ` Closest real footprints in that library: ${res.candidates.join(', ')}.`
+          : '';
+        return `lookup_footprint: footprint not found.${hint}`;
+      }
+      const shown = res.pads.map((p) => (p === '' ? '""' : p));
+      const head = `lookup_footprint: ${libId} has ${res.pads.length} pad entr(ies) ("" = unnamed mechanical pad; a repeated number is a multi-pad net such as a thermal pad): ${shown.join(' ')}`;
+      if ((args as { pads_only?: unknown }).pads_only === true) return head;
+      return `${head}\nBody follows verbatim from the installed library; embed it in the board and change only its (at ...) placement:\n${res.text}`;
     },
   },
   {

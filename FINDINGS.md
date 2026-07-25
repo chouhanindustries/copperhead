@@ -134,3 +134,24 @@ The run is currently in stage 4 (schematic, run `2026-07-24T10-05-50-017Z`). Slo
 - **Symptom:** with the pin oracle working (F-9's lookup_symbol) and every check converging, run 4 attempt 1 still exhausted 40 turns with roughly a third of the 34-part board placed. The arithmetic is structural: 34 parts, each costing a lookup call, one or more anchored edits, and a verification, lands at 60 to 100 turns even with aggressive batching. Every retry then rebuilds from zero after rollback, so the ceiling repeats. Observed across run 4 attempts; per-turn work was productive and ERC stayed clean at each committed island (including a 14-violation spike repaired back to clean under the progress-aware budget).
 - **Suggested (P2):** raise the schematic stage's default via `stageMaxTurns` (the knob already exists) to roughly 120, and layout-draft to roughly 80; or scale the stage budget by BOM line count at pipeline start. Operator workaround applied for the evidence run: `stageMaxTurns: { schematic: 120, "layout-draft": 80 }` in `.copperhead/config.json`.
 - **Status:** open (config workaround in the test bed; a defaults change is one line plus a test if wanted).
+
+## F-11 BLOCKER: no tool exposes installed footprint geometry, so the layout stage cannot place a single part faithfully
+
+- **Where:** the agent tool set (`src/agent/tools.ts`) vs the stage 5 prompt's placement requirement (`src/commands/create.ts`). `kicad-cli pcb` offers only `drc, export, import, render, upgrade`, so there is no CLI netlist-import ("Update PCB from Schematic") path either.
+- **Symptom:** stage 5 starts from a board holding nothing but a placeholder outline and net 0. To place parts the model needs each footprint's real pad geometry, but the tool set had no way to read it (`read_file` cannot reach the system libraries, and `verify_symbols`/`lookup_symbol` are schematic-side only). Faced with authoring 35 footprints blind, including a 40-pad ESP32-C3-WROOM-02 with a thermal pad plus a USB-C receptacle and a DFN sensor, the model refused, quoting the rule it would have to break:
+
+  ```text
+  Hand-authoring the 35 footprints ... would fabricate pad geometry that is
+  DRC-clean but physically wrong, violating the no-invented-geometry rules.
+  ```
+
+  The recovery supervisor correctly classified it as abort rather than retry ("none of which a retry can fix").
+- **Suggested (P1, fixed in this PR):** add a read-only `lookup_footprint` tool, the board-side twin of `lookup_symbol`: it resolves `Library:Footprint` against the installed `.pretty` libraries and returns the real `.kicad_mod` body plus its pad list (or the closest real names when absent), so the model embeds library geometry with an anchored edit and adjusts only placement. A `pads_only` flag keeps a cheap probe available. New module `src/kicad/footprintlib.ts` (search dirs, resolver, pad reader), covered by `test/lookup-footprint.test.ts`; the stage 5 prompt now directs look-up-before-placement. Longer term, a netlist-import path would still be worth having, since it would also carry net assignments.
+- **Status:** fixed in this PR.
+
+## F-12 DEFECT: the scaffolded board outline ignores the brief's board.outline_mm constraint
+
+- **Where:** KiCad project bootstrap (`src/kicad/bootstrap.ts`) vs the recorded constraint `board.outline_mm`.
+- **Symptom:** the scaffold writes a fixed placeholder outline (observed 30 x 20 mm) while the brief and the constraint registry require 100 x 25 mm. Stage 5 therefore inherits a board that violates a recorded constraint before any work happens, and listed it among its blockers ("Outline 30x20 mm violates board.outline_mm (100x25 mm)").
+- **Suggested (P2):** read `board.outline_mm` from the constraint registry at bootstrap and scaffold that rectangle, or emit no outline at all and require the layout stage to draw it, so a wrong outline can never be inherited silently. Interim mitigation in this PR: the stage 5 prompt now instructs the model to correct the placeholder before placing parts.
+- **Status:** open (prompt mitigation only).
