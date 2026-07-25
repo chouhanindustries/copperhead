@@ -6,7 +6,7 @@ This file provides repository guidance for Codex and other coding agents. Claude
 
 `copperhead` is a TypeScript CLI agent for designing and editing real KiCad projects. It edits `.kicad_sch` and `.kicad_pcb` s-expression files, keeps design documentation synchronized, and verifies changes with `kicad-cli`. The package is ESM-only, requires Node.js 20 or newer, and is licensed under Apache-2.0.
 
-Phase 1 is implemented. Deterministic commands and the offline test suite are the proven path; live agent-loop acceptance tests require model API keys and must not be described as passing unless they were actually run.
+Phase 1 is implemented. Deterministic commands and the offline test suite are the proven path; live agent-loop acceptance tests require configured provider credentials and must not be described as passing unless they were actually run.
 
 ## Sources of truth
 
@@ -29,7 +29,7 @@ npm run docs:build
 
 Run the narrowest relevant tests while iterating, then run `npm run typecheck` and `npm test` before considering a code change complete. Run `npm run build` for CLI or packaging changes and `npm run docs:build` for documentation-site changes.
 
-Tests that touch a live LLM are in `test/agent-integration.test.ts`. Direct providers require `OPENAI_API_KEY` or `ANTHROPIC_API_KEY`; the saved-login Codex path is opt-in with `COPPERHEAD_TEST_CODEX=1`. Never add credentials to the repository or transcripts merely to make these tests run.
+Tests that touch a live LLM are in `test/agent-integration.test.ts`. Direct providers require `OPENAI_API_KEY` or `ANTHROPIC_API_KEY`; the saved-login Codex path is opt-in with `COPPERHEAD_TEST_CODEX=1`; the saved-login Claude Code path runs only when `CLAUDE_CODE_OAUTH_TOKEN` is set and its optional SDK is installed. Never add credentials to the repository or transcripts merely to make these tests run.
 
 ## Architecture
 

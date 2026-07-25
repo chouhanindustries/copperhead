@@ -115,6 +115,24 @@ describe('ClaudeCodeProvider — tool protocol', () => {
     expect(prompt).toContain('do the thing');
   });
 
+  it('disables ambient settings, CLAUDE.md, skills, plugins, MCP, memory, and permission prompts', async () => {
+    let opts: Record<string, unknown> = {};
+    const provider = new ClaudeCodeProvider(undefined, fakeQuery([assistant('ok'), result()], (a) => {
+      opts = a.options ?? {};
+    }));
+
+    await provider.chat(messages, tools);
+
+    expect(opts.settingSources).toEqual([]);
+    expect(opts.strictMcpConfig).toBe(true);
+    expect(opts.mcpServers).toEqual({});
+    expect(opts.plugins).toEqual([]);
+    expect(opts.skills).toEqual([]);
+    expect(opts.settings).toEqual({ autoMemoryEnabled: false });
+    expect(opts.permissionMode).toBe('dontAsk');
+    expect(opts.persistSession).toBe(false);
+  });
+
   it('flattens prior assistant tool-calls and tool results into the prompt (the provider memory)', async () => {
     let prompt = '';
     const provider = new ClaudeCodeProvider(undefined, fakeQuery([assistant('ok'), result()], (a) => {
@@ -203,25 +221,41 @@ describe('ClaudeCodeProvider — tool protocol', () => {
     expect(cwds[0]).toBe(cwds[1]);
   });
 
-  it('strips the billed API keys from the SDK subprocess env but inherits the rest', async () => {
-    const prevA = process.env.ANTHROPIC_API_KEY;
-    const prevO = process.env.OPENAI_API_KEY;
-    process.env.ANTHROPIC_API_KEY = 'sk-ant-should-not-reach-subprocess';
-    process.env.OPENAI_API_KEY = 'sk-openai-should-not-reach-subprocess';
+  it('retains saved-login auth but strips billed API/cloud routing from the SDK subprocess env', async () => {
+    const blocked = [
+      'ANTHROPIC_API_KEY',
+      'OPENAI_API_KEY',
+      'ANTHROPIC_AUTH_TOKEN',
+      'ANTHROPIC_BASE_URL',
+      'CLAUDE_CODE_USE_BEDROCK',
+      'CLAUDE_CODE_USE_VERTEX',
+      'CLAUDE_CODE_USE_FOUNDRY',
+      'CLAUDE_CODE_USE_MANTLE',
+      'CLAUDE_CODE_USE_ANTHROPIC_AWS',
+      'AWS_BEARER_TOKEN_BEDROCK',
+      'ANTHROPIC_FOUNDRY_API_KEY',
+    ] as const;
+    const names = [...blocked, 'CLAUDE_CODE_OAUTH_TOKEN', 'CLAUDE_CODE_DISABLE_AUTO_MEMORY'] as const;
+    const previous = new Map(names.map((name) => [name, process.env[name]]));
+    for (const name of blocked) process.env[name] = `must-not-reach-subprocess-${name}`;
+    process.env.CLAUDE_CODE_OAUTH_TOKEN = 'saved-login-token-stays-external';
+    delete process.env.CLAUDE_CODE_DISABLE_AUTO_MEMORY;
     try {
       let env: Record<string, unknown> = {};
       const provider = new ClaudeCodeProvider(undefined, fakeQuery([assistant('ok'), result()], (a) => {
         env = ((a.options ?? {}).env ?? {}) as Record<string, unknown>;
       }));
       await provider.chat(messages, tools);
-      expect(env.ANTHROPIC_API_KEY).toBeUndefined();
-      expect(env.OPENAI_API_KEY).toBeUndefined();
+      for (const name of blocked) expect(env[name], name).toBeUndefined();
+      expect(env.CLAUDE_CODE_OAUTH_TOKEN).toBe('saved-login-token-stays-external');
+      expect(env.CLAUDE_CODE_DISABLE_AUTO_MEMORY).toBe('1');
       expect(env.PATH).toBe(process.env.PATH); // the rest of the environment is inherited
     } finally {
-      if (prevA === undefined) delete process.env.ANTHROPIC_API_KEY;
-      else process.env.ANTHROPIC_API_KEY = prevA;
-      if (prevO === undefined) delete process.env.OPENAI_API_KEY;
-      else process.env.OPENAI_API_KEY = prevO;
+      for (const name of names) {
+        const value = previous.get(name);
+        if (value === undefined) delete process.env[name];
+        else process.env[name] = value;
+      }
     }
   });
 
@@ -323,6 +357,7 @@ describe('ClaudeCodeProvider — session resume (1.1)', () => {
     ];
     await provider.chat(first, tools);
     expect((seen[0]!.options ?? {}).resume).toBeUndefined(); // no session yet
+    expect((seen[0]!.options ?? {}).persistSession).toBe(true);
     expect(seen[0]!.prompt).toContain('do it'); // full history on the first turn
 
     const second: Msg[] = [
@@ -354,6 +389,7 @@ describe('ClaudeCodeProvider — session resume (1.1)', () => {
     await provider.chat(base, tools);
     await provider.chat([...base, { role: 'assistant', content: 'thinking' }, { role: 'user', content: 'again' }], tools);
     expect((seen[1]!.options ?? {}).resume).toBeUndefined();
+    expect((seen[1]!.options ?? {}).persistSession).toBe(false);
     expect(seen[1]!.prompt).toContain('do it'); // full history re-sent when resume is off
   });
 });

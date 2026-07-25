@@ -3,7 +3,7 @@
 ## ADDED Requirements
 
 ### Requirement: Saved-login provider needs no API key
-copperhead SHALL provide a `claude-code` provider, selected by `--model claude-code` or `--model claude-code:<model-id>`, that drives the locally-installed Claude Code through the Claude Agent SDK and reuses its authentication. Running with this provider SHALL NOT require `ANTHROPIC_API_KEY` or `OPENAI_API_KEY`; authentication SHALL be resolved by the SDK from the environment (e.g. `CLAUDE_CODE_OAUTH_TOKEN` minted by `claude setup-token`, or a logged-in Claude Code CLI). copperhead SHALL NOT read, copy, or log the credential.
+copperhead SHALL provide a `claude-code` provider, selected by `--model claude-code` or `--model claude-code:<model-id>`, that drives Claude Code through the Claude Agent SDK and reuses its authentication. Running with this provider SHALL NOT require `ANTHROPIC_API_KEY` or `OPENAI_API_KEY`; authentication SHALL be resolved by the SDK from the environment (e.g. `CLAUDE_CODE_OAUTH_TOKEN` minted by `claude setup-token`, or a logged-in Claude Code CLI). copperhead SHALL NOT inspect or log the credential value.
 
 #### Scenario: Run with no API key
 - **WHEN** `do "<request>" --model claude-code` runs with `CLAUDE_CODE_OAUTH_TOKEN` set and neither `ANTHROPIC_API_KEY` nor `OPENAI_API_KEY` present
@@ -11,14 +11,22 @@ copperhead SHALL provide a `claude-code` provider, selected by `--model claude-c
 
 #### Scenario: No credential is touched by copperhead
 - **WHEN** a `claude-code` run executes
-- **THEN** copperhead performs no read of the Claude Code credential store and the provider constructor performs no API-key check
+- **THEN** copperhead performs no read of the Claude Code credential store, does not inspect the credential value passed through the SDK environment, and the provider constructor performs no API-key check
 
 ### Requirement: Reasoning-only single-turn mapping
 The `claude-code` provider SHALL implement the `Provider.chat(messages, tools) -> Turn` seam as a reasoning-only backend: each `chat()` call SHALL issue exactly one Agent SDK `query()` with no SDK tools registered and the SDK's built-in file/bash/web tools disabled, run in an isolated working directory, so the SDK executes no tools. copperhead's agent loop SHALL remain the driver, and every mutation SHALL flow through copperhead's capability-filtered tools, obligations ledger, ERC/DRC verification, git snapshot, and commit gate exactly as for the other providers.
 
 #### Scenario: SDK executes nothing
 - **WHEN** the `claude-code` provider issues a turn
-- **THEN** the SDK is invoked with an empty tools allowlist, a wildcard-led disallow list, and a `canUseTool` handler that denies every tool, in a working directory outside the repository, and returns a single assistant response that copperhead maps to `{ text, toolCalls, usage }`
+- **THEN** the SDK is invoked with an empty tools allowlist, a wildcard-led disallow list, `dontAsk` permission mode, and a `canUseTool` handler that denies every tool, in a working directory outside the repository, and returns a single assistant response that copperhead maps to `{ text, toolCalls, usage }`
+
+#### Scenario: Ambient Claude configuration cannot expand the provider
+- **WHEN** the host has user/project/local settings, CLAUDE.md instructions, skills, plugins, MCP servers, or auto-memory configured
+- **THEN** the provider passes SDK isolation mode (`settingSources: []`), a strict empty MCP configuration, empty skill/plugin lists, and auto-memory disabled, so none of those host surfaces are loaded into the turn
+
+#### Scenario: A second unredacted SDK transcript is not written by default
+- **WHEN** the normal one-query-per-turn `claude-code` provider runs
+- **THEN** SDK session persistence is disabled; only the explicit session-resume opt-in may enable it
 
 #### Scenario: Scratch working directory does not outlive the run
 - **WHEN** a run using the `claude-code` provider ends and `loop.ts` calls `close()` on it
@@ -29,8 +37,8 @@ The `claude-code` provider SHALL implement the `Provider.chat(messages, tools) -
 - **THEN** the provider throws immediately with a message naming the violated invariant, rather than continuing, so no unverified action can bypass copperhead's gates
 
 #### Scenario: A billed API key is not used for a saved-login run
-- **WHEN** a `claude-code` turn runs while `ANTHROPIC_API_KEY` (or `OPENAI_API_KEY`) is also set in the environment
-- **THEN** those keys are stripped from the SDK subprocess environment so the run authenticates via the saved login, never silently against a billed API
+- **WHEN** a `claude-code` turn runs while direct API credentials, a custom Anthropic base URL, or Bedrock/Vertex/Foundry/Mantle/Anthropic-AWS routing is also configured in the environment
+- **THEN** those credentials and routing flags are stripped from the SDK subprocess environment while `CLAUDE_CODE_OAUTH_TOKEN` is retained, so the run authenticates via the saved login and never silently against a separately billed backend
 
 #### Scenario: Safety gates apply to claude-code
 - **WHEN** a `claude-code` run's edits leave ERC/DRC violations that persist past `maxRepairCycles`

@@ -99,7 +99,7 @@ Global flags: `--repo <path>` (default: cwd) and `--json` for machine-readable o
 
 ### Saved login (Claude Code)
 
-`--model claude-code` drives Claude Code through the [Claude Agent SDK](https://code.claude.com/docs/en/agent-sdk) and reuses your saved login (the `CLAUDE_CODE_OAUTH_TOKEN` from `claude setup-token`), so a Claude subscription runs copperhead with **no `ANTHROPIC_API_KEY`**. Claude Code is used purely as a reasoning backend: the agent loop, its safety gates, and every file edit stay inside copperhead, identical to the other providers.
+`--model claude-code` drives Claude Code through the [Claude Agent SDK](https://code.claude.com/docs/en/agent-sdk/overview) and reuses your saved login (the `CLAUDE_CODE_OAUTH_TOKEN` from `claude setup-token`), so a Claude subscription runs copperhead with **no `ANTHROPIC_API_KEY`**. Claude Code is used purely as a reasoning backend: the agent loop, its safety gates, and every file edit stay inside copperhead, identical to the other providers.
 
 ```bash
 claude setup-token                          # while logged into Claude Code
@@ -109,7 +109,7 @@ copperhead do "add reverse-polarity protection on VIN" --model claude-code
 
 The Claude Agent SDK ships as an optional dependency, so a normal install pulls it in. copperhead loads it only when you select `claude-code`, and prints an actionable error if it is missing (for example after `npm install --omit=optional`), telling you to add it with `npm i @anthropic-ai/claude-agent-sdk`.
 
-copperhead never reads, copies, or logs the credential; the CLI owns authentication. A missing dependency or an unauthenticated install fails with an actionable message and touches nothing.
+copperhead never inspects or logs the credential value; the CLI owns authentication. It starts the SDK in isolation mode: user/project/local filesystem settings and CLAUDE.md, skills, plugins, ambient MCP servers, auto-memory, permission prompts, and default SDK transcript persistence are disabled (managed policy remains authoritative). Direct API, custom-endpoint, and cloud-provider routing variables are removed from this subprocess while `CLAUDE_CODE_OAUTH_TOKEN` is retained, so `claude-code` cannot silently become a separately billed backend. A missing dependency or an unauthenticated install fails with an actionable message and touches nothing.
 
 ### Ordering (`export bom`)
 

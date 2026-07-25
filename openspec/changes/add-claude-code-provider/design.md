@@ -14,7 +14,7 @@ Constraints inherited from SPEC.md: the two structural invariants (spec-gated-in
 
 - Run copperhead against a Claude subscription with **no `ANTHROPIC_API_KEY`**, billed through the user's Claude Code login.
 - Reuse the existing `Provider` seam and `loop.ts` orchestration unchanged, so `claude-code` inherits every safety gate identically to `gpt-5`/`claude`.
-- Keep authentication entirely external — copperhead never reads, copies, or logs the credential.
+- Keep authentication entirely external — copperhead never inspects or logs the credential value.
 - Ship the SDK as an optional dependency that non-users never install or load.
 
 **Non-Goals:**
@@ -36,20 +36,21 @@ The spec-gated-in invariant stays **structural**: the advertised tool set is `av
 
 **Trade-off:** the model expresses tool calls as prompt-protocol JSON rather than the native tool-calling APIs the OpenAI/Anthropic providers use, which is less structurally reliable. Mitigations: the protocol is explicit and single-shape; malformed JSON is tolerated (treated as assistant text, mirroring `safeParse` in `openai.ts`) so a stray reply degrades to a nudge rather than a crash; and the loop's existing stall/nudge handling absorbs an occasional non-conforming turn.
 
-**Verifying "the SDK executes nothing".** The whole safety story rests on the SDK not running any tool, so it is defended in four layers, each caught by the next if it fails:
+**Verifying "the SDK executes nothing".** The whole safety story rests on the SDK not running any tool, so it is defended in five layers, each caught by the next if it fails:
 
 1. `tools: []` disables all built-ins. This is the documented mechanism: `@anthropic-ai/claude-agent-sdk@0.3.x` `Options.tools` is `string[] | { type:'preset'; preset:'claude_code' }` and its doc states *"`[]` (empty array) - Disable all built-in tools"* (confirmed against the pinned version).
-2. `disallowedTools` denies by name, led by the `'*'` wildcard, as a backstop the enumerated list cannot outrun as new tools ship.
-3. `canUseTool` denies **every** tool before it executes (with `interrupt: true`). This is the Agent-SDK analog to `CodexProvider`'s read-only sandbox / `approvalPolicy: 'never'`: even a tool the other layers do not name cannot run.
-4. A **runtime tripwire**: if any streamed assistant message still contains a `tool_use` block, `chat()` throws immediately, turning a silent "the SDK started executing tools" regression into a loud, run-failing error.
+2. The SDK's user-controlled host-extension surfaces are disabled explicitly: `settingSources: []` is its documented isolation mode (no user/project/local settings or CLAUDE.md), `strictMcpConfig: true` plus `mcpServers: {}` excludes ambient MCP, `skills: []` and `plugins: []` exclude those extension sources, and auto-memory is disabled in both inline settings and the subprocess environment. This must be explicit because the pinned SDK's `Options` type documents that omitted `settingSources` loads all filesystem sources. Managed policy remains authoritative, as required by the SDK.
+3. `permissionMode: 'dontAsk'` makes the permission layer deny instead of prompting, while `disallowedTools` denies by name, led by the `'*'` wildcard, as a backstop the enumerated list cannot outrun as new tools ship.
+4. `canUseTool` denies **every** tool before it executes (with `interrupt: true`). This is the Agent-SDK analog to `CodexProvider`'s read-only sandbox / `approvalPolicy: 'never'`: even a tool the other layers do not name cannot run.
+5. A **runtime tripwire**: if any streamed assistant message still contains a `tool_use` block, `chat()` throws immediately, turning a silent "the SDK started executing tools" regression into a loud, run-failing error.
 
-The option *names* are compile-checked against a local `QueryOptions` interface (the SDK is an undeclared optional dep per D3, so `import type` from it would force it to be installed for `tsc`, the coupling `codex.ts` now carries; a local interface catches a typo in `tools`/`disallowedTools` without that cost). A parsed tool call is also only accepted when its name is in the turn's advertised catalog (`availableTools(ctx)`), so a hallucinated or locked name is left as prose for the loop to nudge rather than dispatched.
+The option *names* are compile-checked against a local `QueryOptions` interface. The SDK is a declared optional dependency per D3, so `import type` from it would still make `tsc` fail after a legitimate `npm install --omit=optional`; the local subset catches option-name mistakes without coupling builds to its presence. A parsed tool call is also only accepted when its name is in the turn's advertised catalog (`availableTools(ctx)`), so a hallucinated or locked name is left as prose for the loop to nudge rather than dispatched.
 
 ### D2 — Authentication stays entirely external
 
 The provider does no credential handling: no env-var reads for secrets, and — unlike `OpenAIProvider`/`AnthropicProvider` — **no API-key check in the constructor**. The SDK resolves `CLAUDE_CODE_OAUTH_TOKEN` (or a logged-in CLI) by its own precedence. A missing or unauthenticated install surfaces as an SDK error that `chat()` turns into an actionable message ("log in to Claude Code / run `claude setup-token` and set `CLAUDE_CODE_OAUTH_TOKEN`") and lets propagate through the loop's normal failure/rollback path. That auth-vs-not decision is made **status-first**: an error carrying an HTTP status is auth only on 401/403, so a 429 (or anything else) is re-thrown untouched and stays retryable even if its message happens to mention "oauth token"; the message heuristic applies only when there is no status.
 
-The SDK's precedence would also accept a plain `ANTHROPIC_API_KEY` if one is set, which would silently **bill the API key instead of the subscription** — cutting against the no-fallback promise (D4). To prevent that, `chat()` passes the SDK's `env` option with `ANTHROPIC_API_KEY` and `OPENAI_API_KEY` stripped (the SDK's `env` *replaces* the subprocess environment, so the rest of `process.env` is spread through). A `claude-code` run therefore always uses the saved login. Rationale: the "saved login" promise is precisely that the CLI, not copperhead, owns auth; touching the credential would break it and the AC-4.1 no-secrets guarantee.
+The SDK's precedence would also accept direct API credentials, custom Anthropic endpoints, and cloud-provider routes if those environment variables are set, which could silently **bill a different backend instead of the subscription** — cutting against the no-fallback promise (D4). To prevent that, `chat()` passes the SDK's `env` option with `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_BASE_URL`, the Bedrock/Vertex/Foundry/Mantle/Anthropic-AWS selection flags, and their bearer/API tokens stripped. `CLAUDE_CODE_OAUTH_TOKEN` and the ordinary host environment remain available (the SDK's `env` *replaces* the subprocess environment, so `PATH`/`HOME` must be inherited explicitly). A `claude-code` run therefore always uses the saved login. Rationale: the "saved login" promise is precisely that the CLI, not copperhead, owns auth; selecting or logging the credential would break it and the AC-4.1 no-secrets guarantee.
 
 ### D3 — Declared `optionalDependency`, lazily imported
 
@@ -63,7 +64,7 @@ The provider's `name` is `'claude-code'`, distinct from `'openai'`/`'anthropic'`
 
 ### D5 — Isolated working directory, cleaned up on `close()`
 
-`query()` is given `cwd` = a `mkdtemp` scratch directory. Even with tools disabled this guarantees the SDK has no path into the repo, reinforcing that every real mutation flows only through copperhead's own tools under `loop.ts`. One dir is created per provider instance and reused across the run's turns (not one per `chat()`), and the provider implements `Provider.close()` to `rm` it. `loop.ts` calls `provider.close?.()` on every provider in a `finally`, so the scratch dir does not outlive the run (matching `CodexProvider`'s `ownsWorkingDirectory` cleanup).
+`query()` is given `cwd` = a `mkdtemp` scratch directory. Even with tools disabled this guarantees the SDK has no path into the repo, reinforcing that every real mutation flows only through copperhead's own tools under `loop.ts`. One dir is created per provider instance and reused across the run's turns (not one per `chat()`), and the provider implements `Provider.close()` to `rm` it. `loop.ts` calls `provider.close?.()` on every provider in a `finally`, so the scratch dir does not outlive the run (matching `CodexProvider`'s `ownsWorkingDirectory` cleanup). Normal one-query-per-turn runs also pass `persistSession: false`, avoiding a second unredacted transcript under Claude's host directory; the explicit session-resume optimization opts back into persistence because reconstructing the prior SDK session is its purpose.
 
 ### D6 — Injectable `queryFn` seam for offline tests
 
