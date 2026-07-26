@@ -74,6 +74,74 @@ describe('copperhead init (AC-1)', () => {
     await expect(runInit({ repoRoot: dir })).rejects.toThrow(InitError);
     await expect(runInit({ repoRoot: dir })).rejects.toThrow(/no \.kicad_sch found/);
   });
+
+  // The docs state that init installs the commit-time gate. When it cannot, the
+  // user has to hear about it, or they believe a gate is on that is not.
+  describe('pre-commit hook reporting', () => {
+    const hookPath = (repo: string): string => path.join(repo, '.git', 'hooks', 'pre-commit');
+
+    it('installs the hook and reports no skip on a fresh repo', async () => {
+      const { repo, cleanup } = await tempFixtureRepo();
+      try {
+        const res = await runInit({ repoRoot: repo });
+        expect(res.hookSkipped).toBeNull();
+        expect(res.created.some((f) => f.includes('pre-commit'))).toBe(true);
+        expect(await readFile(hookPath(repo), 'utf8')).toContain('copperhead check');
+      } finally {
+        await cleanup();
+      }
+    });
+
+    it('is idempotent: re-running reports no skip and does not re-create', async () => {
+      const { repo, cleanup } = await tempFixtureRepo();
+      try {
+        await runInit({ repoRoot: repo });
+        const res = await runInit({ repoRoot: repo });
+        expect(res.hookSkipped).toBeNull();
+        expect(res.created.some((f) => f.includes('pre-commit'))).toBe(false);
+      } finally {
+        await cleanup();
+      }
+    });
+
+    it("reports the skip when the user's own hook is in the way, and preserves it", async () => {
+      const { repo, cleanup } = await tempFixtureRepo();
+      try {
+        await writeFile(hookPath(repo), '#!/bin/sh\nnpm run lint\n', 'utf8');
+        const res = await runInit({ repoRoot: repo });
+        expect(res.hookSkipped).toMatch(/already exists/);
+        expect(res.hookSkipped).toMatch(/NOT active/);
+        // The user's hook is untouched, and ours was not silently merged in.
+        const onDisk = await readFile(hookPath(repo), 'utf8');
+        expect(onDisk).toContain('npm run lint');
+        expect(onDisk).not.toContain('copperhead check');
+      } finally {
+        await cleanup();
+      }
+    });
+
+    it('reports the skip when there is no .git/hooks directory', async () => {
+      const { repo, cleanup } = await tempFixtureRepo();
+      try {
+        await rm(path.join(repo, '.git', 'hooks'), { recursive: true, force: true });
+        const res = await runInit({ repoRoot: repo });
+        expect(res.hookSkipped).toMatch(/no \.git\/hooks directory/);
+      } finally {
+        await cleanup();
+      }
+    });
+
+    it('stays silent about the hook when --no-hooks asked for no hook', async () => {
+      const { repo, cleanup } = await tempFixtureRepo();
+      try {
+        const res = await runInit({ repoRoot: repo, installHooks: false });
+        expect(res.hookSkipped).toBeNull();
+        expect(existsSync(hookPath(repo))).toBe(false);
+      } finally {
+        await cleanup();
+      }
+    });
+  });
 });
 
 describe('copperhead check (AC-2)', () => {

@@ -93,6 +93,7 @@ program
         for (const f of res.created) console.log(`created ${f}`);
         for (const f of res.skipped) console.log(`unchanged ${f}`);
         for (const f of res.refused) console.log(`REFUSED (hand-edited; use --force): ${f}`);
+        if (res.hookSkipped) console.warn(`WARNING: pre-commit hook not installed: ${res.hookSkipped}`);
       }
       process.exit(res.refused.length ? 1 : 0);
     } catch (err) {

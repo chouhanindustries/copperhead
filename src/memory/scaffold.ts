@@ -11,6 +11,14 @@ export interface InitResult {
   created: string[];
   skipped: string[];
   refused: string[];
+  /**
+   * Why the pre-commit hook is not installed, when it is not. `null` means
+   * either that it was installed (it is then listed in `created`), that it was
+   * already ours, or that `--no-hooks` was passed. Reported because the docs
+   * tell users `init` installs the hook, so a silent skip leaves them believing
+   * the commit-time gate is on when it is not.
+   */
+  hookSkipped: string | null;
 }
 
 const sha = (s: string): string => createHash('sha256').update(s).digest('hex');
@@ -138,14 +146,31 @@ write time. This directory is gitignored.
 
 const HOOK_MARKER = '# installed by copperhead init';
 
-async function installPreCommitHook(repoRoot: string): Promise<string | null> {
+/**
+ * Install the commit-time `copperhead check` gate, without ever clobbering a
+ * hook the user wrote. Returns the path when it wrote one, or a reason when it
+ * did not: the reason reaches the user, because the documentation states that
+ * `init` installs this hook and a silent skip leaves them believing the gate is
+ * on. Already being ours is not a skip; it is the idempotent success case.
+ */
+async function installPreCommitHook(
+  repoRoot: string,
+): Promise<{ path: string; skipped: null } | { path: null; skipped: string | null }> {
   const hooksDir = path.join(repoRoot, '.git', 'hooks');
-  if (!existsSync(hooksDir)) return null;
+  if (!existsSync(hooksDir)) {
+    return {
+      path: null,
+      skipped: `no .git/hooks directory, so the commit-time "copperhead check" gate is NOT active. Run copperhead check in CI, or re-run init from inside the git repository.`,
+    };
+  }
   const hookPath = path.join(hooksDir, 'pre-commit');
   if (existsSync(hookPath)) {
     const existing = await readFile(hookPath, 'utf8');
-    if (existing.includes(HOOK_MARKER)) return null; // idempotent
-    return null; // never clobber a user's own hook
+    if (existing.includes(HOOK_MARKER)) return { path: null, skipped: null }; // already ours
+    return {
+      path: null,
+      skipped: `.git/hooks/pre-commit already exists and was not written by copperhead, so it was left untouched and the commit-time "copperhead check" gate is NOT active. Add "copperhead check" to your existing hook, or run it in CI.`,
+    };
   }
   const script = `#!/bin/sh
 ${HOOK_MARKER}
@@ -154,7 +179,7 @@ exec copperhead check
 `;
   await writeFile(hookPath, script, 'utf8');
   await chmod(hookPath, 0o755);
-  return hookPath;
+  return { path: hookPath, skipped: null };
 }
 
 export interface InitOptions {
@@ -186,7 +211,7 @@ export async function runInit(opts: InitOptions): Promise<InitResult> {
   const docsDir = path.join(repoRoot, config.docs);
   await mkdir(docsDir, { recursive: true });
 
-  const result: InitResult = { created: [], skipped: [], refused: [] };
+  const result: InitResult = { created: [], skipped: [], refused: [], hookSkipped: null };
   const hashes: Record<string, string> = { ...(config.generatedHashes ?? {}) };
   const appendOnly = new Set(['DECISIONS.md', 'CHANGELOG.md']);
 
@@ -235,7 +260,8 @@ export async function runInit(opts: InitOptions): Promise<InitResult> {
 
   if (opts.installHooks !== false) {
     const hook = await installPreCommitHook(repoRoot);
-    if (hook) result.created.push(path.relative(repoRoot, hook));
+    if (hook.path) result.created.push(path.relative(repoRoot, hook.path));
+    result.hookSkipped = hook.skipped;
   }
 
   return result;
