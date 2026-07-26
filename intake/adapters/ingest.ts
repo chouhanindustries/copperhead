@@ -9,6 +9,7 @@ import { assembleFacts, DigitisedPage, RawExtractedField } from "../core/pipelin
 import { DigitisationProvider, DocumentInput } from "../ports/digitisation";
 import { FactExtractor } from "../ports/extractor";
 import { digitiseCacheKey, extractCacheKey, JsonCache } from "./cache";
+import { ClaudeCodeExtractor } from "./claude-code-extractor";
 import { FixtureDigitisationProvider, FixtureExtractor } from "./fixtures";
 import { LlmExtractor } from "./llm-extractor";
 import { SarvamProvider } from "./sarvam";
@@ -37,11 +38,42 @@ export function buildIngestDeps(doc: DocumentInput, fixturesDir: string): Ingest
       extractor: new FixtureExtractor(cache, doc.bytes),
     };
   }
+  // Live providers are constructed lazily, on first actual use: with a warm
+  // cache the whole flow runs with no keys configured at all, so a missing
+  // credential can never break a fixture-served demo.
   return {
     cache,
-    digitiser: new SarvamProvider({ workDir: join(fixturesDir, "cache") }),
-    extractor: new LlmExtractor(),
+    digitiser: {
+      modelId: "sarvam-vision",
+      digitise: (d) => new SarvamProvider({ workDir: join(fixturesDir, "cache") }).digitise(d),
+    },
+    extractor: {
+      modelId: extractorName(),
+      extract: (pages, specs) => pickExtractor().extract(pages, specs),
+    },
   };
+}
+
+function extractorName(): string {
+  const forced = process.env.INTAKE_EXTRACTOR;
+  const model = process.env.INTAKE_EXTRACTOR_MODEL;
+  if (forced === "api" || (forced !== "claude-code" && process.env.ANTHROPIC_API_KEY)) {
+    return model ?? "claude-opus-5";
+  }
+  return `claude-code${model ? `:${model}` : ""}`;
+}
+
+/**
+ * Extractor selection: INTAKE_EXTRACTOR forces "api" or "claude-code";
+ * otherwise the API extractor runs when ANTHROPIC_API_KEY is set, and the
+ * Claude Code saved login (Agent SDK subprocess, no API key) is the
+ * fallback.
+ */
+function pickExtractor() {
+  const forced = process.env.INTAKE_EXTRACTOR;
+  if (forced === "api") return new LlmExtractor();
+  if (forced === "claude-code") return new ClaudeCodeExtractor();
+  return process.env.ANTHROPIC_API_KEY ? new LlmExtractor() : new ClaudeCodeExtractor();
 }
 
 /**

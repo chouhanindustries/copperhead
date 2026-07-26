@@ -39,7 +39,9 @@ export async function POST(request: NextRequest) {
 
   const { verdict, checksRun, factsUsed } = evaluate(body.descriptor, merged, registry.constraints);
 
-  if (verdict.decision === "APPROVE" || verdict.decision === "REFUSE") {
+  // Trusted facts are written on APPROVE/REFUSE (AC-8.1); held deciding
+  // facts are stored too, so the correction flow (AC-9.1) can find them.
+  if (factsUsed.length > 0) {
     store.persistFacts(factsUsed);
   }
 

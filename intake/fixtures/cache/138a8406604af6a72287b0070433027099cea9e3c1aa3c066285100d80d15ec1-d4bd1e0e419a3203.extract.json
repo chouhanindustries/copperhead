@@ -1,0 +1,11 @@
+[
+  {
+    "field": "per-pin input leakage current (uA)",
+    "value": 40,
+    "page": 1,
+    "snippet": "<td>40</td>",
+    "confidence": 0.6,
+    "unit": "µA",
+    "footnoteQualified": true
+  }
+]
