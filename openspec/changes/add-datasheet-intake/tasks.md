@@ -1,6 +1,6 @@
 # Tasks: add-datasheet-intake
 
-> Status: sections 1-6 plus 7.1 and 4.5 implemented and verified (72 offline tests, next build green, HTTP demo arc exercised: ingest from fixtures, HOLD on a low-confidence fact, correction, cited REFUSE with manifest). Live Sarvam verified 2026-07-26: outputFormat json rejected (md used), page JSON schema confirmed and mapped. Extraction runs via ANTHROPIC_API_KEY or the Claude Code saved login (Agent SDK). Trusted-fact rates on real parts: SN74LS00 0/1, ESP32-WROOM-32 1/4 (the confidence gate holds ambiguous reads for review, by design). Remaining: 7.2 (GT-6 scanned doc), 7.3 (twice-cold demo acceptance), browser pass.
+> Status: sections 1-6 plus 7.1 and 4.5 implemented and verified (72 offline tests, next build green, HTTP demo arc exercised: ingest from fixtures, HOLD on a low-confidence fact, correction, cited REFUSE with manifest). Live Sarvam verified 2026-07-26: outputFormat json rejected (md used), page JSON schema confirmed and mapped. Extraction runs via ANTHROPIC_API_KEY or the Claude Code saved login (Agent SDK). Trusted-fact rates on real parts: SN74LS00 0/1, ESP32-WROOM-32 1/4 (the confidence gate holds ambiguous reads for review, by design). GT-6 done 2026-07-26: 2N3055 scanned datasheet digitised live (5 pages, 85 regions), the one extracted field (abs-max, confidence 0.40) held on the confidence gate with verified snippet and bbox; replayed offline in test/gt6-scanned.test.ts (75 offline tests). Remaining: 7.3 (twice-cold demo acceptance), browser pass.
 
 ## 1. Workspace scaffold
 
@@ -45,6 +45,6 @@
 ## 7. Golden tests and demo acceptance
 
 - [x] 7.1 Encode GT-1 through GT-5 as vitest integration tests over the fixture provider (deterministic, offline, asserting verdicts, citations, reuse, and correction propagation)
-- [ ] 7.2 Run GT-6 (hard scanned document) live once, capture its fixtures, then encode it as an offline test
+- [x] 7.2 Run GT-6 (hard scanned document) live once, capture its fixtures, then encode it as an offline test
 - [ ] 7.3 Run the end-to-end demo acceptance: GT-1, GT-2, GT-3 back to back, cold, twice, each writing a registry entry and downloadable manifest, inside 3 minutes; record the fallback demo video
 - [x] 7.4 Measure and record the trusted-fact rate across all demo datasheets in the change's notes (informs the autonomy claim)
