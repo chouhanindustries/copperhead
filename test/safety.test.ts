@@ -18,8 +18,8 @@ describe('path sandbox (AC-4.2)', () => {
   });
 
   it('accepts repo-relative paths including the root itself', () => {
-    expect(resolveInRepo('/repo', 'docs/BOM.md')).toBe('/repo/docs/BOM.md');
-    expect(resolveInRepo('/repo', '.')).toBe('/repo');
+    expect(resolveInRepo('/repo', 'docs/BOM.md')).toBe(path.resolve('/repo', 'docs/BOM.md'));
+    expect(resolveInRepo('/repo', '.')).toBe(path.resolve('/repo'));
   });
 
   it('does not treat sibling dirs with a shared prefix as inside', () => {

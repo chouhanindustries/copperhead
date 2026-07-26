@@ -263,6 +263,23 @@ export interface PinNet {
   net: string | null;
 }
 
+function isPointOnSegment(
+  px: number, py: number,
+  x1: number, y1: number,
+  x2: number, y2: number
+): boolean {
+  const ix = Math.round(px * 10000), iy = Math.round(py * 10000);
+  const ix1 = Math.round(x1 * 10000), iy1 = Math.round(y1 * 10000);
+  const ix2 = Math.round(x2 * 10000), iy2 = Math.round(y2 * 10000);
+
+  const minX = Math.min(ix1, ix2), maxX = Math.max(ix1, ix2);
+  const minY = Math.min(iy1, iy2), maxY = Math.max(iy1, iy2);
+  if (ix < minX || ix > maxX || iy < minY || iy > maxY) return false;
+
+  const cross = (ix - ix1) * (iy2 - iy1) - (iy - iy1) * (ix2 - ix1);
+  return cross === 0;
+}
+
 /**
  * Geometric connectivity per sheet: pins, labels, and wire endpoints that share
  * coordinates (or are joined by wires) form a group; a group's net name comes
@@ -276,23 +293,46 @@ export async function pinNets(rootSch: string): Promise<PinNet[]> {
     const pinDefs = libPinDefs(sheet.root);
     const uf = new UnionFind();
     const netNameAt = new Map<string, string>();
+    const segments: { p1: { x: number; y: number }; p2: { x: number; y: number } }[] = [];
+    const allPoints = new Set<string>();
+
+    const addPoint = (x: number, y: number) => {
+      const k = key(x, y);
+      uf.find(k);
+      allPoints.add(k);
+      return k;
+    };
 
     for (const w of children(sheet.root, 'wire')) {
       const pts = children(child(w, 'pts') ?? [], 'xy').map((xy) => ({
         x: parseFloat(atomAt(xy, 1) ?? '0'),
         y: parseFloat(atomAt(xy, 2) ?? '0'),
       }));
-      for (let i = 1; i < pts.length; i++) {
-        uf.union(key(pts[0]!.x, pts[0]!.y), key(pts[i]!.x, pts[i]!.y));
+      for (let i = 0; i < pts.length - 1; i++) {
+        const p1 = pts[i]!;
+        const p2 = pts[i + 1]!;
+        addPoint(p1.x, p1.y);
+        addPoint(p2.x, p2.y);
+        uf.union(key(p1.x, p1.y), key(p2.x, p2.y));
+        segments.push({ p1, p2 });
       }
     }
+
+    for (const j of children(sheet.root, 'junction')) {
+      const at = child(j, 'at');
+      if (at) {
+        addPoint(parseFloat(atomAt(at, 1) ?? '0'), parseFloat(atomAt(at, 2) ?? '0'));
+      }
+    }
+
     for (const kind of ['label', 'global_label', 'hierarchical_label']) {
       for (const l of children(sheet.root, kind)) {
         const name = atomAt(l, 1);
         const at = child(l, 'at');
         if (!name || !at) continue;
-        const k = key(parseFloat(atomAt(at, 1) ?? '0'), parseFloat(atomAt(at, 2) ?? '0'));
-        uf.find(k);
+        const x = parseFloat(atomAt(at, 1) ?? '0');
+        const y = parseFloat(atomAt(at, 2) ?? '0');
+        const k = addPoint(x, y);
         netNameAt.set(k, name);
       }
     }
@@ -302,8 +342,7 @@ export async function pinNets(rootSch: string): Promise<PinNet[]> {
       const defs = pinDefs.get(sym.libId) ?? [];
       for (const pin of defs) {
         const abs = pinAbsolute(sym.at, mirror, pin);
-        const k = key(abs.x, abs.y);
-        uf.find(k);
+        const k = addPoint(abs.x, abs.y);
         if (isPowerSymbol(sym.libId)) {
           netNameAt.set(k, sym.value);
         } else {
@@ -312,8 +351,32 @@ export async function pinNets(rootSch: string): Promise<PinNet[]> {
       }
     }
 
+    // Connect points that fall on wire segments
+    for (const k of allPoints) {
+      const [sx, sy] = k.split(',').map(Number);
+      if (sx === undefined || sy === undefined) continue;
+      for (const seg of segments) {
+        if (isPointOnSegment(sx, sy, seg.p1.x, seg.p1.y, seg.p2.x, seg.p2.y)) {
+          uf.union(k, key(seg.p1.x, seg.p1.y));
+        }
+      }
+    }
+
+    // Assign net names per group, prioritizing real names over PWR_FLAG
+    const groupNets = new Map<string, string[]>();
+    for (const [k, name] of netNameAt) {
+      const rootKey = uf.find(k);
+      const list = groupNets.get(rootKey) ?? [];
+      list.push(name);
+      groupNets.set(rootKey, list);
+    }
+
     const groupNet = new Map<string, string>();
-    for (const [k, name] of netNameAt) groupNet.set(uf.find(k), name);
+    for (const [rootKey, names] of groupNets) {
+      const nonPwrFlag = names.find((n) => n !== 'PWR_FLAG');
+      groupNet.set(rootKey, nonPwrFlag ?? names[0] ?? 'PWR_FLAG');
+    }
+
     for (const { sym, pin, k } of symPins) {
       out.push({
         ref: sym.ref,

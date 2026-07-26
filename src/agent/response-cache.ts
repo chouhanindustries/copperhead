@@ -59,6 +59,9 @@ export class CachingProvider implements Provider {
         // corrupt/partial cache file — fall through and regenerate
       }
     }
+    if (process.env.COPPERHEAD_CACHE_ONLY === '1') {
+      throw new Error(`Cache miss in cache-only mode (key: ${this.keyFor(messages, tools)})`);
+    }
     const turn = await this.inner.chat(messages, tools, opts);
     try {
       await mkdir(this.dir, { recursive: true });

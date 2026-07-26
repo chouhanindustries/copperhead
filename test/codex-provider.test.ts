@@ -14,8 +14,17 @@ const readTool: ToolSchema = {
   },
 };
 
+function hasCodexSdk(): boolean {
+  try {
+    import.meta.resolve('@openai/codex-sdk');
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 describe('CodexProvider', () => {
-  it('is selected by the codex model namespace without an API key', async () => {
+  it.skipIf(!hasCodexSdk())('is selected by the codex model namespace without an API key', async () => {
     expect((await makeProvider('codex')).name).toBe('codex');
     expect((await makeProvider('codex:gpt-test')).name).toBe('codex');
     await expect(makeProvider('codex:')).rejects.toThrow('codex model override cannot be empty');
