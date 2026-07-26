@@ -3,7 +3,7 @@ import { existsSync } from 'node:fs';
 import { readFile, writeFile } from 'node:fs/promises';
 import { loadConfig } from '../config.js';
 import { parseBom, HEADER_ALIASES, norm } from '../kicad/bom-export.js';
-import { verifyMpn, type VerificationResult } from '../kicad/catalog.js';
+import { verifyMpn, type VerificationResult, type MpnStatus } from '../kicad/catalog.js';
 
 export class VerificationError extends Error {}
 
@@ -91,25 +91,25 @@ export async function runVerifyParts(opts: VerifyPartsOptions): Promise<VerifyPa
   const rows = parseBom(bomContent);
 
   const uniqueMpns = [...new Set(rows.map(r => r.mpn.trim()).filter(m => m.length > 0))];
-  const mpnResolutions = new Map<string, { status: string; lcscCode?: string }>();
+  const mpnResolutions = new Map<string, { status: MpnStatus; lcscCode?: string }>();
 
-  // Fetch resolutions in parallel
-  await Promise.all(
-    uniqueMpns.map(async (mpn) => {
-      try {
-        const res = await verifyMpn(mpn);
-        mpnResolutions.set(mpn.toLowerCase(), {
-          status: res.status,
-          lcscCode: res.item?.lcscCode,
-        });
-      } catch (err) {
-        // Degrade connection errors to NOT FOUND / failed state for strict mode
-        mpnResolutions.set(mpn.toLowerCase(), {
-          status: 'NOT FOUND',
-        });
-      }
-    })
-  );
+  // Fetch resolutions in parallel batches of 5 to limit concurrency
+  await batchParallel(uniqueMpns, 5, async (mpn) => {
+    try {
+      const res = await verifyMpn(mpn);
+      mpnResolutions.set(mpn.toLowerCase(), {
+        status: res.status,
+        lcscCode: res.item?.lcscCode,
+      });
+    } catch (err) {
+      // Degrade connection errors to NOT FOUND / failed state for strict mode,
+      // but surface that this was a lookup failure, not a genuine catalog miss.
+      console.warn(`Catalog lookup failed for MPN "${mpn}": ${(err as Error).message}`);
+      mpnResolutions.set(mpn.toLowerCase(), {
+        status: 'NOT FOUND',
+      });
+    }
+  });
 
   const results: VerificationResult[] = rows.map((row) => {
     const cleanMpn = row.mpn.trim();
@@ -124,7 +124,7 @@ export async function runVerifyParts(opts: VerifyPartsOptions): Promise<VerifyPa
     return {
       refdes: row.refdes,
       mpn: cleanMpn,
-      status: (resolution?.status ?? 'NOT FOUND') as any,
+      status: resolution?.status ?? 'NOT FOUND',
       lcscCode: resolution?.lcscCode || row.lcsc || undefined,
     };
   });
@@ -164,4 +164,17 @@ export async function runVerifyParts(opts: VerifyPartsOptions): Promise<VerifyPa
   }
 
   return { ok, results };
+}
+
+/**
+ * Runs a map function over items in parallel batches of a specified size to limit concurrency.
+ */
+async function batchParallel<T, R>(items: T[], batchSize: number, fn: (item: T) => Promise<R>): Promise<R[]> {
+  const results: R[] = [];
+  for (let i = 0; i < items.length; i += batchSize) {
+    const batch = items.slice(i, i + batchSize);
+    const batchResults = await Promise.all(batch.map(fn));
+    results.push(...batchResults);
+  }
+  return results;
 }

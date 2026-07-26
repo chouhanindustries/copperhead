@@ -52,6 +52,13 @@ describe('Part verification (verify-parts-networked)', () => {
     expect(r3.status).toBe('NOT FOUND');
   });
 
+  it('verifyMpn handles fetch rejection (network failure)', async () => {
+    fetchSpy.mockRejectedValueOnce(new Error('Network offline'));
+    await expect(verifyMpn('ESP32-S3-WROOM-1')).rejects.toThrow(
+      'Catalog lookup failed for MPN "ESP32-S3-WROOM-1": Network offline'
+    );
+  });
+
   it('runVerifyParts parses BOM.md, runs query, and reports tabular status', async () => {
     const { repo, cleanup } = await tempFixtureRepo();
     try {

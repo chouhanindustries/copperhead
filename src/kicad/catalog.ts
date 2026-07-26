@@ -29,7 +29,7 @@ export interface VerificationResult {
 export async function queryPartCatalog(mpn: string): Promise<CatalogItem[]> {
   const url = `https://jlcsearch.tscircuit.com/api/search?q=${encodeURIComponent(mpn)}`;
   try {
-    const response = await fetch(url);
+    const response = await fetch(url, { signal: AbortSignal.timeout(10_000) });
     if (!response.ok) {
       throw new Error(`Failed to fetch catalog: ${response.statusText}`);
     }
