@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { resolveInRepo, SandboxError, isKicadFile } from '../src/util/paths.js';
@@ -71,6 +72,46 @@ describe('path sandbox (AC-4.2)', () => {
     // Symlinked library dirs are normal in KiCad projects; only escaping ones
     // should be refused.
     expect(() => resolveInRepo(repo, 'alias/lib.txt')).not.toThrow();
+  });
+
+  it('rejects a DANGLING symlink that points outside the repo (AC-4.2)', async () => {
+    // realpath fails on a dangling link exactly as it does on a path that
+    // simply does not exist. Treating them the same rebuilds the link under the
+    // repo root, and a later write follows it out of the sandbox.
+    const base = await mkdtemp(path.join(tmpdir(), 'ch-dangling-'));
+    const repo = path.join(base, 'repo');
+    const outside = path.join(base, 'outside');
+    await mkdir(repo, { recursive: true });
+    await mkdir(outside, { recursive: true });
+    // Target deliberately does NOT exist.
+    await symlink(path.join(outside, 'planted.txt'), path.join(repo, 'link'));
+
+    expect(() => resolveInRepo(repo, 'link')).toThrow(SandboxError);
+    await expect(toolWriteFile(repo, 'link', 'escaped\n')).rejects.toThrow(SandboxError);
+    expect(existsSync(path.join(outside, 'planted.txt'))).toBe(false);
+  });
+
+  it('rejects a chain of dangling symlinks that ends outside the repo', async () => {
+    const base = await mkdtemp(path.join(tmpdir(), 'ch-dangling-chain-'));
+    const repo = path.join(base, 'repo');
+    const outside = path.join(base, 'outside');
+    await mkdir(repo, { recursive: true });
+    await mkdir(outside, { recursive: true });
+    await symlink(path.join(outside, 'x.txt'), path.join(repo, 'hop2'));
+    await symlink(path.join(repo, 'hop2'), path.join(repo, 'hop1'));
+
+    expect(() => resolveInRepo(repo, 'hop1')).toThrow(SandboxError);
+  });
+
+  it('still allows a dangling symlink whose target is inside the repo', async () => {
+    // The guard rail: a link to a file the agent is about to create must keep
+    // working, otherwise the fix would just refuse more things.
+    const base = await mkdtemp(path.join(tmpdir(), 'ch-dangling-ok-'));
+    const repo = path.join(base, 'repo');
+    await mkdir(path.join(repo, 'sub'), { recursive: true });
+    await symlink(path.join(repo, 'sub', 'future.txt'), path.join(repo, 'pending'));
+
+    expect(() => resolveInRepo(repo, 'pending')).not.toThrow();
   });
 });
 
