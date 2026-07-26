@@ -16,7 +16,7 @@ import type { RunMetaInput } from '../agent/runmeta.js';
 import { fmtDuration, fmtTokens, type ProgressRenderer } from '../agent/render.js';
 import { openspecInit } from '../openspec/cli.js';
 import { sweepStaleTempDirs, pruneHistoryDir } from '../util/tmp.js';
-import { assertDiskSpace, DEFAULT_MIN_FREE_BYTES } from '../util/preflight.js';
+import { assertDiskSpace, resolveMinFreeBytes } from '../util/preflight.js';
 import { runCheck } from './check.js';
 import { emitCreateJlcpcbBom } from './export.js';
 
@@ -525,9 +525,7 @@ export async function runCreate(opts: CreateOptions): Promise<{ ok: boolean; com
   // KiCad local history and can otherwise fill the disk mid-stage, failing with
   // an opaque ENOSPC only after doing expensive work. Threshold overridable via
   // COPPERHEAD_MIN_FREE_MB; an unknown reading (unsupported platform) skips it.
-  const minFreeMb = Number(process.env.COPPERHEAD_MIN_FREE_MB);
-  const minFree = Number.isFinite(minFreeMb) && minFreeMb >= 0 ? minFreeMb * 1024 * 1024 : DEFAULT_MIN_FREE_BYTES;
-  await assertDiskSpace(opts.repoRoot, minFree);
+  await assertDiskSpace(opts.repoRoot, resolveMinFreeBytes(process.env.COPPERHEAD_MIN_FREE_MB));
   // Reclaim scratch dirs leaked by earlier runs whose cleanup was skipped (a
   // watchdog SIGKILL or hard abort bypasses the per-call `finally`). Age-gated,
   // so a concurrent run's fresh dirs are never touched; best-effort, so it never

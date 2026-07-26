@@ -3,7 +3,13 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { sessionLimit, isRateLimit } from '../src/util/retry.js';
-import { assertDiskSpace, freeDiskBytes, PreflightError } from '../src/util/preflight.js';
+import {
+  assertDiskSpace,
+  DEFAULT_MIN_FREE_BYTES,
+  freeDiskBytes,
+  PreflightError,
+  resolveMinFreeBytes,
+} from '../src/util/preflight.js';
 
 describe('sessionLimit (2.4 / I13 — a schedulable pause, not a bug)', () => {
   it('detects a saved-login session limit and extracts the reset time', () => {
@@ -57,5 +63,38 @@ describe('disk-space preflight (4.1)', () => {
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
+  });
+});
+
+describe('resolveMinFreeBytes (COPPERHEAD_MIN_FREE_MB)', () => {
+  it('uses the default when the variable is unset', () => {
+    expect(resolveMinFreeBytes(undefined)).toBe(DEFAULT_MIN_FREE_BYTES);
+  });
+
+  it('treats an empty or blank value as unset, not as zero', () => {
+    // Number('') is 0, so parsing the raw value would set a 0-byte threshold
+    // and silently disable the check. A declared-but-unfilled variable is
+    // exactly what a blank .env line or an unset CI variable produces.
+    for (const raw of ['', ' ', '   ', '\t', '\n']) {
+      expect(resolveMinFreeBytes(raw), JSON.stringify(raw)).toBe(DEFAULT_MIN_FREE_BYTES);
+    }
+  });
+
+  it('falls back on values that are not a usable number', () => {
+    for (const raw of ['abc', '-1', 'Infinity', 'NaN', '1,000']) {
+      expect(resolveMinFreeBytes(raw), raw).toBe(DEFAULT_MIN_FREE_BYTES);
+    }
+  });
+
+  it('converts a valid value from MiB to bytes', () => {
+    expect(resolveMinFreeBytes('500')).toBe(500 * 1024 * 1024);
+    expect(resolveMinFreeBytes('  500  ')).toBe(500 * 1024 * 1024);
+    expect(resolveMinFreeBytes('0.5')).toBe(0.5 * 1024 * 1024);
+  });
+
+  it('still honours an explicit 0 as an opt-out', () => {
+    // Distinguishable from the empty case above, which is the point: an
+    // operator can still turn the check off on purpose.
+    expect(resolveMinFreeBytes('0')).toBe(0);
   });
 });
