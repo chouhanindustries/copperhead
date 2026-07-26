@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { Fragment, useEffect, useRef, useState } from "react";
 import type {
   ChangeDescriptor,
   ChangeKind,
@@ -55,7 +55,7 @@ interface Preset {
   descriptor: ChangeDescriptor;
 }
 
-const PRESETS: Preset[] = [
+const GENERIC_PRESETS: Preset[] = [
   {
     title: "Add a 100k pull-up on a sleeping GPIO",
     detail: "pin leakage vs the 25 uA sleep budget",
@@ -85,6 +85,79 @@ const PRESETS: Preset[] = [
   },
 ];
 
+/** Change presets tailored to the loaded demo part. */
+const PRESETS_BY_PART: Record<string, Preset[]> = {
+  LM555: [
+    {
+      title: "Keep the 555 powered through sleep",
+      detail: "its supply current vs the 25 uA sleep budget",
+      descriptor: {
+        kind: "add_component",
+        label: "keep the LM555 powered through sleep",
+        contributions: [{ factKey: "quiescent_current_uA" }],
+      },
+    },
+    {
+      title: "Add a 100k pull-up on the RESET pin",
+      detail: "pin leakage vs the sleep budget",
+      descriptor: {
+        kind: "add_component",
+        label: "add 100k pull-up on the LM555 RESET pin",
+        contributions: [{ factKey: "pin_input_leakage_uA" }],
+      },
+    },
+    {
+      title: "Drive TRIG from the 5V rail",
+      detail: "abs-max rating was not extracted, so the judge must hold",
+      descriptor: {
+        kind: "connect_rail",
+        label: "drive the LM555 TRIG pin from the 5V rail",
+        contributions: [{ factKey: "abs_max_vin_V", value: 5, unit: "V" }],
+      },
+    },
+  ],
+  SN74LS00: [
+    {
+      title: "Add a 100k pull-up on a gate input",
+      detail: "the LS input current vs the 25 uA sleep budget",
+      descriptor: {
+        kind: "add_component",
+        label: "add 100k pull-up on an SN74LS00 input",
+        contributions: [{ factKey: "pin_input_leakage_uA" }],
+      },
+    },
+    {
+      title: "Keep the gate powered through sleep",
+      detail: "supply current vs the sleep budget",
+      descriptor: {
+        kind: "add_component",
+        label: "keep the SN74LS00 powered through sleep",
+        contributions: [{ factKey: "quiescent_current_uA" }],
+      },
+    },
+  ],
+  "ESP32-WROOM-32": [
+    {
+      title: "Drive a GPIO from the 5V rail",
+      detail: "5 V vs the module's absolute maximum input",
+      descriptor: {
+        kind: "connect_rail",
+        label: "drive an ESP32 GPIO from the 5V rail",
+        contributions: [{ factKey: "abs_max_vin_V", value: 5, unit: "V" }],
+      },
+    },
+    {
+      title: "Add a 100k pull-up on a sleeping GPIO",
+      detail: "the tiny ESP32 leakage vs the budget: this one can pass",
+      descriptor: {
+        kind: "add_component",
+        label: "add 100k pull-up on a sleeping ESP32 GPIO",
+        contributions: [{ factKey: "pin_input_leakage_uA" }],
+      },
+    },
+  ],
+};
+
 const FACT_KEYS = [
   "pin_input_leakage_uA",
   "abs_max_vin_V",
@@ -105,6 +178,8 @@ export default function Home() {
   const [editing, setEditing] = useState<string | null>(null);
   const [editValue, setEditValue] = useState("");
   const [mode, setMode] = useState<"cached" | "live">("cached");
+  const [dragOver, setDragOver] = useState(false);
+  const [activePart, setActivePart] = useState<string | null>(null);
   const [log, setLog] = useState<string[]>([]);
   const logRef = useRef<HTMLDivElement | null>(null);
 
@@ -139,6 +214,9 @@ export default function Home() {
     setBusy("ingesting");
     setError(null);
     try {
+      // A new datasheet starts clean: drop corrections left over from earlier parts.
+      const reset = await fetch("/api/registry", { method: "DELETE" });
+      if (reset.ok) setRegistry((await reset.json()) as Registry);
       const form = new FormData();
       form.append("file", f);
       form.append("mode", mode);
@@ -180,6 +258,7 @@ export default function Home() {
   const loadDemo = async (demo: Demo) => {
     setBusy("fetching datasheet");
     setError(null);
+    setActivePart(demo.part);
     try {
       const res = await fetch(demo.file);
       if (!res.ok) throw new Error(`could not load ${demo.file}`);
@@ -255,35 +334,32 @@ export default function Home() {
     URL.revokeObjectURL(url);
   };
 
+  // Facts come from the uploaded datasheet's extraction; registry entries only
+  // overlay corrections for those same keys (never facts from earlier parts).
   const allFacts: ExtractedFact[] = (() => {
-    const merged = [...(registry?.facts ?? [])];
-    for (const fact of ingest?.facts ?? []) {
-      if (!merged.some((f) => f.key === fact.key)) merged.push(fact);
-    }
-    return merged;
+    if (!ingest) return [];
+    const corrected = registry?.facts ?? [];
+    return ingest.facts
+      .map((fact) => corrected.find((f) => f.key === fact.key) ?? fact)
+      .sort((a, b) => b.confidence - a.confidence);
   })();
 
-  const heldCount = allFacts.filter((f) => f.status === "hold").length;
+  // Confidence bands: the extraction gate sits at 0.75.
+  const confClass = (c: number) => (c >= 0.9 ? "conf-high" : c >= 0.75 ? "conf-mid" : "conf-low");
 
-  const hint = busy
-    ? null
-    : !ingest
-      ? "Pick a demo part below (or upload any 2-page datasheet), then watch the pipeline run."
-      : result?.verdict.decision === "HOLD"
-        ? "The judge held: it will not decide on an unreviewed fact. Confirm or correct the amber fact it named, and the verdict recomputes."
-        : result
-          ? "Cited verdict. Click the datasheet citation to see the exact line, export the manifest, or try another change."
-          : heldCount > 0
-            ? "Facts are in. Amber ones need your eye: click a fact to see where it came from, then confirm or correct it. Or go straight to a change."
-            : "Facts are in and trusted. Propose a change.";
+  const heldCount = allFacts.filter((f) => f.status === "hold").length;
+  const presets = (activePart && PRESETS_BY_PART[activePart]) || GENERIC_PRESETS;
 
   return (
     <div className="shell">
       <header className="topbar">
         <h1>
+          <svg className="brand-mark" viewBox="4.625 4.625 22.75 22.75" aria-hidden="true">
+            <circle cx="16" cy="16" r="5.25" fill="none" stroke="var(--copper)" strokeWidth="2.25" />
+            <path d="M16 5.75v5M16 21.25v5M5.75 16h5M21.25 16h5" stroke="var(--copper)" strokeWidth="2.25" />
+          </svg>
           copperhead <span className="accent">intake</span>
         </h1>
-        {hint && <span className="hint">{hint}</span>}
         <div className="topbar-right">
           <div className="mode-toggle" title="Cached serves committed fixtures offline; live calls Sarvam + Claude">
             <button className={mode === "cached" ? "on" : ""} onClick={() => setMode("cached")}>
@@ -300,43 +376,78 @@ export default function Home() {
       </header>
 
       <div className="panes">
-        {/* Pane A: source */}
-        <section className="pane">
-          <h2>
-            <span className="step">1</span> Datasheet
-          </h2>
-          <div className="demo-grid">
-            {DEMOS.map((demo) => (
-              <button
-                key={demo.part}
-                className={`preset ${file?.name === demo.file.split("/").pop() ? "active" : ""}`}
-                disabled={busy !== null}
-                onClick={() => void loadDemo(demo)}
+        {/* Left column: upload dialog, pipeline terminal, change + verdict */}
+        <div className="left-col">
+          <section className="source-region">
+            <div className="upload-dialog">
+              <h2>
+                <span className="step">1</span> Datasheet
+              </h2>
+              <label
+                className={`dropzone ${dragOver ? "drag" : ""} ${busy !== null ? "disabled" : ""}`}
+                onDragOver={(e) => {
+                  e.preventDefault();
+                  if (busy === null) setDragOver(true);
+                }}
+                onDragLeave={() => setDragOver(false)}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  setDragOver(false);
+                  if (busy !== null) return;
+                  const f = e.dataTransfer.files?.[0];
+                  if (!f) return;
+                  if (f.type !== "application/pdf" && !f.name.toLowerCase().endsWith(".pdf")) {
+                    setError("that file is not a PDF — drop a datasheet PDF");
+                    return;
+                  }
+                  setActivePart(null);
+                  void onUpload(f);
+                }}
               >
-                <strong>{demo.part}</strong>
-                <span className="dim">{demo.blurb}</span>
-              </button>
-            ))}
-          </div>
-          <label className="upload-zone">
-            <input
-              type="file"
-              accept="application/pdf"
-              onChange={(e) => {
-                const f = e.target.files?.[0];
-                if (f) void onUpload(f);
-              }}
-            />
-            or upload any datasheet PDF (2 key pages)
-          </label>
+                <input
+                  type="file"
+                  accept="application/pdf"
+                  disabled={busy !== null}
+                  onChange={(e) => {
+                    const f = e.target.files?.[0];
+                    if (f) {
+                      setActivePart(null);
+                      void onUpload(f);
+                    }
+                  }}
+                />
+                <svg className="dz-icon" viewBox="0 0 24 24" width="28" height="28" aria-hidden="true">
+                  <path d="M12 15V4m0 0L7 9m5-5l5 5" stroke="currentColor" strokeWidth="1.8" fill="none" />
+                  <path d="M4 19.5h16" stroke="currentColor" strokeWidth="1.8" />
+                </svg>
+                <span className="dz-title">
+                  {dragOver ? "Drop it" : "Drag & drop a datasheet PDF"}
+                </span>
+                <span className="dz-sub dim">or click to browse · 2 key pages is plenty</span>
+                {file && <span className="dz-file">{file.name}</span>}
+              </label>
 
-          {error && <p className="error">{error}</p>}
-        </section>
+              <div className="or-row dim">or pick a demo part</div>
+              <div className="demo-grid">
+                {DEMOS.map((demo) => (
+                  <button
+                    key={demo.part}
+                    className={`preset ${file?.name === demo.file.split("/").pop() ? "active" : ""}`}
+                    disabled={busy !== null}
+                    onClick={() => void loadDemo(demo)}
+                  >
+                    <strong>{demo.part}</strong>
+                    <span className="dim">{demo.blurb}</span>
+                  </button>
+                ))}
+              </div>
 
-        {/* Pane B: facts + change side by side, verdict below */}
-        <section className="pane">
-          <div className="duo">
-            <div>
+              {error && <p className="error">{error}</p>}
+            </div>
+          </section>
+
+          <div className="mid-row">
+            <div className="facts-region">
               <h2>
                 <span className="step">2</span> Facts{" "}
                 {heldCount > 0 && <span className="badge hold h2-note">{heldCount} to review</span>}
@@ -345,72 +456,93 @@ export default function Home() {
                 {allFacts.length === 0 ? (
                   <p className="empty">Extracted facts land here, each with provenance and confidence.</p>
                 ) : (
-                  <ul className="fact-list">
-                    {allFacts.map((fact) => (
-                      <li key={fact.key}>
-                        <button className="fact-main" onClick={() => clickFact(fact)} title="Show me in the datasheet">
-                          <span className="fact-top">
-                            <span className="fact-key">{fact.key}</span>
-                            {fact.status === "hold" ? (
-                              <span className="badge hold">review</span>
-                            ) : (
-                              <span className="badge trusted">trusted</span>
-                            )}
-                          </span>
-                          <span className="fact-bottom">
-                            <span className="fact-value">
+                  <table className="fact-table">
+                    <thead>
+                      <tr>
+                        <th>status</th>
+                        <th>parameter</th>
+                        <th className="num">value</th>
+                        <th className="num">confidence</th>
+                        <th className="num">section</th>
+                        <th aria-label="action" />
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {allFacts.map((fact) => (
+                        <Fragment key={fact.key}>
+                          <tr
+                            className="fact-row"
+                            onClick={() => clickFact(fact)}
+                            title="click to see the exact line in the datasheet"
+                          >
+                            <td
+                              className={`td-status ${fact.status === "hold" ? "hold" : ""}`}
+                              title={fact.status === "hold" ? fact.holdReason : undefined}
+                            >
+                              {fact.status === "hold" ? "review" : "trusted"}
+                            </td>
+                            <td className="td-key">{fact.key}</td>
+                            <td className="td-value num">
                               {String(fact.value)} {fact.unit ?? ""}
-                            </span>
-                            <span className="dim fact-meta">
-                              {(fact.confidence * 100).toFixed(0)}% · p.{fact.source.page}
-                            </span>
-                          </span>
-                        </button>
-                        {fact.status === "hold" && (
-                          <div className="hold-line">
-                            <span className="dim">{fact.holdReason}</span>
-                            {registry?.facts.some((f) => f.key === fact.key) &&
-                              (editing === fact.key ? (
-                                <span className="correct-row">
-                                  <input
-                                    autoFocus
-                                    value={editValue}
-                                    onChange={(e) => setEditValue(e.target.value)}
-                                    onKeyDown={(e) => {
-                                      if (e.key === "Enter") void onCorrect(fact.key);
+                            </td>
+                            <td className={`td-conf num ${confClass(fact.confidence)}`}>
+                              {(fact.confidence * 100).toFixed(0)}%
+                            </td>
+                            <td className="td-cite num">p.{fact.source.page} ↗</td>
+                            <td className="td-action num">
+                              {fact.status === "hold" &&
+                                registry?.facts.some((f) => f.key === fact.key) && (
+                                  <button
+                                    className="ghost mini"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      setEditing(fact.key);
+                                      setEditValue(String(fact.value));
                                     }}
-                                  />
-                                  <button onClick={() => void onCorrect(fact.key)}>Save</button>
-                                  <button className="ghost" onClick={() => setEditing(null)}>
-                                    Cancel
+                                  >
+                                    Verify
                                   </button>
-                                </span>
-                              ) : (
-                                <button
-                                  className="ghost"
-                                  onClick={() => {
-                                    setEditing(fact.key);
-                                    setEditValue(String(fact.value));
-                                  }}
-                                >
-                                  Confirm / correct
-                                </button>
-                              ))}
-                          </div>
-                        )}
-                      </li>
-                    ))}
-                  </ul>
+                                )}
+                            </td>
+                          </tr>
+                          {fact.status === "hold" && editing === fact.key && (
+                            <tr className="hold-row">
+                              <td />
+                              <td colSpan={5}>
+                                <div className="hold-line">
+                                  <span className="correct-row">
+                                    <input
+                                      autoFocus
+                                      value={editValue}
+                                      onChange={(e) => setEditValue(e.target.value)}
+                                      onKeyDown={(e) => {
+                                        if (e.key === "Enter") void onCorrect(fact.key);
+                                      }}
+                                    />
+                                    <button onClick={() => void onCorrect(fact.key)}>Save</button>
+                                    <button className="ghost" onClick={() => setEditing(null)}>
+                                      Cancel
+                                    </button>
+                                  </span>
+                                </div>
+                              </td>
+                            </tr>
+                          )}
+                        </Fragment>
+                      ))}
+                    </tbody>
+                  </table>
                 )}
               </div>
             </div>
 
-            <div>
+            <div className="stack">
+            <div className="work-col">
               <h2>
                 <span className="step">3</span> Propose a change
               </h2>
               <div className="preset-grid">
-                {PRESETS.map((preset) => (
+                {presets.map((preset) => (
                   <button
                     key={preset.title}
                     className="preset"
@@ -422,10 +554,8 @@ export default function Home() {
                   </button>
                 ))}
               </div>
-            </div>
-          </div>
 
-          <details className="custom">
+              <details className="custom">
             <summary className="dim">Custom change…</summary>
             <div className="card">
               <label>Describe it</label>
@@ -482,10 +612,12 @@ export default function Home() {
               </div>
             </div>
           </details>
+            </div>
 
-          <h2>
-            <span className="step">4</span> Verdict
-          </h2>
+            <div className="work-col">
+              <h2>
+                <span className="step">4</span> Verdict
+              </h2>
           {result ? (
             <div className={`card verdict ${result.verdict.decision}`}>
               <div className="verdict-head">
@@ -530,13 +662,10 @@ export default function Home() {
               held fact never decides.
             </div>
           )}
-        </section>
-
-        {/* Pane C: the document, terminal below */}
-        <section className="viewer-pane">
-          <div className="viewer-scroll">
-            <PdfViewer file={file} pages={ingest?.pages ?? []} highlight={highlight} />
+            </div>
+            </div>
           </div>
+
           <div className="console" ref={logRef}>
             <div className="console-title">copperhead — pipeline</div>
             {log.length === 0 && !busy && (
@@ -550,7 +679,14 @@ export default function Home() {
               </div>
             ))}
           </div>
-        </section>
+        </div>
+
+        {/* Right column: the datasheet, full height */}
+        <div className="right-col">
+          <div className="viewer-scroll">
+            <PdfViewer file={file} pages={ingest?.pages ?? []} highlight={highlight} />
+          </div>
+        </div>
       </div>
     </div>
   );

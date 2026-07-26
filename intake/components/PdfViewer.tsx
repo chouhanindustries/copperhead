@@ -2,8 +2,9 @@
 
 // Renders the uploaded datasheet PDF itself (via pdf.js) with amber
 // highlight rectangles drawn from the digitised bounding boxes. Clicking a
-// fact elsewhere sets `highlight`; the matching page scrolls into view and
-// the region containing the fact's snippet lights up.
+// fact elsewhere sets `highlight`; the viewer scrolls to the cited region on
+// the matching page and the rectangle containing the fact's snippet flashes.
+// (The browser's native PDF plugin cannot host overlays, hence pdf.js.)
 
 import { useEffect, useRef, useState } from "react";
 import type { DigitisedPage } from "../core/pipeline";
@@ -22,6 +23,14 @@ interface RenderedPage {
 
 function squash(s: string): string {
   return s.replace(/\s+/g, " ").trim().toLowerCase();
+}
+
+function regionsFor(pages: DigitisedPage[], highlight: Highlight) {
+  if (highlight.snippet === undefined) return [];
+  const digitised = pages.find((p) => p.page === highlight.page);
+  return (digitised?.regions ?? []).filter((r) =>
+    squash(r.text).includes(squash(highlight.snippet!)),
+  );
 }
 
 export default function PdfViewer({
@@ -84,10 +93,26 @@ export default function PdfViewer({
   }, [file]);
 
   useEffect(() => {
-    if (highlight) {
-      pageRefs.current[highlight.page]?.scrollIntoView({ behavior: "smooth", block: "center" });
+    if (!highlight || rendered.length === 0) return;
+    // Scroll only the viewer container (scrollIntoView would drag every
+    // scrollable ancestor, shifting the whole page). Aim at the highlighted
+    // region itself when we know it, otherwise the top of the page.
+    const el = pageRefs.current[highlight.page];
+    const container = el?.closest(".viewer-scroll");
+    if (!el || !(container instanceof HTMLElement)) return;
+    const inner = el.querySelector<HTMLElement>(".pdf-page-inner");
+    const containerTop = container.getBoundingClientRect().top;
+    let target =
+      el.getBoundingClientRect().top - containerTop + container.scrollTop - 12;
+    const region = regionsFor(pages, highlight)[0];
+    if (region && inner) {
+      const innerTop =
+        inner.getBoundingClientRect().top - containerTop + container.scrollTop;
+      target =
+        innerTop + region.bbox.y * inner.clientHeight - container.clientHeight * 0.35;
     }
-  }, [highlight]);
+    container.scrollTo({ top: Math.max(0, target), behavior: "smooth" });
+  }, [highlight, rendered, pages]);
 
   if (!file) {
     return (
@@ -104,13 +129,8 @@ export default function PdfViewer({
   return (
     <div className="pdf-viewer">
       {rendered.map((page) => {
-        const digitised = pages.find((p) => p.page === page.pageNumber);
         const active =
-          highlight?.page === page.pageNumber && highlight.snippet !== undefined
-            ? (digitised?.regions ?? []).filter((r) =>
-                squash(r.text).includes(squash(highlight.snippet!)),
-              )
-            : [];
+          highlight?.page === page.pageNumber ? regionsFor(pages, highlight) : [];
         return (
           <div
             key={page.pageNumber}
@@ -120,12 +140,15 @@ export default function PdfViewer({
             }}
           >
             <div className="page-label">page {page.pageNumber}</div>
-            <div className="pdf-page-inner">
+            <div
+              className="pdf-page-inner"
+              style={{ aspectRatio: `${page.width} / ${page.height}` }}
+            >
               {/* eslint-disable-next-line @next/next/no-img-element */}
               <img src={page.dataUrl} alt={`Datasheet page ${page.pageNumber}`} />
               {active.map((region, i) => (
                 <div
-                  key={i}
+                  key={`${highlight?.snippet ?? ""}-${i}`}
                   className="pdf-highlight"
                   style={{
                     left: `${region.bbox.x * 100}%`,
