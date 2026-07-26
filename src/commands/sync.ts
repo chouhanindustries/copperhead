@@ -3,6 +3,7 @@ import { existsSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { loadConfig } from '../config.js';
 import { checkDrift } from '../memory/drift.js';
+import { pinoutIdentifiers } from '../memory/bom-table.js';
 import { loadConstraints, checkForbiddenPins } from '../memory/constraints.js';
 import { pinNets } from '../kicad/sexp.js';
 import { openspecValidate } from '../openspec/cli.js';
@@ -90,13 +91,21 @@ export async function syncVerify(repoRoot: string): Promise<SyncReport> {
   if (existsSync(pinsH) && existsSync(path.join(docsDir, 'PINOUT.md'))) {
     const header = await readFile(pinsH, 'utf8');
     const pinout = await readFile(path.join(docsDir, 'PINOUT.md'), 'utf8');
+    // Match against the identifiers the pin table actually assigns, not against
+    // the raw document text. `pinout.includes('LED')` is satisfied by the word
+    // LED anywhere at all: a different row's net (`LED_STATUS`), a Notes cell,
+    // or the prose above the table. Every `#define` then looks documented and
+    // the check reports nothing, which is the worst outcome for a check whose
+    // whole job is to catch a header that has drifted from the doc it was
+    // generated from.
+    const documented = pinoutIdentifiers(pinout);
     for (const m of header.matchAll(/#define\s+PIN_(\w+)\s+(\S+)/g)) {
-      if (!pinout.includes(m[1]!)) {
+      if (!documented.has(m[1]!)) {
         resolvable.push({
           kind: 'pins-h',
           doc: 'firmware/src/pins.h',
           claim: `defines PIN_${m[1]}`,
-          actual: 'PINOUT.md does not mention it',
+          actual: 'no pin in PINOUT.md carries that net or pin name',
           resolution: 'regenerate pins.h from PINOUT.md (PINOUT.md is the single source of truth)',
         });
       }

@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import path from 'node:path';
-import { writeFile, readFile } from 'node:fs/promises';
+import { writeFile, readFile, mkdir } from 'node:fs/promises';
 import { runInit } from '../src/memory/scaffold.js';
 import { loadConfig } from '../src/config.js';
 import { availableTools, dispatchTool, type RunContext } from '../src/agent/tools.js';
@@ -365,6 +365,76 @@ describe('copperhead sync verify phase (AC-7)', () => {
     } finally {
       await cleanup();
     }
+  });
+
+  // The pins.h check compares a generated header against PINOUT.md. Matching on
+  // raw document text made any word appearing anywhere satisfy any #define, so
+  // the check reported nothing no matter how far the header had drifted.
+  describe('pins.h vs PINOUT.md', () => {
+    const writePinsH = async (repo: string, body: string): Promise<void> => {
+      const dir = path.join(repo, 'firmware', 'src');
+      await mkdir(dir, { recursive: true });
+      await writeFile(path.join(dir, 'pins.h'), body, 'utf8');
+    };
+
+    const PINOUT = [
+      '# Pinout',
+      '',
+      'The LED sits on its own rail; see LAYOUT.md before moving TX.',
+      '',
+      '| Refdes | Pin | Name | Net | Notes |',
+      '|---|---|---|---|---|',
+      '| U1 | 9 | GPIO9 | I2C_SCL | |',
+      '| U1 | 12 | GPIO12 | LED_STATUS | |',
+      '| R1 | 1 | ~ | GND | |',
+      '',
+    ].join('\n');
+
+    const syncWith = async (repo: string, pinsH: string): Promise<string[]> => {
+      await writeFile(path.join(repo, 'docs', 'PINOUT.md'), PINOUT, 'utf8');
+      await writePinsH(repo, pinsH);
+      const report = await syncVerify(repo);
+      return report.resolvable.filter((i) => i.kind === 'pins-h').map((i) => i.claim);
+    };
+
+    it('accepts a #define naming a net or a pin name in the table', async () => {
+      const { repo, cleanup } = await tempFixtureRepo();
+      try {
+        await runInit({ repoRoot: repo });
+        const flagged = await syncWith(repo, '#define PIN_I2C_SCL 9\n#define PIN_GPIO12 12\n');
+        expect(flagged).toEqual([]);
+      } finally {
+        await cleanup();
+      }
+    });
+
+    it('flags a #define whose name only appears in prose or inside another name', async () => {
+      const { repo, cleanup } = await tempFixtureRepo();
+      try {
+        await runInit({ repoRoot: repo });
+        // LED and TX are both in the prose above the table; LED is also a
+        // prefix of the LED_STATUS net. None of them is an assigned pin.
+        const flagged = await syncWith(repo, '#define PIN_LED 5\n#define PIN_TX 21\n#define PIN_SCL 9\n');
+        expect(flagged).toEqual(['defines PIN_LED', 'defines PIN_TX', 'defines PIN_SCL']);
+      } finally {
+        await cleanup();
+      }
+    });
+
+    it('does not let the unnamed-pin sentinel ~ document anything', async () => {
+      const { repo, cleanup } = await tempFixtureRepo();
+      try {
+        await runInit({ repoRoot: repo });
+        const flagged = await syncWith(repo, '#define PIN_~ 1\n');
+        // `~` is not a \w character, so it never forms a #define name; the point
+        // is that R1's `~` cell contributes no identifier at all.
+        expect(flagged).toEqual([]);
+        const still = await syncWith(repo, '#define PIN_GND 1\n');
+        expect(still).toEqual([]); // GND is a real net on that row
+      } finally {
+        await cleanup();
+      }
+    });
   });
 
   it('forbidden-pin use is a requirement violation: flagged, never resolvable (AC-7.3)', async () => {

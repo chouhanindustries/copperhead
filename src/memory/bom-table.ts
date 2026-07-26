@@ -122,6 +122,37 @@ export interface TableRow {
   }
 
   /**
+   * The identifiers PINOUT.md assigns to a pin: its net name and, when the
+   * table carries the optional Name column, the pin's own name. Both are
+   * legitimate sources for a firmware `#define PIN_<X>`, so a caller checking
+   * that a generated header agrees with the doc has to consider both.
+   *
+   * Distinct from `parsePinoutRows`, which answers "what net is on this pin"
+   * for the drift comparison. This answers "what names does the doc know",
+   * which is a set-membership question and needs no row structure.
+   */
+  export function pinoutIdentifiers(md: string): Set<string> {
+    const names = new Set<string>();
+    const strip = (s: string | undefined): string => (s ?? '').replace(/`/g, '').trim();
+    for (const { header, rows } of parseCanonicalTables(md)) {
+      const col = (re: RegExp): number => header.cells.findIndex((c) => re.test(c));
+      const pinI = col(/^pin$/i);
+      const netI = col(/^net$/i);
+      const nameI = col(/^name$/i);
+      if (pinI < 0) continue; // not the pin-assignment table
+      for (const row of rows) {
+        for (const i of [netI, nameI]) {
+          if (i < 0) continue;
+          const value = strip(row.cells[i]);
+          // KiCad writes `~` for an unnamed pin; it identifies nothing.
+          if (value && value !== '~') names.add(value);
+        }
+      }
+    }
+    return names;
+  }
+
+  /**
    * Fold the semantically-identical encodings that the model and KiCad render
    * differently, so a value that differs only in *encoding* is not flagged as
    * drift (#I11). A design that reached ERC-clean once churned for turns on
