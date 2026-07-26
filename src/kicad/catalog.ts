@@ -14,7 +14,7 @@ export interface CatalogItem {
   price: number;
 }
 
-export type MpnStatus = 'RESOLVED' | 'NO STOCK' | 'NOT FOUND';
+export type MpnStatus = 'RESOLVED' | 'NO STOCK' | 'NOT FOUND' | 'SKIPPED' | 'LOOKUP FAILED';
 
 export interface VerificationResult {
   refdes: string;

@@ -254,6 +254,7 @@ exportCmd
         const verifyRes = await runVerifyParts({
           repoRoot: repo,
           strict: false,
+          log: json ? undefined : (s) => console.error(s),
         });
         if (!verifyRes.ok) {
           console.error('BOM verification failed. Export aborted.');
@@ -292,15 +293,20 @@ program
   .option('--strict', 'fail if any part is out of stock')
   .action(async (opts: { update?: boolean; strict?: boolean }) => {
     const repo = repoOf(program.opts());
+    const json = Boolean(program.opts().json);
     try {
       const res = await runVerifyParts({
         repoRoot: repo,
         update: opts.update ?? false,
         strict: opts.strict ?? false,
+        log: json ? undefined : (s) => console.log(s),
       });
+      if (json) {
+        console.log(JSON.stringify(res, null, 2));
+      }
       process.exit(res.ok ? 0 : 1);
     } catch (err) {
-      console.error(err instanceof VerificationError ? err.message : (err as Error).message);
+      console.error((err as Error).message);
       process.exit(1);
     }
   });

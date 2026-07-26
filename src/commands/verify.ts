@@ -11,6 +11,7 @@ export interface VerifyPartsOptions {
   repoRoot: string;
   update?: boolean;
   strict?: boolean;
+  log?: (s: string) => void;
 }
 
 export interface VerifyPartsResult {
@@ -28,15 +29,21 @@ export function updateBomLcsc(md: string, mpnToLcsc: Map<string, string>): { upd
   let headerRowIdx = -1;
   let lcscColIdx = -1;
   let mpnColIdx = -1;
+  let headerCells: string[] = [];
   
   for (let i = 0; i < lines.length; i++) {
     const line = (lines[i] || '').trim();
     if (!line.startsWith('|')) continue;
-    const cells = line.split('|').slice(1, -1).map(c => c.trim());
+    
+    const cells = line.endsWith('|')
+      ? line.split('|').slice(1, -1).map(c => c.trim())
+      : line.split('|').slice(1).map(c => c.trim());
+      
     if (cells.every((c) => /^:?-+:?$/.test(c))) continue; // separator
     
     if (cells.some((c) => norm(c) === 'refdes' || norm(c) === 'reference' || norm(c) === 'designator')) {
       headerRowIdx = i;
+      headerCells = cells;
       cells.forEach((c, idx) => {
         const field = HEADER_ALIASES[norm(c)];
         if (field === 'lcsc') lcscColIdx = idx;
@@ -46,7 +53,12 @@ export function updateBomLcsc(md: string, mpnToLcsc: Map<string, string>): { upd
     }
   }
   
-  if (headerRowIdx === -1 || mpnColIdx === -1 || lcscColIdx === -1) {
+  if (headerRowIdx === -1 || mpnColIdx === -1) {
+    return { updatedMd: md, updatedCount: 0 };
+  }
+  
+  if (lcscColIdx === -1) {
+    console.warn("no LCSC column in docs/BOM.md; add one to use --update");
     return { updatedMd: md, updatedCount: 0 };
   }
   
@@ -58,8 +70,15 @@ export function updateBomLcsc(md: string, mpnToLcsc: Map<string, string>): { upd
     const trimmed = line.trim();
     if (!trimmed.startsWith('|')) continue;
     
-    const cells = trimmed.split('|').slice(1, -1).map(c => c.trim());
+    const cells = trimmed.endsWith('|')
+      ? trimmed.split('|').slice(1, -1).map(c => c.trim())
+      : trimmed.split('|').slice(1).map(c => c.trim());
+      
     if (cells.every((c) => /^:?-+:?$/.test(c))) continue; // separator
+    
+    if (cells.length !== headerCells.length) {
+      continue; // Skip rows where cell count does not match header to avoid corruption
+    }
     
     const mpn = cells[mpnColIdx];
     if (mpn) {
@@ -90,7 +109,7 @@ export async function runVerifyParts(opts: VerifyPartsOptions): Promise<VerifyPa
   const bomContent = await readFile(bomPath, 'utf8');
   const rows = parseBom(bomContent);
 
-  const uniqueMpns = [...new Set(rows.map(r => r.mpn.trim()).filter(m => m.length > 0))];
+  const uniqueMpns = [...new Set(rows.filter(r => r.hasMpn).map(r => r.mpn.trim()))];
   const mpnResolutions = new Map<string, { status: MpnStatus; lcscCode?: string }>();
 
   // Fetch resolutions in parallel batches of 5 to limit concurrency
@@ -102,24 +121,25 @@ export async function runVerifyParts(opts: VerifyPartsOptions): Promise<VerifyPa
         lcscCode: res.item?.lcscCode,
       });
     } catch (err) {
-      // Degrade connection errors to NOT FOUND / failed state for strict mode,
+      // Degrade connection errors to LOOKUP FAILED / failed state for strict mode,
       // but surface that this was a lookup failure, not a genuine catalog miss.
-      console.warn(`Catalog lookup failed for MPN "${mpn}": ${(err as Error).message}`);
+      console.warn(err instanceof Error ? err.message : String(err));
       mpnResolutions.set(mpn.toLowerCase(), {
-        status: 'NOT FOUND',
+        status: 'LOOKUP FAILED',
       });
     }
   });
 
   const results: VerificationResult[] = rows.map((row) => {
-    const cleanMpn = row.mpn.trim();
-    if (cleanMpn.length === 0) {
+    if (!row.hasMpn) {
       return {
         refdes: row.refdes,
-        mpn: '',
-        status: 'NOT FOUND',
+        mpn: row.mpn.trim(),
+        status: 'SKIPPED',
+        lcscCode: row.lcsc || undefined,
       };
     }
+    const cleanMpn = row.mpn.trim();
     const resolution = mpnResolutions.get(cleanMpn.toLowerCase());
     return {
       refdes: row.refdes,
@@ -131,35 +151,43 @@ export async function runVerifyParts(opts: VerifyPartsOptions): Promise<VerifyPa
 
   // Check overall validity
   const hasNotFound = results.some((r) => r.status === 'NOT FOUND');
+  const hasLookupFailed = results.some((r) => r.status === 'LOOKUP FAILED');
   const hasNoStock = results.some((r) => r.status === 'NO STOCK');
-  const ok = opts.strict ? (!hasNotFound && !hasNoStock) : !hasNotFound;
+  const ok = opts.strict
+    ? (!hasNotFound && !hasNoStock && !hasLookupFailed)
+    : (!hasNotFound && !hasLookupFailed);
 
-  // Print tabular summary to stdout
-  console.log(`\nVerifying BOM parts against catalog...`);
-  console.log(`Refdes`.padEnd(10) + `MPN`.padEnd(25) + `Status`.padEnd(15) + `LCSC`);
-  console.log(`-`.repeat(60));
-  for (const r of results) {
-    const mpnStr = r.mpn || '(empty)';
-    console.log(
-      r.refdes.padEnd(10) +
-      mpnStr.padEnd(25) +
-      r.status.padEnd(15) +
-      (r.lcscCode || '-')
-    );
+  // Print tabular summary to log callback if provided
+  const log = opts.log;
+  if (log) {
+    log(`\nVerifying BOM parts against catalog...`);
+    log(`Refdes`.padEnd(10) + `MPN`.padEnd(25) + `Status`.padEnd(15) + `LCSC`);
+    log(`-`.repeat(60));
+    for (const r of results) {
+      const mpnStr = r.mpn || '(empty)';
+      log(
+        r.refdes.padEnd(10) +
+        mpnStr.padEnd(25) +
+        r.status.padEnd(15) +
+        (r.lcscCode || '-')
+      );
+    }
+    log('');
   }
-  console.log();
 
   if (opts.update) {
     const mpnToLcsc = new Map<string, string>();
     for (const [mpn, res] of mpnResolutions.entries()) {
-      if (res.lcscCode) {
+      if (res.status === 'RESOLVED' && res.lcscCode) {
         mpnToLcsc.set(mpn, res.lcscCode);
       }
     }
     const { updatedMd, updatedCount } = updateBomLcsc(bomContent, mpnToLcsc);
     if (updatedCount > 0) {
       await writeFile(bomPath, updatedMd, 'utf8');
-      console.log(`Updated ${updatedCount} LCSC code(s) in BOM.md.\n`);
+      if (log) {
+        log(`Updated ${updatedCount} LCSC code(s) in BOM.md.\n`);
+      }
     }
   }
 

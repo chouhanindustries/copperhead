@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { runVerifyParts, VerificationError } from '../src/commands/verify.js';
+import { runVerifyParts, updateBomLcsc } from '../src/commands/verify.js';
 import { verifyMpn } from '../src/kicad/catalog.js';
 import { runExportBom } from '../src/commands/export.js';
 import { runCheck } from '../src/commands/check.js';
@@ -59,7 +59,7 @@ describe('Part verification (verify-parts-networked)', () => {
     );
   });
 
-  it('runVerifyParts parses BOM.md, runs query, and reports tabular status', async () => {
+  it('runVerifyParts parses BOM.md, runs query, reports tabular status, and skips placeholders', async () => {
     const { repo, cleanup } = await tempFixtureRepo();
     try {
       const bomPath = path.join(repo, 'docs', 'BOM.md');
@@ -68,23 +68,16 @@ describe('Part verification (verify-parts-networked)', () => {
 | Refdes | Value | Footprint | MPN | Manufacturer | LCSC |
 |---|---|---|---|---|---|
 | R1 | 10k | R_0603 | RC0603FR-0710KL | Yageo | |
-| R2 | 1k | R_0603 | MOCK-OUT-OF-STOCK | | |
+| R2 | 1k | R_0603 | UNVERIFIED | | |
 | U1 | ESP | SMD | MOCK-NOT-FOUND | | |
 `, 'utf8');
 
-      // Mock the fetch resolutions
+      // Mock resolutions (should only be called for RC0603FR-0710KL and MOCK-NOT-FOUND, since UNVERIFIED is skipped)
       // RC0603FR-0710KL
       fetchSpy.mockResolvedValueOnce({
         ok: true,
         json: async () => ({
           components: [{ lcsc: 25804, mfr: 'RC0603FR-0710KL', package: '0603', stock: 500, price: 0.01 }]
-        })
-      } as Response);
-      // MOCK-OUT-OF-STOCK
-      fetchSpy.mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({
-          components: [{ lcsc: 999, mfr: 'MOCK-OUT-OF-STOCK', package: '0603', stock: 0, price: 0.1 }]
         })
       } as Response);
       // MOCK-NOT-FOUND
@@ -99,14 +92,14 @@ describe('Part verification (verify-parts-networked)', () => {
       expect(res.ok).toBe(false); // fails overall since U1 is NOT FOUND
       expect(res.results).toHaveLength(3);
       expect(res.results[0]).toMatchObject({ refdes: 'R1', status: 'RESOLVED', lcscCode: 'C25804' });
-      expect(res.results[1]).toMatchObject({ refdes: 'R2', status: 'NO STOCK', lcscCode: 'C999' });
+      expect(res.results[1]).toMatchObject({ refdes: 'R2', status: 'SKIPPED' });
       expect(res.results[2]).toMatchObject({ refdes: 'U1', status: 'NOT FOUND' });
     } finally {
       await cleanup();
     }
   });
 
-  it('runVerifyParts --update rewrites BOM.md with resolved LCSC codes', async () => {
+  it('runVerifyParts handles catalog API errors gracefully as LOOKUP FAILED', async () => {
     const { repo, cleanup } = await tempFixtureRepo();
     try {
       const bomPath = path.join(repo, 'docs', 'BOM.md');
@@ -115,6 +108,31 @@ describe('Part verification (verify-parts-networked)', () => {
 | Refdes | Value | Footprint | MPN | Manufacturer | LCSC |
 |---|---|---|---|---|---|
 | R1 | 10k | R_0603 | RC0603FR-0710KL | Yageo | |
+`, 'utf8');
+
+      // Mock 503 response from catalog
+      fetchSpy.mockResolvedValueOnce({
+        ok: false,
+        statusText: 'Service Unavailable',
+      } as Response);
+
+      const res = await runVerifyParts({ repoRoot: repo });
+      expect(res.ok).toBe(false);
+      expect(res.results[0]).toMatchObject({ refdes: 'R1', status: 'LOOKUP FAILED' });
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it('runVerifyParts --update rewrites BOM.md and handles rows without trailing pipes', async () => {
+    const { repo, cleanup } = await tempFixtureRepo();
+    try {
+      const bomPath = path.join(repo, 'docs', 'BOM.md');
+      await mkdir(path.dirname(bomPath), { recursive: true });
+      await writeFile(bomPath, `# BOM
+| Refdes | Value | Footprint | MPN | Manufacturer | LCSC | Rationale
+|---|---|---|---|---|---|---|
+| R1 | 10k | R_0603 | RC0603FR-0710KL | Yageo | | pullup
 `, 'utf8');
 
       fetchSpy.mockResolvedValueOnce({
@@ -128,7 +146,7 @@ describe('Part verification (verify-parts-networked)', () => {
       expect(res.ok).toBe(true);
 
       const content = await readFile(bomPath, 'utf8');
-      expect(content).toContain('| R1 | 10k | R_0603 | RC0603FR-0710KL | Yageo | C25804 |');
+      expect(content).toContain('| R1 | 10k | R_0603 | RC0603FR-0710KL | Yageo | C25804 | pullup |');
     } finally {
       await cleanup();
     }

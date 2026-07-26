@@ -381,7 +381,7 @@ Acceptance: type "add a second RGB LED on an RTC-capable pin" → watch schemati
 ## 7. Safety rails
 
 - Refuse to run `do` on a dirty git tree (offer `--allow-dirty` with snapshot via `git stash create`)
-- All file tools sandboxed to repo root; no network tools in Phase 1
+- All file tools sandboxed to repo root; no network tools in Phase 1 (except the opt-in `verify-parts` command)
 - `.env` in `.gitignore` from first commit; keys only via env vars — never written to any file, transcript, or commit
 - Transcripts in `.copperhead/runs/` redact anything matching `sk-[A-Za-z0-9_-]+`
 - The Codex CLI's native read access and `~/.codex/sessions/` logs are outside Copperhead's enforcement/redaction boundary; the Codex path documents this host-local exposure explicitly
