@@ -183,14 +183,37 @@ describe('file tools', () => {
     const repo = path.join(base, 'repo');
     await mkdir(path.join(repo, 'real'), { recursive: true });
     await writeFile(path.join(repo, 'real', 'lib.txt'), 'needle inside\n', 'utf8');
-    await symlink(path.join(repo, 'real'), path.join(repo, 'alias'));
+    // A symlinked *file*, not a directory: a directory alias is subject to
+    // readdir ordering, so only a file link pins "the link was followed"
+    // deterministically.
+    await symlink(path.join(repo, 'real', 'lib.txt'), path.join(repo, 'alias.txt'));
 
     const matches = await toolSearch(repo, 'needle');
 
-    // Symlinked library dirs are a normal KiCad layout: the file is reachable
-    // by both names, and neither traversal is an escape.
-    expect(matches.length).toBeGreaterThanOrEqual(1);
-    expect(matches.every((m) => m.text.includes('needle inside'))).toBe(true);
+    // Symlinked library paths are a normal KiCad layout: the file is reachable
+    // by both names, and neither traversal is an escape. Asserting the exact
+    // set is what makes this a guard rail — refusing to follow the link drops
+    // alias.txt and fails here.
+    expect(matches.map((m) => m.file).sort()).toEqual(['alias.txt', path.join('real', 'lib.txt')]);
+  });
+
+  it('search reports a directory reachable by both its real name and an alias', async () => {
+    const base = await mkdtemp(path.join(tmpdir(), 'ch-search-alias-'));
+    const repo = path.join(base, 'repo');
+    await mkdir(path.join(repo, 'zreal'), { recursive: true });
+    await writeFile(path.join(repo, 'zreal', 'lib.txt'), 'needle inside\n', 'utf8');
+    // Sorts before 'zreal', so readdir yields the alias first: with walk-global
+    // loop detection the real directory is pruned and a path-anchored glob
+    // finds nothing.
+    await symlink(path.join(repo, 'zreal'), path.join(repo, 'aalias'));
+
+    expect((await toolSearch(repo, 'needle')).map((m) => m.file).sort()).toEqual([
+      path.join('aalias', 'lib.txt'),
+      path.join('zreal', 'lib.txt'),
+    ]);
+    expect((await toolSearch(repo, 'needle', 'zreal/**')).map((m) => m.file)).toEqual([
+      path.join('zreal', 'lib.txt'),
+    ]);
   });
 
   it('isKicadFile covers the design formats', () => {

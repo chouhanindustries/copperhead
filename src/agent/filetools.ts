@@ -111,9 +111,11 @@ export async function toolSearch(
   // pointing at an ancestor is otherwise descended until the OS throws ELOOP,
   // which takes down search for the whole run.
   const realRoot = await realpath(repoRoot).catch(() => path.resolve(repoRoot));
-  // Seeded with the root: a link pointing back at it would otherwise be walked
-  // once more, duplicating every root-level match under the link's path.
-  const seenDirs = new Set<string>([realRoot]);
+  // Loop protection is scoped to the *current path*, not the whole walk. A cycle
+  // always means revisiting an ancestor, so an ancestor set terminates the walk
+  // while still visiting siblings: a global set would also drop non-cyclic
+  // aliases, hiding a real directory behind an in-repo symlink pointing at it.
+  const ancestors = new Set<string>([realRoot]);
 
   /** The real path of `abs`, or null when it resolves outside the repo. */
   async function insideRoot(abs: string): Promise<string | null> {
@@ -140,9 +142,10 @@ export async function toolSearch(
       if (st.isDirectory()) {
         const real = await insideRoot(abs);
         if (real === null) continue;
-        if (seenDirs.has(real)) continue; // already walked: a symlink loop
-        seenDirs.add(real);
+        if (ancestors.has(real)) continue; // on the current path already: a loop
+        ancestors.add(real);
         await walk(abs);
+        ancestors.delete(real);
       } else if (st.size < 5_000_000 && (!globRe || globRe.test(rel))) {
         let text: string;
         try {
