@@ -37,15 +37,13 @@ const gib = (n: number): string => `${(n / 1024 / 1024 / 1024).toFixed(1)} GiB`;
  * `Number('')` is `0`, so parsing the raw value would turn an env var that was
  * declared but never filled in (a blank line in `.env`, an unset CI variable)
  * into a 0-byte threshold, silently disabling the check this module exists for.
- * Anything else unparseable, negative, or non-finite also falls back.
+ * Anything else unparseable, negative, or non-finite also falls back to
+ * `DEFAULT_MIN_FREE_BYTES`, which is exported for callers that need it.
  */
-export function resolveMinFreeBytes(
-  raw: string | undefined,
-  fallback = DEFAULT_MIN_FREE_BYTES,
-): number {
-  if (raw === undefined || raw.trim() === '') return fallback;
+export function resolveMinFreeBytes(raw: string | undefined): number {
+  if (raw === undefined || raw.trim() === '') return DEFAULT_MIN_FREE_BYTES;
   const mb = Number(raw);
-  if (!Number.isFinite(mb) || mb < 0) return fallback;
+  if (!Number.isFinite(mb) || mb < 0) return DEFAULT_MIN_FREE_BYTES;
   return mb * 1024 * 1024;
 }
 
