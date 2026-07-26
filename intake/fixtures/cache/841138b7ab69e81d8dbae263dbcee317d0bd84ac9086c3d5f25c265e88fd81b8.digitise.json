@@ -1,0 +1,384 @@
+[
+  {
+    "page": 1,
+    "text": "TEXAS\nINSTRUMENTS\nwww.ti.com\nLM555\nSNAS548D – FEBRUARY 2000 – REVISED JANUARY 2015\n6.5 Electrical Characteristics\n$ (T_A = 25^∘C, V_CC = 5V  to  15V, unless otherwise specified)^(1)(2) $\n<table>\n<thead>\n<tr>\n<th>PARAMETER</th>\n<th>TEST CONDITIONS</th>\n<th>MIN</th>\n<th>TYP</th>\n<th>MAX</th>\n<th>UNIT</th>\n</tr>\n</thead>\n<tbody>\n<tr>\n<td>Supply Voltage</td>\n<td></td>\n<td>4.5</td>\n<td colspan=\"2\">16</td>\n<td>V</td>\n</tr>\n<tr>\n<td rowspan=\"2\">Supply Current</td>\n<td>V<sub>CC</sub> = 5 V, R<sub>L</sub> = ∞</td>\n<td colspan=\"3\">3 6</td>\n<td>mA</td>\n</tr>\n<tr>\n<td>V<sub>CC</sub> = 15 V, R<sub>L</sub> = ∞<br/>(Low State) (3)</td>\n<td colspan=\"3\">10 15</td>\n<td>mA</td>\n</tr>\n<tr>\n<td>Timing Error, Monostable</td>\n<td></td>\n<td></td>\n<td></td>\n<td></td>\n<td></td>\n</tr>\n<tr>\n<td>Initial Accuracy</td>\n<td></td>\n<td colspan=\"3\">1 %</td>\n<td></td>\n</tr>\n<tr>\n<td rowspan=\"2\">Drift with Temperature</td>\n<td>R<sub>A</sub> = 1 k to 100 kΩ,<br/>C = 0.1 µF, (4)</td>\n<td colspan=\"3\">50</td>\n<td>ppm/°C</td>\n</tr>\n<tr>\n<td></td>\n<td colspan=\"3\"></td>\n<td></td>\n</tr>\n<tr>\n<td>Accuracy over Temperature</td>\n<td></td>\n<td colspan=\"3\">1.5 %</td>\n<td></td>\n</tr>\n<tr>\n<td>Drift with Supply</td>\n<td></td>\n<td colspan=\"3\">0.1 %</td>\n<td>V</td>\n</tr>\n<tr>\n<td>Timing Error, Astable</td>\n<td></td>\n<td colspan=\"3\"></td>\n<td></td>\n</tr>\n<tr>\n<td>Initial Accuracy</td>\n<td></td>\n<td colspan=\"3\">2.25</td>\n<td></td>\n</tr>\n<tr>\n<td rowspan=\"2\">Drift with Temperature</td>\n<td>R<sub>A</sub>, R<sub>B</sub> =1 k to 100 kΩ,<br/>C = 0.1 µF, (4)</td>\n<td colspan=\"3\">150</td>\n<td>ppm/°C</td>\n</tr>\n<tr>\n<td></td>\n<td colspan=\"3\"></td>\n<td></td>\n</tr>\n<tr>\n<td>Accuracy over Temperature</td>\n<td></td>\n<td colspan=\"3\">3.0%</td>\n<td></td>\n</tr>\n<tr>\n<td>Drift with Supply</td>\n<td></td>\n<td colspan=\"3\">0.30 %</td>\n<td>/V</td>\n</tr>\n<tr>\n<td>Threshold Voltage</td>\n<td></td>\n<td colspan=\"3\">0.667</td>\n<td>x V<sub>CC</sub></td>\n</tr>\n<tr>\n<td rowspan=\"2\">Trigger Voltage</td>\n<td>V<sub>CC</sub> = 15 V</td>\n<td colspan=\"3\">5</td>\n<td>V</td>\n</tr>\n<tr>\n<td>V<sub>CC</sub> = 5 V</td>\n<td colspan=\"3\">1.67</td>\n<td>V</td>\n</tr>\n<tr>\n<td>Trigger Current</td>\n<td></td>\n<td>0.5</td>\n<td>0.9</td>\n<td>µA</td>\n<td></td>\n</tr>\n<tr>\n<td>Reset Voltage</td>\n<td></td>\n<td>0.4</td>\n<td>0.5</td>\n<td>1</td>\n<td>V</td>\n</tr>\n<tr>\n<td>Reset Current</td>\n<td></td>\n<td>0.1</td>\n<td>0.4</td>\n<td>mA</td>\n<td></td>\n</tr>\n<tr>\n<td>Threshold Current</td>\n<td>(5)</td>\n<td>0.1</td>\n<td>0.25</td>\n<td>µA</td>\n<td></td>\n</tr>\n<tr>\n<td rowspan=\"2\">Control Voltage Level</td>\n<td>V<sub>CC</sub> = 15 V</td>\n<td>9</td>\n<td>10</td>\n<td>11</td>\n<td>V</td>\n</tr>\n<tr>\n<td>V<sub>CC</sub> = 5 V</td>\n<td>2.6</td>\n<td>3.33</td>\n<td>4</td>\n<td>V</td>\n</tr>\n<tr>\n<td>Pin 7 Leakage Output High</td>\n<td></td>\n<td colspan=\"3\">1 100</td>\n<td>nA</td>\n</tr>\n<tr>\n<td>Pin 7 Sat (6)</td>\n<td></td>\n<td colspan=\"3\"></td>\n<td></td>\n</tr>\n<tr>\n<td>Output Low</td>\n<td>V<sub>CC</sub> = 15 V, I<sub>7</sub> = 15 mA</td>\n<td colspan=\"3\">180</td>\n<td>mV</td>\n</tr>\n<tr>\n<td>Output Low</td>\n<td>V<sub>CC</sub> = 4.5 V, I<sub>7</sub> = 4.5 mA</td>\n<td colspan=\"3\">80 200</td>\n<td>mV</td>\n</tr>\n<tr>\n<td rowspan=\"7\">Output Voltage Drop (Low)</td>\n<td>V<sub>CC</sub> = 15 V</td>\n<td colspan=\"3\"></td>\n<td></td>\n</tr>\n<tr>\n<td>I<sub>SINK</sub> = 10 mA</td>\n<td colspan=\"3\">0.1 0.25</td>\n<td>V</td>\n</tr>\n<tr>\n<td>I<sub>SINK</sub> = 50 mA</td>\n<td colspan=\"3\">0.4 0.75</td>\n<td>V</td>\n</tr>\n<tr>\n<td>I<sub>SINK</sub> = 100 mA</td>\n<td colspan=\"3\">2 2.5</td>\n<td>V</td>\n</tr>\n<tr>\n<td>I<sub>SINK</sub> = 200 mA</td>\n<td colspan=\"3\">2.5</td>\n<td>V</td>\n</tr>\n<tr>\n<td>V<sub>CC</sub> = 5 V</td>\n<td colspan=\"3\"></td>\n<td></td>\n</tr>\n<tr>\n<td>I<sub>SINK</sub> = 8 mA</td>\n<td colspan=\"3\"></td>\n<td>V</td>\n</tr>\n<tr>\n<td></td>\n<td>I<sub>SINK</sub> = 5 mA</td>\n<td colspan=\"3\">0.25 0.35</td>\n<td>V</td>\n</tr>\n</tbody>\n</table>\n(1) All voltages are measured with respect to the ground pin, unless otherwise specified.\n(2) Absolute Maximum Ratings indicate limits beyond which damage to the device may occur. Recommended Operating Conditions indicate\nconditions for which the device is functional, but do not ensure specific performance limits. Electrical Characteristics state DC and AC\nelectrical specifications under particular test conditions which ensures specific performance limits. This assumes that the device is within\nthe Recommended Operating Conditions. Specifications are not ensured for parameters where no limit is given, however, the typical\nvalue is a good indication of device performance.\n(3) Supply current when output high typically 1 mA less at V_CC = 5 V.\n(4) Tested at V_CC = 5 V and V_CC = 15 V.\n(5) This will determine the maximum value of R_A + R_B for 15 V operation. The maximum total (R_A + R_B) is 20 MΩ.\n(6) No protection against excessive pin 7 current is necessary providing the package dissipation rating will not be exceeded.\nCopyright © 2000–2015, Texas Instruments Incorporated\nSubmit Documentation Feedback\nProduct Folder Links: LM555\n5",
+    "regions": [
+      {
+        "text": "TEXAS\nINSTRUMENTS",
+        "bbox": {
+          "page": 1,
+          "x": 0.08745098039215686,
+          "y": 0.02090909090909091,
+          "width": 0.15529411764705883,
+          "height": 0.03151515151515152
+        }
+      },
+      {
+        "text": "www.ti.com",
+        "bbox": {
+          "page": 1,
+          "x": 0.08549019607843138,
+          "y": 0.06848484848484848,
+          "width": 0.07411764705882352,
+          "height": 0.010606060606060607
+        }
+      },
+      {
+        "text": "LM555",
+        "bbox": {
+          "page": 1,
+          "x": 0.8584313725490196,
+          "y": 0.0503030303030303,
+          "width": 0.05529411764705883,
+          "height": 0.013333333333333334
+        }
+      },
+      {
+        "text": "SNAS548D – FEBRUARY 2000 – REVISED JANUARY 2015",
+        "bbox": {
+          "page": 1,
+          "x": 0.6047058823529412,
+          "y": 0.06696969696969697,
+          "width": 0.30901960784313726,
+          "height": 0.011818181818181818
+        }
+      },
+      {
+        "text": "6.5 Electrical Characteristics",
+        "bbox": {
+          "page": 1,
+          "x": 0.08431372549019608,
+          "y": 0.09272727272727273,
+          "width": 0.2635294117647059,
+          "height": 0.015454545454545455
+        }
+      },
+      {
+        "text": "$ (T_A = 25^∘C, V_CC = 5V  to  15V, unless otherwise specified)^(1)(2) $",
+        "bbox": {
+          "page": 1,
+          "x": 0.08666666666666667,
+          "y": 0.11181818181818182,
+          "width": 0.4109803921568628,
+          "height": 0.01575757575757576
+        }
+      },
+      {
+        "text": "<table>\n<thead>\n<tr>\n<th>PARAMETER</th>\n<th>TEST CONDITIONS</th>\n<th>MIN</th>\n<th>TYP</th>\n<th>MAX</th>\n<th>UNIT</th>\n</tr>\n</thead>\n<tbody>\n<tr>\n<td>Supply Voltage</td>\n<td></td>\n<td>4.5</td>\n<td colspan=\"2\">16</td>\n<td>V</td>\n</tr>\n<tr>\n<td rowspan=\"2\">Supply Current</td>\n<td>V<sub>CC</sub> = 5 V, R<sub>L</sub> = ∞</td>\n<td colspan=\"3\">3 6</td>\n<td>mA</td>\n</tr>\n<tr>\n<td>V<sub>CC</sub> = 15 V, R<sub>L</sub> = ∞<br/>(Low State) (3)</td>\n<td colspan=\"3\">10 15</td>\n<td>mA</td>\n</tr>\n<tr>\n<td>Timing Error, Monostable</td>\n<td></td>\n<td></td>\n<td></td>\n<td></td>\n<td></td>\n</tr>\n<tr>\n<td>Initial Accuracy</td>\n<td></td>\n<td colspan=\"3\">1 %</td>\n<td></td>\n</tr>\n<tr>\n<td rowspan=\"2\">Drift with Temperature</td>\n<td>R<sub>A</sub> = 1 k to 100 kΩ,<br/>C = 0.1 µF, (4)</td>\n<td colspan=\"3\">50</td>\n<td>ppm/°C</td>\n</tr>\n<tr>\n<td></td>\n<td colspan=\"3\"></td>\n<td></td>\n</tr>\n<tr>\n<td>Accuracy over Temperature</td>\n<td></td>\n<td colspan=\"3\">1.5 %</td>\n<td></td>\n</tr>\n<tr>\n<td>Drift with Supply</td>\n<td></td>\n<td colspan=\"3\">0.1 %</td>\n<td>V</td>\n</tr>\n<tr>\n<td>Timing Error, Astable</td>\n<td></td>\n<td colspan=\"3\"></td>\n<td></td>\n</tr>\n<tr>\n<td>Initial Accuracy</td>\n<td></td>\n<td colspan=\"3\">2.25</td>\n<td></td>\n</tr>\n<tr>\n<td rowspan=\"2\">Drift with Temperature</td>\n<td>R<sub>A</sub>, R<sub>B</sub> =1 k to 100 kΩ,<br/>C = 0.1 µF, (4)</td>\n<td colspan=\"3\">150</td>\n<td>ppm/°C</td>\n</tr>\n<tr>\n<td></td>\n<td colspan=\"3\"></td>\n<td></td>\n</tr>\n<tr>\n<td>Accuracy over Temperature</td>\n<td></td>\n<td colspan=\"3\">3.0%</td>\n<td></td>\n</tr>\n<tr>\n<td>Drift with Supply</td>\n<td></td>\n<td colspan=\"3\">0.30 %</td>\n<td>/V</td>\n</tr>\n<tr>\n<td>Threshold Voltage</td>\n<td></td>\n<td colspan=\"3\">0.667</td>\n<td>x V<sub>CC</sub></td>\n</tr>\n<tr>\n<td rowspan=\"2\">Trigger Voltage</td>\n<td>V<sub>CC</sub> = 15 V</td>\n<td colspan=\"3\">5</td>\n<td>V</td>\n</tr>\n<tr>\n<td>V<sub>CC</sub> = 5 V</td>\n<td colspan=\"3\">1.67</td>\n<td>V</td>\n</tr>\n<tr>\n<td>Trigger Current</td>\n<td></td>\n<td>0.5</td>\n<td>0.9</td>\n<td>µA</td>\n<td></td>\n</tr>\n<tr>\n<td>Reset Voltage</td>\n<td></td>\n<td>0.4</td>\n<td>0.5</td>\n<td>1</td>\n<td>V</td>\n</tr>\n<tr>\n<td>Reset Current</td>\n<td></td>\n<td>0.1</td>\n<td>0.4</td>\n<td>mA</td>\n<td></td>\n</tr>\n<tr>\n<td>Threshold Current</td>\n<td>(5)</td>\n<td>0.1</td>\n<td>0.25</td>\n<td>µA</td>\n<td></td>\n</tr>\n<tr>\n<td rowspan=\"2\">Control Voltage Level</td>\n<td>V<sub>CC</sub> = 15 V</td>\n<td>9</td>\n<td>10</td>\n<td>11</td>\n<td>V</td>\n</tr>\n<tr>\n<td>V<sub>CC</sub> = 5 V</td>\n<td>2.6</td>\n<td>3.33</td>\n<td>4</td>\n<td>V</td>\n</tr>\n<tr>\n<td>Pin 7 Leakage Output High</td>\n<td></td>\n<td colspan=\"3\">1 100</td>\n<td>nA</td>\n</tr>\n<tr>\n<td>Pin 7 Sat (6)</td>\n<td></td>\n<td colspan=\"3\"></td>\n<td></td>\n</tr>\n<tr>\n<td>Output Low</td>\n<td>V<sub>CC</sub> = 15 V, I<sub>7</sub> = 15 mA</td>\n<td colspan=\"3\">180</td>\n<td>mV</td>\n</tr>\n<tr>\n<td>Output Low</td>\n<td>V<sub>CC</sub> = 4.5 V, I<sub>7</sub> = 4.5 mA</td>\n<td colspan=\"3\">80 200</td>\n<td>mV</td>\n</tr>\n<tr>\n<td rowspan=\"7\">Output Voltage Drop (Low)</td>\n<td>V<sub>CC</sub> = 15 V</td>\n<td colspan=\"3\"></td>\n<td></td>\n</tr>\n<tr>\n<td>I<sub>SINK</sub> = 10 mA</td>\n<td colspan=\"3\">0.1 0.25</td>\n<td>V</td>\n</tr>\n<tr>\n<td>I<sub>SINK</sub> = 50 mA</td>\n<td colspan=\"3\">0.4 0.75</td>\n<td>V</td>\n</tr>\n<tr>\n<td>I<sub>SINK</sub> = 100 mA</td>\n<td colspan=\"3\">2 2.5</td>\n<td>V</td>\n</tr>\n<tr>\n<td>I<sub>SINK</sub> = 200 mA</td>\n<td colspan=\"3\">2.5</td>\n<td>V</td>\n</tr>\n<tr>\n<td>V<sub>CC</sub> = 5 V</td>\n<td colspan=\"3\"></td>\n<td></td>\n</tr>\n<tr>\n<td>I<sub>SINK</sub> = 8 mA</td>\n<td colspan=\"3\"></td>\n<td>V</td>\n</tr>\n<tr>\n<td></td>\n<td>I<sub>SINK</sub> = 5 mA</td>\n<td colspan=\"3\">0.25 0.35</td>\n<td>V</td>\n</tr>\n</tbody>\n</table>",
+        "bbox": {
+          "page": 1,
+          "x": 0.08588235294117647,
+          "y": 0.11787878787878787,
+          "width": 0.8254901960784313,
+          "height": 0.6421212121212121
+        }
+      },
+      {
+        "text": "(1) All voltages are measured with respect to the ground pin, unless otherwise specified.",
+        "bbox": {
+          "page": 1,
+          "x": 0.08431372549019608,
+          "y": 0.7621212121212121,
+          "width": 0.5298039215686274,
+          "height": 0.012727272727272728
+        }
+      },
+      {
+        "text": "(2) Absolute Maximum Ratings indicate limits beyond which damage to the device may occur. Recommended Operating Conditions indicate\nconditions for which the device is functional, but do not ensure specific performance limits. Electrical Characteristics state DC and AC\nelectrical specifications under particular test conditions which ensures specific performance limits. This assumes that the device is within\nthe Recommended Operating Conditions. Specifications are not ensured for parameters where no limit is given, however, the typical\nvalue is a good indication of device performance.",
+        "bbox": {
+          "page": 1,
+          "x": 0.08549019607843138,
+          "y": 0.7745454545454545,
+          "width": 0.8274509803921568,
+          "height": 0.05787878787878788
+        }
+      },
+      {
+        "text": "(3) Supply current when output high typically 1 mA less at V_CC = 5 V.",
+        "bbox": {
+          "page": 1,
+          "x": 0.08352941176470588,
+          "y": 0.8306060606060606,
+          "width": 0.4168627450980392,
+          "height": 0.013030303030303031
+        }
+      },
+      {
+        "text": "(4) Tested at V_CC = 5 V and V_CC = 15 V.",
+        "bbox": {
+          "page": 1,
+          "x": 0.08313725490196078,
+          "y": 0.8427272727272728,
+          "width": 0.26509803921568625,
+          "height": 0.011818181818181818
+        }
+      },
+      {
+        "text": "(5) This will determine the maximum value of R_A + R_B for 15 V operation. The maximum total (R_A + R_B) is 20 MΩ.",
+        "bbox": {
+          "page": 1,
+          "x": 0.08470588235294117,
+          "y": 0.8524242424242424,
+          "width": 0.6752941176470588,
+          "height": 0.013030303030303031
+        }
+      },
+      {
+        "text": "(6) No protection against excessive pin 7 current is necessary providing the package dissipation rating will not be exceeded.",
+        "bbox": {
+          "page": 1,
+          "x": 0.08549019607843138,
+          "y": 0.8660606060606061,
+          "width": 0.7352941176470589,
+          "height": 0.011818181818181818
+        }
+      },
+      {
+        "text": "Copyright © 2000–2015, Texas Instruments Incorporated",
+        "bbox": {
+          "page": 1,
+          "x": 0.08549019607843138,
+          "y": 0.9345454545454546,
+          "width": 0.29568627450980395,
+          "height": 0.012121212121212121
+        }
+      },
+      {
+        "text": "Submit Documentation Feedback",
+        "bbox": {
+          "page": 1,
+          "x": 0.6674509803921569,
+          "y": 0.9336363636363636,
+          "width": 0.1984313725490196,
+          "height": 0.012424242424242424
+        }
+      },
+      {
+        "text": "Product Folder Links: LM555",
+        "bbox": {
+          "page": 1,
+          "x": 0.4137254901960784,
+          "y": 0.9524242424242424,
+          "width": 0.17372549019607844,
+          "height": 0.012727272727272728
+        }
+      },
+      {
+        "text": "5",
+        "bbox": {
+          "page": 1,
+          "x": 0.9023529411764706,
+          "y": 0.9342424242424242,
+          "width": 0.011764705882352941,
+          "height": 0.011818181818181818
+        }
+      }
+    ]
+  },
+  {
+    "page": 2,
+    "text": "LM555\nSNAS548D –FEBRUARY 2000–REVISED JANUARY 2015\nTEXAS\nINSTRUMENTS\nwww.ti.com\nElectrical Characteristics (continued)\n$ (T_A = 25^∘C, V_CC = 5V  to  15V, unless otherwise specified)^(1)(2) $\n<table>\n<thead>\n<tr>\n<th>PARAMETER</th>\n<th>TEST CONDITIONS</th>\n<th>MIN</th>\n<th>TYP</th>\n<th>MAX</th>\n<th>UNIT</th>\n</tr>\n</thead>\n<tbody>\n<tr>\n<td rowspan=\"3\">Output Voltage Drop (High)</td>\n<td>I<sub>SOURCE</sub> = 200 mA, V<sub>CC</sub> = 15 V</td>\n<td></td>\n<td>12.5</td>\n<td></td>\n<td>V</td>\n</tr>\n<tr>\n<td>I<sub>SOURCE</sub> = 100 mA, V<sub>CC</sub> = 15 V</td>\n<td>12.75</td>\n<td>13.3</td>\n<td></td>\n<td>V</td>\n</tr>\n<tr>\n<td>V<sub>CC</sub> = 5 V</td>\n<td>2.75</td>\n<td>3.3</td>\n<td></td>\n<td>V</td>\n</tr>\n<tr>\n<td>Rise Time of Output</td>\n<td></td>\n<td></td>\n<td>100</td>\n<td></td>\n<td>ns</td>\n</tr>\n<tr>\n<td>Fall Time of Output</td>\n<td></td>\n<td></td>\n<td>100</td>\n<td></td>\n<td>ns</td>\n</tr>\n</tbody>\n</table>\n6.6 Typical Characteristics\n| Temperature (T) | Minimum Pulse Width (μs) at V_CC = 15V (Approx.) |\n| :--- | :--- |\n| +125°C | ~0.68 μs |\n| +25°C | ~0.49 μs |\n| -55°C | < 0.13 μs* |\n| *Note: The curve for T=-55°C is below the grid floor (< 0.1), indicating values less than minimum scale resolution.* |\n\n**Axes:**\n- **X-Axis Label:** Unlabeled, but represents Voltage/Time ratio based on context of pulse width vs voltage curves in electronics diagrams; range shown from roughly X=0 to Y=0.4 with ticks every 0.1 units starting near x=0 and ending just before y=0.4 (~x~0.37).\n- **Y-Axis Label:** MINIMUM PULSE WIDTH (μs); Range labeled from .1 to 1.2 ms or microseconds per division unit corresponding to visual spacing where each major tick equals approximately one microsecond interval between minor subdivisions within that space relative to other traces' scales if normalized by their own vertical span limits visually observed here as distinct lines rather than sharing same axis origin point zero crossing baseline which would be expected otherwise.\nLOWEST VOLTAGE LEVEL OF TRIGGER PULSE (X V_CC)\n| Supply Voltage (V) | +125°C Current (mA) [Approx] | -55°C/+25°C Intersection Point (~30-40% of X range, ~8 mA approx.) | >67% Range Upper Limit (>X=15 V)| \n| :--- | :--- | :--- | :--- |\n| **Supply Voltage** | **Current Value** | *(Label Location)* | *Upper Bound* |\n| 5 | ~2.9 | N/A / Start Line | null |\n| 10 | ~6.5 | intersection point at Y~8 | upper limit line ends here or is not visible in grid; likely <Y<10 for all voltages shown above the start lines which are below it by roughly equal amounts.|\n| 15 | Not Visible on Grid Lines (<approx>10 to be precise based off visual alignment with vertical axis ticks). | end of plotted data region relative to other curves | null |\nFigure 1. Minimum Pulse Width Required For Triggering\nFigure 2. Supply Current vs. Supply Voltage\n| I_SOURCE (mA) | VCC - VOUT @ T_A = +55°C (V) | VCC - VOUT @ T_A = +25°C (V) | VCC - VOUT @ T_A = +125°C (V) |\n| :--- | :--- | :--- | :--- |\n| 1 | ~1.64 | ~0.98 | ~0.73 |\n| 10 | ~1.72 | ~1.02 | ~0.98 |\n| 100 | >2.0* | ~1.58 | ~1.35 |\n\n**Note:** The value for the top curve at high current is estimated as it exceeds the vertical axis limit of \"2\". The bottom text annotation indicates 5 ≤V_CC ≤15 Volts, which corresponds to all three curves shown in the plot range from roughly ∼0.8v up to >2.0v.\nFigure 3. High Output Voltage vs. Output Source Current\n| I_SINK (mA) | V_OUT (-55°C, 25°C & +125°C Cluster - Low Current Region)| Notes on High-Current Behavior (+/-40°C Curve at ~80 mA vs others >90 mA range). | V_CC Condition |\n| :--- | :--- | :--- | :--- |\n| **~3** | < 0.06 (< ∼ grid line between .05 and .1)ᵃ | Start of linear region; slight spread (~+7% to +/-1%) due to temperature variation in low current area.| N/A |\n| **~10** | ≈ [0.06, 0.1] Rangeᵇ; Spread increases slightly as temp rises from lowest curve (<grid point approx.) up the cluster.ᶜ | Linear rise with significant thermal drift visible across all three curves within same voltage window for mid currents.<br>^∘: Estimated based on visual alignment relative to major vertical lines (.1 = one tenth)<br>Note: The high-I_SINK, middle segment is omitted visually but exists mathematically per context description above \"High Temperature Drift\". | All Curves converge near top edge when crossing saturation limit around ~x=80. |\n| **≥ 80** | Saturation Limit / Cutoff Point (≈x=80), Output saturates rapidly towards max value regardless of input or initial state.* This behavior differs significantly by starting bias condition compared to lower temperatures where it remains open loop longer before reaching cutoff threshold*. | *Visual observation indicates rapid transition out of active circuit domain after passing X axis intersection* |\n\n*^* Note that while not explicitly labeled 'saturation', these points represent physical limits defined implicitly here via device characteristics shown graphically against power supply constraints implied vertically along Y Axis scale boundaries.*\nFigure 4. Low Output Voltage vs. Output Sink Current\n6\nSubmit Documentation Feedback\nProduct Folder Links: LM555\nCopyright © 2000–2015, Texas Instruments Incorporated",
+    "regions": [
+      {
+        "text": "LM555\nSNAS548D –FEBRUARY 2000–REVISED JANUARY 2015",
+        "bbox": {
+          "page": 2,
+          "x": 0.08431372549019608,
+          "y": 0.04787878787878788,
+          "width": 0.312156862745098,
+          "height": 0.03151515151515152
+        }
+      },
+      {
+        "text": "TEXAS\nINSTRUMENTS",
+        "bbox": {
+          "page": 2,
+          "x": 0.7584313725490196,
+          "y": 0.02,
+          "width": 0.15568627450980393,
+          "height": 0.03272727272727273
+        }
+      },
+      {
+        "text": "www.ti.com",
+        "bbox": {
+          "page": 2,
+          "x": 0.8396078431372549,
+          "y": 0.06878787878787879,
+          "width": 0.07333333333333333,
+          "height": 0.010303030303030303
+        }
+      },
+      {
+        "text": "Electrical Characteristics (continued)",
+        "bbox": {
+          "page": 2,
+          "x": 0.08509803921568627,
+          "y": 0.09272727272727273,
+          "width": 0.3290196078431373,
+          "height": 0.016363636363636365
+        }
+      },
+      {
+        "text": "$ (T_A = 25^∘C, V_CC = 5V  to  15V, unless otherwise specified)^(1)(2) $",
+        "bbox": {
+          "page": 2,
+          "x": 0.08588235294117647,
+          "y": 0.11696969696969697,
+          "width": 0.40862745098039216,
+          "height": 0.01575757575757576
+        }
+      },
+      {
+        "text": "<table>\n<thead>\n<tr>\n<th>PARAMETER</th>\n<th>TEST CONDITIONS</th>\n<th>MIN</th>\n<th>TYP</th>\n<th>MAX</th>\n<th>UNIT</th>\n</tr>\n</thead>\n<tbody>\n<tr>\n<td rowspan=\"3\">Output Voltage Drop (High)</td>\n<td>I<sub>SOURCE</sub> = 200 mA, V<sub>CC</sub> = 15 V</td>\n<td></td>\n<td>12.5</td>\n<td></td>\n<td>V</td>\n</tr>\n<tr>\n<td>I<sub>SOURCE</sub> = 100 mA, V<sub>CC</sub> = 15 V</td>\n<td>12.75</td>\n<td>13.3</td>\n<td></td>\n<td>V</td>\n</tr>\n<tr>\n<td>V<sub>CC</sub> = 5 V</td>\n<td>2.75</td>\n<td>3.3</td>\n<td></td>\n<td>V</td>\n</tr>\n<tr>\n<td>Rise Time of Output</td>\n<td></td>\n<td></td>\n<td>100</td>\n<td></td>\n<td>ns</td>\n</tr>\n<tr>\n<td>Fall Time of Output</td>\n<td></td>\n<td></td>\n<td>100</td>\n<td></td>\n<td>ns</td>\n</tr>\n</tbody>\n</table>",
+        "bbox": {
+          "page": 2,
+          "x": 0.08627450980392157,
+          "y": 0.13,
+          "width": 0.8254901960784313,
+          "height": 0.10393939393939394
+        }
+      },
+      {
+        "text": "6.6 Typical Characteristics",
+        "bbox": {
+          "page": 2,
+          "x": 0.08470588235294117,
+          "y": 0.2493939393939394,
+          "width": 0.2443137254901961,
+          "height": 0.017272727272727273
+        }
+      },
+      {
+        "text": "| Temperature (T) | Minimum Pulse Width (μs) at V_CC = 15V (Approx.) |\n| :--- | :--- |\n| +125°C | ~0.68 μs |\n| +25°C | ~0.49 μs |\n| -55°C | < 0.13 μs* |\n| *Note: The curve for T=-55°C is below the grid floor (< 0.1), indicating values less than minimum scale resolution.* |\n\n**Axes:**\n- **X-Axis Label:** Unlabeled, but represents Voltage/Time ratio based on context of pulse width vs voltage curves in electronics diagrams; range shown from roughly X=0 to Y=0.4 with ticks every 0.1 units starting near x=0 and ending just before y=0.4 (~x~0.37).\n- **Y-Axis Label:** MINIMUM PULSE WIDTH (μs); Range labeled from .1 to 1.2 ms or microseconds per division unit corresponding to visual spacing where each major tick equals approximately one microsecond interval between minor subdivisions within that space relative to other traces' scales if normalized by their own vertical span limits visually observed here as distinct lines rather than sharing same axis origin point zero crossing baseline which would be expected otherwise.",
+        "bbox": {
+          "page": 2,
+          "x": 0.14705882352941177,
+          "y": 0.2872727272727273,
+          "width": 0.2733333333333333,
+          "height": 0.17636363636363636
+        }
+      },
+      {
+        "text": "LOWEST VOLTAGE LEVEL OF TRIGGER PULSE (X V_CC)",
+        "bbox": {
+          "page": 2,
+          "x": 0.1619607843137255,
+          "y": 0.46545454545454545,
+          "width": 0.2796078431372549,
+          "height": 0.013030303030303031
+        }
+      },
+      {
+        "text": "| Supply Voltage (V) | +125°C Current (mA) [Approx] | -55°C/+25°C Intersection Point (~30-40% of X range, ~8 mA approx.) | >67% Range Upper Limit (>X=15 V)| \n| :--- | :--- | :--- | :--- |\n| **Supply Voltage** | **Current Value** | *(Label Location)* | *Upper Bound* |\n| 5 | ~2.9 | N/A / Start Line | null |\n| 10 | ~6.5 | intersection point at Y~8 | upper limit line ends here or is not visible in grid; likely <Y<10 for all voltages shown above the start lines which are below it by roughly equal amounts.|\n| 15 | Not Visible on Grid Lines (<approx>10 to be precise based off visual alignment with vertical axis ticks). | end of plotted data region relative to other curves | null |",
+        "bbox": {
+          "page": 2,
+          "x": 0.576078431372549,
+          "y": 0.28515151515151516,
+          "width": 0.2572549019607843,
+          "height": 0.19484848484848485
+        }
+      },
+      {
+        "text": "Figure 1. Minimum Pulse Width Required For Triggering",
+        "bbox": {
+          "page": 2,
+          "x": 0.13294117647058823,
+          "y": 0.5048484848484849,
+          "width": 0.356078431372549,
+          "height": 0.013333333333333334
+        }
+      },
+      {
+        "text": "Figure 2. Supply Current vs. Supply Voltage",
+        "bbox": {
+          "page": 2,
+          "x": 0.5819607843137254,
+          "y": 0.5033333333333333,
+          "width": 0.2803921568627451,
+          "height": 0.013636363636363636
+        }
+      },
+      {
+        "text": "| I_SOURCE (mA) | VCC - VOUT @ T_A = +55°C (V) | VCC - VOUT @ T_A = +25°C (V) | VCC - VOUT @ T_A = +125°C (V) |\n| :--- | :--- | :--- | :--- |\n| 1 | ~1.64 | ~0.98 | ~0.73 |\n| 10 | ~1.72 | ~1.02 | ~0.98 |\n| 100 | >2.0* | ~1.58 | ~1.35 |\n\n**Note:** The value for the top curve at high current is estimated as it exceeds the vertical axis limit of \"2\". The bottom text annotation indicates 5 ≤V_CC ≤15 Volts, which corresponds to all three curves shown in the plot range from roughly ∼0.8v up to >2.0v.",
+        "bbox": {
+          "page": 2,
+          "x": 0.1627450980392157,
+          "y": 0.5212121212121212,
+          "width": 0.2615686274509804,
+          "height": 0.19727272727272727
+        }
+      },
+      {
+        "text": "Figure 3. High Output Voltage vs. Output Source Current",
+        "bbox": {
+          "page": 2,
+          "x": 0.13019607843137254,
+          "y": 0.7418181818181818,
+          "width": 0.36196078431372547,
+          "height": 0.014242424242424242
+        }
+      },
+      {
+        "text": "| I_SINK (mA) | V_OUT (-55°C, 25°C & +125°C Cluster - Low Current Region)| Notes on High-Current Behavior (+/-40°C Curve at ~80 mA vs others >90 mA range). | V_CC Condition |\n| :--- | :--- | :--- | :--- |\n| **~3** | < 0.06 (< ∼ grid line between .05 and .1)ᵃ | Start of linear region; slight spread (~+7% to +/-1%) due to temperature variation in low current area.| N/A |\n| **~10** | ≈ [0.06, 0.1] Rangeᵇ; Spread increases slightly as temp rises from lowest curve (<grid point approx.) up the cluster.ᶜ | Linear rise with significant thermal drift visible across all three curves within same voltage window for mid currents.<br>^∘: Estimated based on visual alignment relative to major vertical lines (.1 = one tenth)<br>Note: The high-I_SINK, middle segment is omitted visually but exists mathematically per context description above \"High Temperature Drift\". | All Curves converge near top edge when crossing saturation limit around ~x=80. |\n| **≥ 80** | Saturation Limit / Cutoff Point (≈x=80), Output saturates rapidly towards max value regardless of input or initial state.* This behavior differs significantly by starting bias condition compared to lower temperatures where it remains open loop longer before reaching cutoff threshold*. | *Visual observation indicates rapid transition out of active circuit domain after passing X axis intersection* |\n\n*^* Note that while not explicitly labeled 'saturation', these points represent physical limits defined implicitly here via device characteristics shown graphically against power supply constraints implied vertically along Y Axis scale boundaries.*",
+        "bbox": {
+          "page": 2,
+          "x": 0.5752941176470588,
+          "y": 0.5221212121212121,
+          "width": 0.2607843137254902,
+          "height": 0.19454545454545455
+        }
+      },
+      {
+        "text": "Figure 4. Low Output Voltage vs. Output Sink Current",
+        "bbox": {
+          "page": 2,
+          "x": 0.5517647058823529,
+          "y": 0.7412121212121212,
+          "width": 0.3411764705882353,
+          "height": 0.014545454545454545
+        }
+      },
+      {
+        "text": "6",
+        "bbox": {
+          "page": 2,
+          "x": 0.08627450980392157,
+          "y": 0.9342424242424242,
+          "width": 0.010980392156862745,
+          "height": 0.011515151515151515
+        }
+      },
+      {
+        "text": "Submit Documentation Feedback",
+        "bbox": {
+          "page": 2,
+          "x": 0.13568627450980392,
+          "y": 0.933939393939394,
+          "width": 0.1984313725490196,
+          "height": 0.012424242424242424
+        }
+      },
+      {
+        "text": "Product Folder Links: LM555",
+        "bbox": {
+          "page": 2,
+          "x": 0.4137254901960784,
+          "y": 0.9521212121212121,
+          "width": 0.17372549019607844,
+          "height": 0.013333333333333334
+        }
+      },
+      {
+        "text": "Copyright © 2000–2015, Texas Instruments Incorporated",
+        "bbox": {
+          "page": 2,
+          "x": 0.6188235294117647,
+          "y": 0.9342424242424242,
+          "width": 0.29490196078431374,
+          "height": 0.012727272727272728
+        }
+      }
+    ]
+  }
+]

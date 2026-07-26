@@ -155,12 +155,14 @@ export class SarvamProvider implements DigitisationProvider {
   readonly modelId = "sarvam-vision";
   private readonly client: SarvamAIClient;
   private readonly workDir: string;
+  private readonly onProgress: (message: string) => void;
 
-  constructor(options: { apiKey?: string; workDir: string }) {
+  constructor(options: { apiKey?: string; workDir: string; onProgress?: (message: string) => void }) {
     const apiKey = options.apiKey ?? process.env.SARVAM_API_KEY;
     if (!apiKey) throw new DigitiseFailedError("SARVAM_API_KEY is not set");
     this.client = new SarvamAIClient({ apiSubscriptionKey: apiKey });
     this.workDir = options.workDir;
+    this.onProgress = options.onProgress ?? (() => {});
   }
 
   async digitise(doc: DocumentInput): Promise<DigitisedPage[]> {
@@ -178,6 +180,7 @@ export class SarvamProvider implements DigitisationProvider {
       );
     }
 
+    this.onProgress("creating Sarvam digitise job");
     const job = await withBackoff(() =>
       // Live API accepts only "html" or "md" (the SDK type also lists
       // "json", but the endpoint 400s on it); the page-level structured
@@ -190,10 +193,12 @@ export class SarvamProvider implements DigitisationProvider {
       }),
     );
 
+    this.onProgress(`uploading ${doc.fileName} to Sarvam`);
     const file = new File([new Uint8Array(doc.bytes)], doc.fileName, { type: "application/pdf" });
     await withBackoff(() => job.uploadFile(file));
     await withBackoff(() => job.start());
 
+    this.onProgress("Sarvam Vision is reading the pages (polls every 2 s)");
     let status;
     try {
       status = await withTimeout(job.waitUntilComplete(), POLL_TIMEOUT_MS, "Sarvam digitise job");
@@ -208,6 +213,7 @@ export class SarvamProvider implements DigitisationProvider {
       throw new DigitiseFailedError(`Sarvam job ${job.jobId} failed`);
     }
 
+    this.onProgress("downloading digitised output (ZIP with page JSON + bounding boxes)");
     mkdirSync(this.workDir, { recursive: true });
     const zipPath = join(this.workDir, `${sha256(doc.bytes).slice(0, 16)}.output.zip`);
     await job.downloadOutput(zipPath);

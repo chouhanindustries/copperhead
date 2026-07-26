@@ -25,13 +25,18 @@ const JSON_INSTRUCTION = [
 export class ClaudeCodeExtractor implements FactExtractor {
   readonly modelId: string;
   private readonly model: string | undefined;
+  private readonly onProgress: (message: string) => void;
 
-  constructor(options: { model?: string } = {}) {
+  constructor(options: { model?: string; onProgress?: (message: string) => void } = {}) {
     this.model = options.model ?? process.env.INTAKE_EXTRACTOR_MODEL;
     this.modelId = `claude-code${this.model ? `:${this.model}` : ""}`;
+    this.onProgress = options.onProgress ?? (() => {});
   }
 
   async extract(pages: DigitisedPage[], specs: FieldSpec[]): Promise<RawExtractedField[]> {
+    this.onProgress(
+      `asking Claude (via the Claude Code saved login, no API key) for ${specs.length} fields`,
+    );
     const prompt = buildExtractionPrompt(pages, specs) + JSON_INSTRUCTION;
 
     let text = "";

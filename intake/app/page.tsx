@@ -10,6 +10,7 @@ import type {
   Verdict,
 } from "../core/model";
 import type { DigitisedPage } from "../core/pipeline";
+import PdfViewer, { Highlight } from "../components/PdfViewer";
 
 interface IngestResponse {
   fileName: string;
@@ -24,6 +25,66 @@ interface EvaluateResponse {
   manifest: VerificationManifest;
 }
 
+interface Demo {
+  part: string;
+  file: string;
+  blurb: string;
+}
+
+const DEMOS: Demo[] = [
+  {
+    part: "LM555",
+    file: "/datasheets/lm555-electrical.pdf",
+    blurb: "the timer everyone knows · supply current vs sleep budget",
+  },
+  {
+    part: "SN74LS00",
+    file: "/datasheets/sn74ls00-electrical.pdf",
+    blurb: "quad NAND · input current vs 25 uA sleep budget",
+  },
+  {
+    part: "ESP32-WROOM-32",
+    file: "/datasheets/esp32-wroom32-electrical.pdf",
+    blurb: "3.6 V abs-max vs the 5 V rail",
+  },
+];
+
+interface Preset {
+  title: string;
+  detail: string;
+  descriptor: ChangeDescriptor;
+}
+
+const PRESETS: Preset[] = [
+  {
+    title: "Add a 100k pull-up on a sleeping GPIO",
+    detail: "pin leakage vs the 25 uA sleep budget",
+    descriptor: {
+      kind: "add_component",
+      label: "add 100k pull-up on a sleeping GPIO",
+      contributions: [{ factKey: "pin_input_leakage_uA" }],
+    },
+  },
+  {
+    title: "Drive this pin from the 5V rail",
+    detail: "5 V vs the pin's absolute maximum",
+    descriptor: {
+      kind: "connect_rail",
+      label: "drive this pin from the 5V rail",
+      contributions: [{ factKey: "abs_max_vin_V", value: 5, unit: "V" }],
+    },
+  },
+  {
+    title: "Keep the part powered through sleep",
+    detail: "quiescent/supply current vs the sleep budget",
+    descriptor: {
+      kind: "add_component",
+      label: "keep the part powered through sleep",
+      contributions: [{ factKey: "quiescent_current_uA" }],
+    },
+  },
+];
+
 const FACT_KEYS = [
   "pin_input_leakage_uA",
   "abs_max_vin_V",
@@ -33,22 +94,25 @@ const FACT_KEYS = [
 ];
 
 export default function Home() {
+  const [file, setFile] = useState<File | null>(null);
   const [ingest, setIngest] = useState<IngestResponse | null>(null);
   const [registry, setRegistry] = useState<Registry | null>(null);
   const [result, setResult] = useState<EvaluateResponse | null>(null);
+  const [lastDescriptor, setLastDescriptor] = useState<ChangeDescriptor | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [highlight, setHighlight] = useState<{ page: number; snippet?: string } | null>(null);
+  const [highlight, setHighlight] = useState<Highlight | null>(null);
   const [editing, setEditing] = useState<string | null>(null);
   const [editValue, setEditValue] = useState("");
+  const [mode, setMode] = useState<"cached" | "live">("cached");
+  const [log, setLog] = useState<string[]>([]);
+  const logRef = useRef<HTMLDivElement | null>(null);
 
-  const [label, setLabel] = useState("add 100k pull-up on GPIO12");
-  const [kind, setKind] = useState<ChangeKind>("add_component");
-  const [factKey, setFactKey] = useState(FACT_KEYS[0]!);
-  const [applied, setApplied] = useState("");
-  const [appliedUnit, setAppliedUnit] = useState("");
-
-  const pageRefs = useRef<Record<number, HTMLDivElement | null>>({});
+  const [customLabel, setCustomLabel] = useState("");
+  const [customKind, setCustomKind] = useState<ChangeKind>("add_component");
+  const [customKey, setCustomKey] = useState(FACT_KEYS[0]!);
+  const [customValue, setCustomValue] = useState("");
+  const [customUnit, setCustomUnit] = useState("");
 
   const loadRegistry = async () => {
     const res = await fetch("/api/registry");
@@ -59,44 +123,88 @@ export default function Home() {
     void loadRegistry();
   }, []);
 
-  const onUpload = async (file: File) => {
-    setBusy("Digitising and extracting…");
+  useEffect(() => {
+    logRef.current?.scrollTo({ top: logRef.current.scrollHeight });
+  }, [log]);
+
+  const appendLog = (message: string) => setLog((prev) => [...prev, message]);
+
+  const onUpload = async (f: File) => {
+    setFile(f);
+    setIngest(null);
+    setResult(null);
+    setHighlight(null);
+    setLog([]);
+    setBusy("ingesting");
     setError(null);
     try {
       const form = new FormData();
-      form.append("file", file);
+      form.append("file", f);
+      form.append("mode", mode);
       const res = await fetch("/api/ingest", { method: "POST", body: form });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error ?? "ingestion failed");
-      setIngest(data as IngestResponse);
+      if (!res.body) throw new Error("no response stream");
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() ?? "";
+        for (const line of lines) {
+          if (!line.trim()) continue;
+          const event = JSON.parse(line) as
+            | { t: "progress"; message: string }
+            | ({ t: "done" } & IngestResponse)
+            | { t: "error"; error: string };
+          if (event.t === "progress") appendLog(event.message);
+          else if (event.t === "done") {
+            setIngest(event);
+            appendLog("ready");
+          } else {
+            throw new Error(event.error);
+          }
+        }
+      }
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      const message = err instanceof Error ? err.message : String(err);
+      setError(message);
+      appendLog(`failed: ${message}`);
     } finally {
       setBusy(null);
     }
   };
 
-  const buildDescriptor = (): ChangeDescriptor => {
-    const contribution: { factKey: string; value?: number; unit?: string } = { factKey };
-    if (applied.trim() !== "" && !Number.isNaN(Number(applied))) {
-      contribution.value = Number(applied);
-      if (appliedUnit.trim() !== "") contribution.unit = appliedUnit.trim();
+  const loadDemo = async (demo: Demo) => {
+    setBusy("fetching datasheet");
+    setError(null);
+    try {
+      const res = await fetch(demo.file);
+      if (!res.ok) throw new Error(`could not load ${demo.file}`);
+      const blob = await res.blob();
+      await onUpload(new File([blob], demo.file.split("/").pop()!, { type: "application/pdf" }));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+      setBusy(null);
     }
-    return { kind, label, contributions: [contribution] };
   };
 
-  const onEvaluate = async () => {
-    setBusy("Evaluating…");
+  const evaluateDescriptor = async (descriptor: ChangeDescriptor) => {
+    setBusy("evaluating");
     setError(null);
+    setLastDescriptor(descriptor);
+    appendLog(`evaluating: ${descriptor.label}`);
     try {
       const res = await fetch("/api/evaluate", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ descriptor: buildDescriptor(), facts: ingest?.facts ?? [] }),
+        body: JSON.stringify({ descriptor, facts: ingest?.facts ?? [] }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error ?? "evaluation failed");
       setResult(data as EvaluateResponse);
+      appendLog(`verdict: ${(data as EvaluateResponse).verdict.decision}`);
       await loadRegistry();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -108,7 +216,7 @@ export default function Home() {
   const onCorrect = async (key: string) => {
     const numeric = Number(editValue);
     const value = Number.isNaN(numeric) || editValue.trim() === "" ? editValue : numeric;
-    setBusy("Saving correction…");
+    setBusy("saving correction");
     setError(null);
     try {
       const res = await fetch("/api/registry", {
@@ -120,21 +228,19 @@ export default function Home() {
       if (!res.ok) throw new Error(data.error ?? "correction failed");
       setRegistry(data as Registry);
       setEditing(null);
-      // Correction propagation (AC-9.1): re-compute the verdict live.
-      if (result) await onEvaluate();
+      appendLog(`corrected ${key} = ${String(value)} (user-verified)`);
+      if (lastDescriptor) await evaluateDescriptor(lastDescriptor);
+      else setBusy(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
-    } finally {
       setBusy(null);
     }
   };
 
   const clickFact = (fact: ExtractedFact) => {
-    // Click-to-source (AC-10.1): scroll to the page, highlight the region.
-    const target: { page: number; snippet?: string } = { page: fact.source.page };
+    const target: Highlight = { page: fact.source.page };
     if (fact.source.snippet !== undefined) target.snippet = fact.source.snippet;
     setHighlight(target);
-    pageRefs.current[fact.source.page]?.scrollIntoView({ behavior: "smooth", block: "center" });
   };
 
   const downloadManifest = () => {
@@ -148,12 +254,6 @@ export default function Home() {
     URL.revokeObjectURL(url);
   };
 
-  const squash = (s: string) => s.replace(/\s+/g, " ").trim().toLowerCase();
-  const regionHighlighted = (page: number, text: string) =>
-    highlight?.page === page &&
-    highlight.snippet !== undefined &&
-    squash(text).includes(squash(highlight.snippet));
-
   const allFacts: ExtractedFact[] = (() => {
     const merged = [...(registry?.facts ?? [])];
     for (const fact of ingest?.facts ?? []) {
@@ -162,234 +262,278 @@ export default function Home() {
     return merged;
   })();
 
-  return (
-    <main>
-      <h1>
-        copperhead <span className="accent">intake</span>
-      </h1>
-      <p className="tagline">
-        Datasheet facts with provenance, checked against the board&apos;s rulebook. Every refusal cites
-        the datasheet line and the rule line.
-      </p>
+  const heldCount = allFacts.filter((f) => f.status === "hold").length;
 
-      <h2>1 · Datasheet</h2>
-      <div className="card">
-        <div className="row">
-          <div>
-            <label>Upload datasheet PDF (the 2 relevant pages)</label>
+  const hint = busy
+    ? null
+    : !ingest
+      ? "Pick a demo part below (or upload any 2-page datasheet), then watch the pipeline run."
+      : result?.verdict.decision === "HOLD"
+        ? "The judge held: it will not decide on an unreviewed fact. Confirm or correct the amber fact it named, and the verdict recomputes."
+        : result
+          ? "Cited verdict. Click the datasheet citation to see the exact line, export the manifest, or try another change."
+          : heldCount > 0
+            ? "Facts are in. Amber ones need your eye: click a fact to see where it came from, then confirm or correct it. Or go straight to a change."
+            : "Facts are in and trusted. Propose a change.";
+
+  return (
+    <div className="shell">
+      <header className="topbar">
+        <h1>
+          copperhead <span className="accent">intake</span>
+        </h1>
+        {hint && <span className="hint">{hint}</span>}
+        <div className="topbar-right">
+          <div className="mode-toggle" title="Cached serves committed fixtures offline; live calls Sarvam + Claude">
+            <button className={mode === "cached" ? "on" : ""} onClick={() => setMode("cached")}>
+              cached
+            </button>
+            <button className={mode === "live" ? "on" : ""} onClick={() => setMode("live")}>
+              live
+            </button>
+          </div>
+          <a className="help-link" href="/help" target="_blank">
+            help
+          </a>
+        </div>
+      </header>
+
+      <div className="panes">
+        {/* Pane A: source */}
+        <section className="pane">
+          <h2>
+            <span className="step">1</span> Datasheet
+          </h2>
+          <div className="demo-grid">
+            {DEMOS.map((demo) => (
+              <button
+                key={demo.part}
+                className={`preset ${file?.name === demo.file.split("/").pop() ? "active" : ""}`}
+                disabled={busy !== null}
+                onClick={() => void loadDemo(demo)}
+              >
+                <strong>{demo.part}</strong>
+                <span className="dim">{demo.blurb}</span>
+              </button>
+            ))}
+          </div>
+          <label className="upload-zone">
             <input
               type="file"
               accept="application/pdf"
               onChange={(e) => {
-                const file = e.target.files?.[0];
-                if (file) void onUpload(file);
+                const f = e.target.files?.[0];
+                if (f) void onUpload(f);
               }}
             />
-          </div>
-          {ingest && (
-            <span className="dim">
-              {ingest.fileName}: {ingest.pages.length} pages, {ingest.facts.length} facts (
-              {ingest.digitiseModel} + {ingest.extractorModel})
-            </span>
-          )}
-        </div>
-        {busy && <p className="dim">{busy}</p>}
-        {error && <p className="error">{error}</p>}
-      </div>
+            or upload any datasheet PDF (2 key pages)
+          </label>
 
-      {(allFacts.length > 0 || registry) && (
-        <>
-          <h2>2 · Facts ({registry?.part ?? "part"})</h2>
-          <div className="card">
-            <table>
-              <thead>
-                <tr>
-                  <th>Key</th>
-                  <th>Value</th>
-                  <th>Confidence</th>
-                  <th>Status</th>
-                  <th>Source</th>
-                  <th></th>
-                </tr>
-              </thead>
-              <tbody>
+          {(log.length > 0 || busy) && (
+            <div className="console" ref={logRef}>
+              {log.map((line, i) => (
+                <div key={i} className={i === log.length - 1 && busy ? "busy-line" : ""}>
+                  {line}
+                </div>
+              ))}
+            </div>
+          )}
+          {error && <p className="error">{error}</p>}
+
+          <h2>
+            <span className="step">2</span> Facts{" "}
+            {heldCount > 0 && <span className="badge hold h2-note">{heldCount} to review</span>}
+          </h2>
+          <div className="card no-pad facts-card">
+            {allFacts.length === 0 ? (
+              <p className="empty">Extracted facts land here, each with provenance and confidence.</p>
+            ) : (
+              <ul className="fact-list">
                 {allFacts.map((fact) => (
-                  <tr key={fact.key} className="clickable" onClick={() => clickFact(fact)}>
-                    <td>{fact.key}</td>
-                    <td>
-                      {editing === fact.key ? (
-                        <span onClick={(e) => e.stopPropagation()}>
-                          <input
-                            style={{ width: 90 }}
-                            value={editValue}
-                            onChange={(e) => setEditValue(e.target.value)}
-                          />{" "}
-                          <button onClick={() => void onCorrect(fact.key)}>Save</button>
-                        </span>
-                      ) : (
-                        <>
-                          {String(fact.value)} {fact.unit ?? ""}
-                        </>
-                      )}
-                    </td>
-                    <td>{(fact.confidence * 100).toFixed(0)}%</td>
-                    <td>
+                  <li key={fact.key}>
+                    <button className="fact-main" onClick={() => clickFact(fact)} title="Show me in the datasheet">
+                      <span className="fact-key">{fact.key}</span>
+                      <span className="fact-value">
+                        {String(fact.value)} {fact.unit ?? ""}
+                      </span>
+                      <span className="dim fact-meta">
+                        {(fact.confidence * 100).toFixed(0)}% · p.{fact.source.page}
+                      </span>
                       {fact.status === "hold" ? (
-                        <span className="badge hold" title={fact.holdReason}>
-                          review
-                        </span>
+                        <span className="badge hold">review</span>
                       ) : (
                         <span className="badge trusted">trusted</span>
                       )}
-                    </td>
-                    <td className="dim">p.{fact.source.page}</td>
-                    <td onClick={(e) => e.stopPropagation()}>
-                      {registry?.facts.some((f) => f.key === fact.key) && (
-                        <button
-                          className="ghost"
-                          onClick={() => {
-                            setEditing(fact.key);
-                            setEditValue(String(fact.value));
-                          }}
-                        >
-                          Correct
-                        </button>
-                      )}
-                    </td>
-                  </tr>
+                    </button>
+                    {fact.status === "hold" && (
+                      <div className="hold-line">
+                        <span className="dim">{fact.holdReason}</span>
+                        {registry?.facts.some((f) => f.key === fact.key) &&
+                          (editing === fact.key ? (
+                            <span className="correct-row">
+                              <input
+                                autoFocus
+                                value={editValue}
+                                onChange={(e) => setEditValue(e.target.value)}
+                                onKeyDown={(e) => {
+                                  if (e.key === "Enter") void onCorrect(fact.key);
+                                }}
+                              />
+                              <button onClick={() => void onCorrect(fact.key)}>Save</button>
+                              <button className="ghost" onClick={() => setEditing(null)}>
+                                Cancel
+                              </button>
+                            </span>
+                          ) : (
+                            <button
+                              className="ghost"
+                              onClick={() => {
+                                setEditing(fact.key);
+                                setEditValue(String(fact.value));
+                              }}
+                            >
+                              Confirm / correct
+                            </button>
+                          ))}
+                      </div>
+                    )}
+                  </li>
                 ))}
-                {allFacts.length === 0 && (
-                  <tr>
-                    <td colSpan={6} className="dim">
-                      No facts yet: upload a datasheet.
-                    </td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
+              </ul>
+            )}
           </div>
-        </>
-      )}
+        </section>
 
-      <div className="grid-2">
-        <div>
-          <h2>3 · Proposed change</h2>
-          <div className="card">
-            <div className="row">
-              <div style={{ flexGrow: 1 }}>
-                <label>Change</label>
-                <input style={{ width: "100%" }} value={label} onChange={(e) => setLabel(e.target.value)} />
-              </div>
-            </div>
-            <div className="row" style={{ marginTop: 12 }}>
-              <div>
-                <label>Kind</label>
-                <select value={kind} onChange={(e) => setKind(e.target.value as ChangeKind)}>
-                  <option value="add_component">add component</option>
-                  <option value="connect_rail">connect rail</option>
-                  <option value="swap_part">swap part</option>
-                </select>
-              </div>
-              <div>
-                <label>Deciding fact key</label>
-                <select value={factKey} onChange={(e) => setFactKey(e.target.value)}>
-                  {FACT_KEYS.map((k) => (
-                    <option key={k} value={k}>
-                      {k}
-                    </option>
-                  ))}
-                </select>
-              </div>
-              <div>
-                <label>Applied value (optional)</label>
-                <input style={{ width: 90 }} value={applied} onChange={(e) => setApplied(e.target.value)} placeholder="e.g. 5" />
-              </div>
-              <div>
-                <label>Unit</label>
-                <input style={{ width: 60 }} value={appliedUnit} onChange={(e) => setAppliedUnit(e.target.value)} placeholder="V" />
-              </div>
-              <button onClick={() => void onEvaluate()} disabled={busy !== null}>
-                Evaluate
+        {/* Pane B: decision */}
+        <section className="pane">
+          <h2>
+            <span className="step">3</span> Propose a change
+          </h2>
+          <div className="preset-grid">
+            {PRESETS.map((preset) => (
+              <button
+                key={preset.title}
+                className="preset"
+                disabled={busy !== null}
+                onClick={() => void evaluateDescriptor(preset.descriptor)}
+              >
+                <strong>{preset.title}</strong>
+                <span className="dim">{preset.detail}</span>
               </button>
-            </div>
-            <p className="dim" style={{ marginTop: 12, fontSize: 13 }}>
-              Descriptor evaluated: <code>{JSON.stringify(buildDescriptor())}</code>
-            </p>
+            ))}
           </div>
-
-          {result && (
-            <>
-              <h2>4 · Verdict</h2>
-              <div className={`card verdict ${result.verdict.decision}`}>
-                <div className="decision">{result.verdict.decision}</div>
-                <p>{result.verdict.reason}</p>
-                {result.verdict.computed && (
-                  <p className="computed">{result.verdict.computed.expression}</p>
-                )}
-                {result.verdict.citedFact && (
-                  <div className="citation">
-                    <strong>Datasheet line:</strong> {result.verdict.citedFact.rawField} ={" "}
-                    {String(result.verdict.citedFact.value)} {result.verdict.citedFact.unit ?? ""}
-                    <div className="source">
-                      p.{result.verdict.citedFact.source.page}
-                      {result.verdict.citedFact.source.snippet
-                        ? ` — "${result.verdict.citedFact.source.snippet}"`
-                        : ""}
-                    </div>
-                  </div>
-                )}
-                {result.verdict.citedConstraint && (
-                  <div className="citation">
-                    <strong>Rule line:</strong> {result.verdict.citedConstraint.description} (
-                    {result.verdict.citedConstraint.kind} {result.verdict.citedConstraint.limit}{" "}
-                    {result.verdict.citedConstraint.unit})
-                    <div className="source">{result.verdict.citedConstraint.source}</div>
-                  </div>
-                )}
-                {result.verdict.proposedFix && (
-                  <p>
-                    <strong>Proposed fix:</strong> {result.verdict.proposedFix}
-                  </p>
-                )}
-                <button className="ghost" style={{ marginTop: 12 }} onClick={downloadManifest}>
-                  Export verification manifest
+          <details className="custom">
+            <summary className="dim">Custom change…</summary>
+            <div className="card">
+              <label>Describe it</label>
+              <input
+                style={{ width: "100%" }}
+                value={customLabel}
+                onChange={(e) => setCustomLabel(e.target.value)}
+                placeholder="e.g. bus-hold resistor on SDA"
+              />
+              <div className="row" style={{ marginTop: 8 }}>
+                <div>
+                  <label>Kind</label>
+                  <select value={customKind} onChange={(e) => setCustomKind(e.target.value as ChangeKind)}>
+                    <option value="add_component">add component</option>
+                    <option value="connect_rail">connect rail</option>
+                    <option value="swap_part">swap part</option>
+                  </select>
+                </div>
+                <div>
+                  <label>Deciding fact</label>
+                  <select value={customKey} onChange={(e) => setCustomKey(e.target.value)}>
+                    {FACT_KEYS.map((k) => (
+                      <option key={k}>{k}</option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label>Value</label>
+                  <input style={{ width: 70 }} value={customValue} onChange={(e) => setCustomValue(e.target.value)} placeholder="5" />
+                </div>
+                <div>
+                  <label>Unit</label>
+                  <input style={{ width: 50 }} value={customUnit} onChange={(e) => setCustomUnit(e.target.value)} placeholder="V" />
+                </div>
+                <button
+                  disabled={busy !== null || customLabel.trim() === ""}
+                  onClick={() => {
+                    const contribution: { factKey: string; value?: number; unit?: string } = {
+                      factKey: customKey,
+                    };
+                    if (customValue.trim() !== "" && !Number.isNaN(Number(customValue))) {
+                      contribution.value = Number(customValue);
+                      if (customUnit.trim() !== "") contribution.unit = customUnit.trim();
+                    }
+                    void evaluateDescriptor({
+                      kind: customKind,
+                      label: customLabel,
+                      contributions: [contribution],
+                    });
+                  }}
+                >
+                  Evaluate
                 </button>
               </div>
-            </>
-          )}
-        </div>
-
-        <div>
-          <h2>Datasheet view</h2>
-          {(ingest?.pages ?? []).map((page) => (
-            <div
-              key={page.page}
-              ref={(el) => {
-                pageRefs.current[page.page] = el;
-              }}
-            >
-              <div className="page-label">Page {page.page}</div>
-              <div className="page-canvas">
-                {page.regions.map((region, i) => (
-                  <div
-                    key={i}
-                    className={`region ${regionHighlighted(page.page, region.text) ? "highlight" : ""}`}
-                    style={{
-                      left: `${region.bbox.x * 100}%`,
-                      top: `${region.bbox.y * 100}%`,
-                      width: `${region.bbox.width * 100}%`,
-                      height: `${Math.max(region.bbox.height * 100, 1.5)}%`,
-                    }}
-                  >
-                    {region.text}
-                  </div>
-                ))}
-              </div>
             </div>
-          ))}
-          {!ingest && <div className="card dim">Upload a datasheet to see its digitised pages.</div>}
-        </div>
+          </details>
+
+          <h2>
+            <span className="step">4</span> Verdict
+          </h2>
+          {result ? (
+            <div className={`card verdict ${result.verdict.decision}`}>
+              <div className="verdict-head">
+                <span className="decision">{result.verdict.decision}</span>
+                <span className="dim verdict-change">{result.verdict.change}</span>
+              </div>
+              <p className="verdict-reason">{result.verdict.reason}</p>
+              {result.verdict.computed && <p className="computed">{result.verdict.computed.expression}</p>}
+              {result.verdict.citedFact && (
+                <button
+                  className="citation clickable-citation"
+                  onClick={() => clickFact(result.verdict.citedFact!)}
+                >
+                  <strong>Datasheet says:</strong> {result.verdict.citedFact.rawField} ={" "}
+                  {String(result.verdict.citedFact.value)} {result.verdict.citedFact.unit ?? ""}
+                  <span className="source">
+                    page {result.verdict.citedFact.source.page} · click to see the line
+                  </span>
+                </button>
+              )}
+              {result.verdict.citedConstraint && (
+                <div className="citation">
+                  <strong>Board rule:</strong> {result.verdict.citedConstraint.description}
+                  <span className="source">
+                    {result.verdict.citedConstraint.kind} · limit {result.verdict.citedConstraint.limit}{" "}
+                    {result.verdict.citedConstraint.unit} · {result.verdict.citedConstraint.source}
+                  </span>
+                </div>
+              )}
+              {result.verdict.proposedFix && (
+                <p className="fix">
+                  <strong>Try instead:</strong> {result.verdict.proposedFix}
+                </p>
+              )}
+              <button className="ghost" onClick={downloadManifest}>
+                Export manifest
+              </button>
+            </div>
+          ) : (
+            <div className="card dim verdict-empty">
+              APPROVE, REFUSE, or HOLD: always with the datasheet line and the board rule cited. A
+              held fact never decides.
+            </div>
+          )}
+        </section>
+
+        {/* Pane C: the document */}
+        <section className="pane viewer-pane">
+          <PdfViewer file={file} pages={ingest?.pages ?? []} highlight={highlight} />
+        </section>
       </div>
-    </main>
+    </div>
   );
 }

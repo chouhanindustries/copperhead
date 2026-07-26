@@ -54,12 +54,16 @@ export class LlmExtractor implements FactExtractor {
   readonly modelId: string;
   private readonly client: Anthropic;
 
-  constructor(options: { apiKey?: string; model?: string } = {}) {
+  private readonly onProgress: (message: string) => void;
+
+  constructor(options: { apiKey?: string; model?: string; onProgress?: (message: string) => void } = {}) {
     this.modelId = options.model ?? process.env.INTAKE_EXTRACTOR_MODEL ?? DEFAULT_MODEL;
     this.client = options.apiKey ? new Anthropic({ apiKey: options.apiKey }) : new Anthropic();
+    this.onProgress = options.onProgress ?? (() => {});
   }
 
   async extract(pages: DigitisedPage[], specs: FieldSpec[]): Promise<RawExtractedField[]> {
+    this.onProgress(`asking ${this.modelId} for ${specs.length} fields (structured output, verbatim snippets)`);
     const response = await this.client.beta.messages.create({
       model: this.modelId,
       max_tokens: 16000,

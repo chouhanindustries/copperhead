@@ -19,6 +19,7 @@
     "@anthropic-ai/sdk": "^0.115.0",
     "fflate": "^0.8.3",
     "next": "^16.2.12",
+    "pdfjs-dist": "^6.1.200",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
     "sarvamai": "^1.1.7"

@@ -1,7 +1,9 @@
 // Timeout and backoff wrappers for unreliable upstream calls.
 // POLL_TIMEOUT_MS and the backoff schedule come from the intake SPEC.
 
-export const POLL_TIMEOUT_MS = 90_000;
+// SPEC default 90 s; INTAKE_POLL_TIMEOUT_MS overrides for offline fixture
+// generation on slow (scanned) documents.
+export const POLL_TIMEOUT_MS = Number(process.env.INTAKE_POLL_TIMEOUT_MS) || 90_000;
 export const POLL_INTERVAL_MS = 2_000;
 export const BACKOFF_BASE_MS = 1_000;
 export const BACKOFF_FACTOR = 2;
