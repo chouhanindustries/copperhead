@@ -88,7 +88,7 @@
 - [x] 9.5 Stage 6: outputs package via kicad-cli — gerbers+drill zip (JLC/PCBWay profile), DXF/STEP, SVG renders, ordering BOM.csv from BOM.md
 - [x] 9.6 Stage 7: firmware scaffold + pins.h generated from PINOUT.md; vendor toolchain build gate with explicit "not compiled here" fallback in DEVPLAN.md
 - [x] 9.7 Stage 8: DEVPLAN.md (bring-up steps, test points, risk list, prototype order plan)
-- [ ] 9.8 Interactive mode: spec-approval and pre-export gates re-enabled with --interactive; resumability test (kill after BOM stage, re-run continues)
+- [x] 9.8 Interactive mode: spec-approval and pre-export gates re-enabled with `--interactive`; resumability test (kill after BOM stage, re-run continues)
 
 ## 10. `sync` command (full-state verify and resolve)
 

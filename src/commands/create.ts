@@ -19,6 +19,7 @@ import { sweepStaleTempDirs, pruneHistoryDir } from '../util/tmp.js';
 import { assertDiskSpace, DEFAULT_MIN_FREE_BYTES } from '../util/preflight.js';
 import { runCheck } from './check.js';
 import { emitCreateJlcpcbBom } from './export.js';
+import { confirmTty } from '../util/prompt.js';
 
 /**
  * Mode A (`copperhead create`, SPEC §2.5): staged pipeline, each stage a
@@ -677,6 +678,20 @@ export async function runCreate(opts: CreateOptions): Promise<{ ok: boolean; com
     await renderStageArtifacts(opts, stage.name, stageTranscriptDir);
     await emitJlcpcbAfterOutputs(stage.name, opts);
     logCumulative(opts, stageCosts);
+
+    if (opts.interactive && (stage.name === 'spec-seed' || stage.name === 'layout-draft')) {
+      const nextStage = STAGES[i + 1];
+      if (nextStage) {
+        opts.log('');
+        opts.log(`stage ${stage.name}: interactive checkpoint`);
+        if (!(await confirmTty(`Proceed to the next stage (${nextStage.name})?`))) {
+          logResumePoint(opts, nextStage, i + 1);
+          printCostTable(opts, stageCosts);
+          await writeRunReport(opts, stageCosts);
+          return { ok: true, completed };
+        }
+      }
+    }
   }
 
   const check = await runCheck(opts.repoRoot, opts.log);

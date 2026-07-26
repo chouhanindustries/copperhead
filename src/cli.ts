@@ -3,6 +3,7 @@ import { Command } from 'commander';
 import path from 'node:path';
 import { createRequire } from 'node:module';
 import { createInterface } from 'node:readline/promises';
+import { confirmTty } from './util/prompt.js';
 import { loadConfig, resolveModel } from './config.js';
 import { runInit, InitError } from './memory/scaffold.js';
 import { runCheck } from './commands/check.js';
@@ -37,12 +38,7 @@ const program = new Command();
 
 const repoOf = (opts: { repo?: string }): string => path.resolve(opts.repo ?? process.cwd());
 
-async function confirmTty(question: string): Promise<boolean> {
-  const rl = createInterface({ input: process.stdin, output: process.stdout });
-  const answer = await rl.question(`${question} [y/N] `);
-  rl.close();
-  return /^y(es)?$/i.test(answer.trim());
-}
+
 
 /**
  * Attended runs get a decision point instead of a rollback when the turn
