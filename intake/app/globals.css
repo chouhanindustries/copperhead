@@ -76,7 +76,6 @@ h1 .accent {
 .mode-toggle {
   display: flex;
   border: 1px solid var(--border);
-  border-radius: 5px;
   overflow: hidden;
 }
 
@@ -84,7 +83,6 @@ h1 .accent {
   background: transparent;
   color: var(--text-dim);
   border: none;
-  border-radius: 0;
   padding: 4px 12px;
   font-size: 12px;
 }
@@ -99,15 +97,27 @@ h1 .accent {
   font-size: 12.5px;
   text-decoration: none;
   border: 1px solid var(--copper);
-  border-radius: 4px;
   padding: 3px 10px;
 }
 
 .panes {
   display: grid;
-  grid-template-columns: minmax(300px, 340px) minmax(320px, 400px) 1fr;
+  grid-template-columns: minmax(220px, 250px) minmax(500px, 1fr) minmax(320px, 38%);
   gap: 0;
   min-height: 0;
+}
+
+.duo {
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr);
+  gap: 16px;
+  align-items: start;
+}
+
+@media (max-width: 1240px) {
+  .duo {
+    grid-template-columns: 1fr;
+  }
 }
 
 .pane {
@@ -123,6 +133,25 @@ h1 .accent {
 
 .viewer-pane {
   background: #12100e;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.viewer-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 14px 16px;
+}
+
+.viewer-pane .console {
+  flex-shrink: 0;
+  margin: 0;
+  max-height: 168px;
+  border-left: none;
+  border-right: none;
+  border-bottom: none;
 }
 
 @media (max-width: 1000px) {
@@ -162,7 +191,6 @@ h2 {
   justify-content: center;
   width: 18px;
   height: 18px;
-  border-radius: 50%;
   border: 1px solid var(--copper);
   color: var(--copper);
   font-size: 10px;
@@ -177,7 +205,6 @@ h2 {
 .card {
   background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: 8px;
   padding: 12px 14px;
 }
 
@@ -206,7 +233,6 @@ h2 {
   gap: 1px;
   background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: 7px;
   color: var(--text);
   padding: 9px 13px;
   font-size: 13px;
@@ -217,7 +243,6 @@ h2 {
 
 .preset:hover:not(:disabled) {
   border-color: var(--copper);
-  background: var(--copper-soft);
 }
 
 .preset.active {
@@ -237,7 +262,6 @@ h2 {
 .upload-zone {
   display: block;
   border: 1px dashed var(--border);
-  border-radius: 6px;
   padding: 9px 13px;
   margin-top: 8px;
   cursor: pointer;
@@ -247,39 +271,55 @@ h2 {
 
 .upload-zone:hover {
   border-color: var(--copper);
-  color: var(--text);
 }
 
 .upload-zone input {
   display: none;
 }
 
-/* Progress console */
+/* Progress console: a terminal */
 .console {
-  background: #12100e;
-  border: 1px solid var(--border);
-  border-radius: 6px;
+  background: #0b0a08;
+  border: 1px solid #2a251f;
   margin-top: 8px;
-  padding: 8px 12px;
-  font-family: "IBM Plex Mono", ui-monospace, monospace;
+  font-family: "IBM Plex Mono", ui-monospace, "Cascadia Mono", monospace;
   font-size: 11.5px;
-  color: var(--text-dim);
-  max-height: 128px;
+  line-height: 1.7;
+  color: #9ba283;
+  max-height: 180px;
   overflow-y: auto;
 }
 
-.console div::before {
-  content: "› ";
+.console-title {
+  position: sticky;
+  top: 0;
+  background: #1a1713;
+  color: #6f6a5f;
+  padding: 3px 10px;
+  font-size: 10.5px;
+  letter-spacing: 0.08em;
+  border-bottom: 1px solid #2a251f;
+}
+
+.console > div:not(.console-title) {
+  padding: 0 10px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.console .prompt {
   color: var(--copper);
+  user-select: none;
 }
 
 .console .busy-line {
-  color: var(--copper);
+  color: #d8dcc8;
 }
 
 .console .busy-line::after {
-  content: "…";
-  animation: pulse 1.2s ease-in-out infinite;
+  content: "▌";
+  color: var(--copper);
+  animation: pulse 1s steps(2, start) infinite;
 }
 
 @keyframes pulse {
@@ -310,8 +350,8 @@ h2 {
 
 .fact-main {
   display: flex;
-  align-items: baseline;
-  gap: 10px;
+  flex-direction: column;
+  gap: 3px;
   width: 100%;
   background: none;
   border: none;
@@ -323,14 +363,26 @@ h2 {
   font-family: inherit;
 }
 
+.fact-top,
+.fact-bottom {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  width: 100%;
+}
+
 .fact-main:hover {
-  background: var(--copper-soft);
+  background: var(--surface-2);
 }
 
 .fact-key {
   font-family: "IBM Plex Mono", ui-monospace, monospace;
   font-size: 12px;
-  overflow-wrap: anywhere;
+  color: var(--text-dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .fact-value {
@@ -340,7 +392,6 @@ h2 {
 
 .fact-meta {
   font-size: 11px;
-  margin-left: auto;
   white-space: nowrap;
 }
 
@@ -369,7 +420,6 @@ button {
   background: var(--copper);
   color: #171412;
   border: none;
-  border-radius: 4px;
   padding: 6px 12px;
   font-size: 12.5px;
   font-weight: 600;
@@ -394,7 +444,6 @@ select {
   background: var(--surface-2);
   color: var(--text);
   border: 1px solid var(--border);
-  border-radius: 4px;
   padding: 6px 9px;
   font-size: 13px;
   font-family: inherit;
@@ -417,7 +466,6 @@ label {
 .badge {
   display: inline-block;
   padding: 0 7px;
-  border-radius: 3px;
   font-size: 11px;
   font-weight: 600;
   letter-spacing: 0.04em;
@@ -518,7 +566,6 @@ label {
   width: 100%;
   background: var(--surface-2);
   border: 1px solid var(--border);
-  border-radius: 6px;
   padding: 8px 12px;
   margin-top: 8px;
   font-size: 12.5px;
@@ -568,7 +615,6 @@ label {
 
 .pdf-page-inner {
   position: relative;
-  border-radius: 4px;
   overflow: hidden;
   border: 1px solid var(--border);
 }
@@ -582,18 +628,9 @@ label {
 .pdf-highlight {
   position: absolute;
   border: 2px solid var(--amber);
-  background: rgba(208, 135, 0, 0.22);
-  border-radius: 2px;
-  box-shadow: 0 0 0 3000px rgba(23, 20, 18, 0.28);
-  animation: settle 0.5s ease-out;
+  background: rgba(208, 135, 0, 0.18);
 }
 
-@keyframes settle {
-  from {
-    box-shadow: 0 0 0 3000px rgba(23, 20, 18, 0);
-    transform: scale(1.06);
-  }
-}
 
 /* Help page */
 .help {
@@ -624,11 +661,38 @@ label {
 
 .help code {
   background: var(--surface-2);
-  border-radius: 3px;
   padding: 1px 5px;
   font-size: 13px;
 }
 
 .help a {
   color: var(--copper);
+}
+
+/* Scrollbars */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #3a332b transparent;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #3a332b;
+  border: 3px solid var(--bg);
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--copper);
+}
+
+.console::-webkit-scrollbar-thumb {
+  border-color: #0b0a08;
 }

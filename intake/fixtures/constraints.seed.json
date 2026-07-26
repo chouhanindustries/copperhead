@@ -8,7 +8,7 @@
       "kind": "budget_sum",
       "limit": 25,
       "unit": "uA",
-      "affects": ["pin_input_leakage_uA"],
+      "affects": ["pin_input_leakage_uA", "quiescent_current_uA"],
       "source": "board SPEC sleep budget"
     },
     {

@@ -15,6 +15,14 @@ export async function GET() {
   }
 }
 
+/** Reset the working registry to the committed seed (demo housekeeping). */
+export async function DELETE() {
+  const { rmSync } = await import("node:fs");
+  const { REGISTRY_PATH } = await import("../../../lib/server");
+  rmSync(REGISTRY_PATH, { force: true });
+  return NextResponse.json(registryStore().load());
+}
+
 /** Apply a user correction to a stored fact (AC-9.1). */
 export async function POST(request: NextRequest) {
   const body = (await request.json()) as { key?: string; value?: number | string };

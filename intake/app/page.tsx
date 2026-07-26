@@ -124,8 +124,9 @@ export default function Home() {
   }, []);
 
   useEffect(() => {
-    logRef.current?.scrollTo({ top: logRef.current.scrollHeight });
-  }, [log]);
+    const el = logRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [log, busy]);
 
   const appendLog = (message: string) => setLog((prev) => [...prev, message]);
 
@@ -329,99 +330,101 @@ export default function Home() {
             or upload any datasheet PDF (2 key pages)
           </label>
 
-          {(log.length > 0 || busy) && (
-            <div className="console" ref={logRef}>
-              {log.map((line, i) => (
-                <div key={i} className={i === log.length - 1 && busy ? "busy-line" : ""}>
-                  {line}
-                </div>
-              ))}
-            </div>
-          )}
           {error && <p className="error">{error}</p>}
-
-          <h2>
-            <span className="step">2</span> Facts{" "}
-            {heldCount > 0 && <span className="badge hold h2-note">{heldCount} to review</span>}
-          </h2>
-          <div className="card no-pad facts-card">
-            {allFacts.length === 0 ? (
-              <p className="empty">Extracted facts land here, each with provenance and confidence.</p>
-            ) : (
-              <ul className="fact-list">
-                {allFacts.map((fact) => (
-                  <li key={fact.key}>
-                    <button className="fact-main" onClick={() => clickFact(fact)} title="Show me in the datasheet">
-                      <span className="fact-key">{fact.key}</span>
-                      <span className="fact-value">
-                        {String(fact.value)} {fact.unit ?? ""}
-                      </span>
-                      <span className="dim fact-meta">
-                        {(fact.confidence * 100).toFixed(0)}% · p.{fact.source.page}
-                      </span>
-                      {fact.status === "hold" ? (
-                        <span className="badge hold">review</span>
-                      ) : (
-                        <span className="badge trusted">trusted</span>
-                      )}
-                    </button>
-                    {fact.status === "hold" && (
-                      <div className="hold-line">
-                        <span className="dim">{fact.holdReason}</span>
-                        {registry?.facts.some((f) => f.key === fact.key) &&
-                          (editing === fact.key ? (
-                            <span className="correct-row">
-                              <input
-                                autoFocus
-                                value={editValue}
-                                onChange={(e) => setEditValue(e.target.value)}
-                                onKeyDown={(e) => {
-                                  if (e.key === "Enter") void onCorrect(fact.key);
-                                }}
-                              />
-                              <button onClick={() => void onCorrect(fact.key)}>Save</button>
-                              <button className="ghost" onClick={() => setEditing(null)}>
-                                Cancel
-                              </button>
-                            </span>
-                          ) : (
-                            <button
-                              className="ghost"
-                              onClick={() => {
-                                setEditing(fact.key);
-                                setEditValue(String(fact.value));
-                              }}
-                            >
-                              Confirm / correct
-                            </button>
-                          ))}
-                      </div>
-                    )}
-                  </li>
-                ))}
-              </ul>
-            )}
-          </div>
         </section>
 
-        {/* Pane B: decision */}
+        {/* Pane B: facts + change side by side, verdict below */}
         <section className="pane">
-          <h2>
-            <span className="step">3</span> Propose a change
-          </h2>
-          <div className="preset-grid">
-            {PRESETS.map((preset) => (
-              <button
-                key={preset.title}
-                className="preset"
-                disabled={busy !== null}
-                onClick={() => void evaluateDescriptor(preset.descriptor)}
-              >
-                <strong>{preset.title}</strong>
-                <span className="dim">{preset.detail}</span>
-              </button>
-            ))}
+          <div className="duo">
+            <div>
+              <h2>
+                <span className="step">2</span> Facts{" "}
+                {heldCount > 0 && <span className="badge hold h2-note">{heldCount} to review</span>}
+              </h2>
+              <div className="card no-pad facts-card">
+                {allFacts.length === 0 ? (
+                  <p className="empty">Extracted facts land here, each with provenance and confidence.</p>
+                ) : (
+                  <ul className="fact-list">
+                    {allFacts.map((fact) => (
+                      <li key={fact.key}>
+                        <button className="fact-main" onClick={() => clickFact(fact)} title="Show me in the datasheet">
+                          <span className="fact-top">
+                            <span className="fact-key">{fact.key}</span>
+                            {fact.status === "hold" ? (
+                              <span className="badge hold">review</span>
+                            ) : (
+                              <span className="badge trusted">trusted</span>
+                            )}
+                          </span>
+                          <span className="fact-bottom">
+                            <span className="fact-value">
+                              {String(fact.value)} {fact.unit ?? ""}
+                            </span>
+                            <span className="dim fact-meta">
+                              {(fact.confidence * 100).toFixed(0)}% · p.{fact.source.page}
+                            </span>
+                          </span>
+                        </button>
+                        {fact.status === "hold" && (
+                          <div className="hold-line">
+                            <span className="dim">{fact.holdReason}</span>
+                            {registry?.facts.some((f) => f.key === fact.key) &&
+                              (editing === fact.key ? (
+                                <span className="correct-row">
+                                  <input
+                                    autoFocus
+                                    value={editValue}
+                                    onChange={(e) => setEditValue(e.target.value)}
+                                    onKeyDown={(e) => {
+                                      if (e.key === "Enter") void onCorrect(fact.key);
+                                    }}
+                                  />
+                                  <button onClick={() => void onCorrect(fact.key)}>Save</button>
+                                  <button className="ghost" onClick={() => setEditing(null)}>
+                                    Cancel
+                                  </button>
+                                </span>
+                              ) : (
+                                <button
+                                  className="ghost"
+                                  onClick={() => {
+                                    setEditing(fact.key);
+                                    setEditValue(String(fact.value));
+                                  }}
+                                >
+                                  Confirm / correct
+                                </button>
+                              ))}
+                          </div>
+                        )}
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            </div>
+
+            <div>
+              <h2>
+                <span className="step">3</span> Propose a change
+              </h2>
+              <div className="preset-grid">
+                {PRESETS.map((preset) => (
+                  <button
+                    key={preset.title}
+                    className="preset"
+                    disabled={busy !== null}
+                    onClick={() => void evaluateDescriptor(preset.descriptor)}
+                  >
+                    <strong>{preset.title}</strong>
+                    <span className="dim">{preset.detail}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
           </div>
+
           <details className="custom">
             <summary className="dim">Custom change…</summary>
             <div className="card">
@@ -529,9 +532,24 @@ export default function Home() {
           )}
         </section>
 
-        {/* Pane C: the document */}
-        <section className="pane viewer-pane">
-          <PdfViewer file={file} pages={ingest?.pages ?? []} highlight={highlight} />
+        {/* Pane C: the document, terminal below */}
+        <section className="viewer-pane">
+          <div className="viewer-scroll">
+            <PdfViewer file={file} pages={ingest?.pages ?? []} highlight={highlight} />
+          </div>
+          <div className="console" ref={logRef}>
+            <div className="console-title">copperhead — pipeline</div>
+            {log.length === 0 && !busy && (
+              <div>
+                <span className="prompt">$</span> idle — pick a part to start the pipeline
+              </div>
+            )}
+            {log.map((line, i) => (
+              <div key={i} className={i === log.length - 1 && busy ? "busy-line" : ""}>
+                <span className="prompt">$</span> {line}
+              </div>
+            ))}
+          </div>
         </section>
       </div>
     </div>
