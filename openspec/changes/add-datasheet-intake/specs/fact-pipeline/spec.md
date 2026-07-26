@@ -21,7 +21,7 @@ Every `ExtractedFact` SHALL carry a `SourceRef` with `source.page` set. A fact u
 - **THEN** the fact's status is `hold`
 
 ### Requirement: Confidence gating
-The system SHALL derive fact status from Sarvam's per-field confidence using `CONFIDENCE_THRESHOLD = 0.75`: any fact below the threshold, or flagged by a datasheet footnote qualifier, gets `status: "hold"`.
+The system SHALL derive fact status from the extractor's per-field confidence using `CONFIDENCE_THRESHOLD = 0.75`: any fact below the threshold, or flagged by a datasheet footnote qualifier, gets `status: "hold"`.
 
 #### Scenario: Low confidence becomes hold (AC-4.1)
 - **WHEN** a fact has `confidence < 0.75`
@@ -32,8 +32,12 @@ The system SHALL derive fact status from Sarvam's per-field confidence using `CO
 - **THEN** its derived `status` is `"hold"` regardless of confidence
 
 ### Requirement: Provenance stitching
-The system SHALL join Extract fields to Digitise regions by field label, then by value-plus-unit match within the page; a field with no matching region SHALL be constructed as a held fact.
+The system SHALL verify that each extracted field's source snippet literally occurs in the digitised text, SHALL locate the snippet in the Digitise regions to assign the bounding box deterministically (the extractor never supplies coordinates), and SHALL construct any field whose snippet cannot be verified or located as a held fact.
 
 #### Scenario: No matching Digitise region
-- **WHEN** an Extract field cannot be matched to any Digitise bounding box on its page
+- **WHEN** an extracted field's snippet cannot be matched to any Digitise bounding box on its page
 - **THEN** the fact is created with `status: "hold"` and no `bbox`
+
+#### Scenario: Snippet not present in digitised text
+- **WHEN** an extracted field's snippet does not literally occur in the digitised page text
+- **THEN** the fact is created with `status: "hold"` regardless of its reported confidence

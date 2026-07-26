@@ -2,8 +2,8 @@
 
 ## ADDED Requirements
 
-### Requirement: Datasheet ingestion via Sarvam Extract and Digitise
-The system SHALL send a datasheet to Sarvam Extract (with a described field list) and Sarvam Digitise (for structured text with bounding boxes) and assemble the results into `ExtractedFact[]`, using the async job lifecycle: create job, upload file, start, poll status, download results.
+### Requirement: Datasheet ingestion via Sarvam Digitise and a fact-extractor port
+The system SHALL send a datasheet to Sarvam Digitise (structured text with bounding boxes, via the async job lifecycle: create job, upload file, start, poll status, download results) and SHALL obtain typed fields with per-field confidence from a `FactExtractor` port reading the digitised pages against a described field list, assembling the results into `ExtractedFact[]`. The LLM-backed extractor implementation SHALL return, per field, a verbatim source snippet and page number; a field whose snippet does not literally occur in the digitised text SHALL be held, never trusted.
 
 #### Scenario: Fields extracted with confidence (AC-1.1)
 - **WHEN** ingestion runs on a real datasheet page with a field list

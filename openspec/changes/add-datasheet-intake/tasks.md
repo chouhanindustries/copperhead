@@ -21,8 +21,8 @@
 
 ## 4. Ingestion layer
 
-- [ ] 4.1 Define the `DocumentIntelligenceProvider` port and implement `FixtureProvider` serving cached Extract and Digitise JSON with zero network (AC-12.2 test)
-- [ ] 4.2 Verify-live the `sarvamai` SDK surface against `node_modules/sarvamai` types; implement `SarvamProvider` (create, upload, start, poll, download), falling back to the REST job contract if the SDK differs
+- [ ] 4.1 Define the `DigitisationProvider` and `FactExtractor` ports and implement fixture-backed versions of both serving cached JSON with zero network (AC-12.2 test)
+- [ ] 4.2 Implement `SarvamProvider` against the confirmed `sarvamai` SDK surface (createJob, uploadFile, start, waitUntilComplete, downloadOutput); one live call confirms the page-JSON bbox schema. Implement the LLM `FactExtractor` (fields, per-field confidence, verbatim snippets) with snippet verification and deterministic bbox stitching per design D9
 - [ ] 4.3 Implement the job runner: poll timeout 90 s at 2 s interval with typed timeout error (AC-1.3), exponential backoff on 429/503 up to 3 retries (AC-12.1), page budgeting (at most 2 pages submitted)
 - [ ] 4.4 Implement the content-hash cache (sha256 of document plus field-list hash) consulted before any job creation, with tests
 - [ ] 4.5 Generate and commit fixtures for the demo datasheets (Extract and Digitise JSON), including one hard scanned or stamped source for GT-6

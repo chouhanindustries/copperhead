@@ -6,7 +6,7 @@ Copperhead can edit and verify boards, but it has no way to justify a change aga
 
 ## What Changes
 
-- New datasheet ingestion pipeline using Sarvam Document Intelligence: Extract for typed fields with per-field confidence, Digitise for structured text with bounding boxes. Async job flow (create, upload, start, poll, download) with a poll timeout, backoff on 429/503, and a required fixtures fallback (`USE_FIXTURES=true`) so demos survive the 10 requests/minute plan limit.
+- New datasheet ingestion pipeline: Sarvam Document Digitisation turns datasheet pages into structured text with bounding boxes (async job flow: create, upload, start, poll, download, with a poll timeout, backoff on 429/503, and a required fixtures fallback via `USE_FIXTURES=true` so demos survive the 10 requests/minute plan limit), and an LLM fact extractor behind a port reads the digitised pages and emits typed fields with per-field confidence and verbatim source snippets. Sarvam has no public field-extraction API, so extraction is LLM-based with deterministic guardrails: a value whose snippet does not occur in the digitised text can never become trusted.
 - New fact pipeline: raw extracted fields map to canonical keys with normalized units (for example "Input leakage current = 0.033 mA" becomes `{ key: "pin_input_leakage_uA", value: 33, unit: "uA" }`), every fact carries a `SourceRef` (page, bounding box, snippet), and a confidence gate (`CONFIDENCE_THRESHOLD = 0.75`) derives `trusted` or `hold` status. A fact without a bounding box is downgraded to `hold`.
 - New constraint registry and verdict engine: a `constraints.json` registry holds board rules (`budget_sum`, `max`, `min`, `equality`); a deterministic, fail-closed engine evaluates a proposed change against facts plus constraints and produces a `Verdict` with `citedFact`, `citedConstraint`, a computed expression, and a specific `proposedFix` on refusal. A HOLD fact can never produce APPROVE or REFUSE. Malformed registries refuse to evaluate rather than approving by default.
 - New registry persistence and correction flow: trusted facts are written back to the registry with value, confidence, and source; a second change on the same part reuses stored facts with no new Sarvam call; a user correction to a held fact recomputes the verdict live without re-extraction.
@@ -19,7 +19,7 @@ Out of scope (non-goals, automatic scope violations): a knowledge graph, KiCad f
 
 ### New Capabilities
 
-- `datasheet-ingestion`: Sarvam Extract and Digitise integration, the async job lifecycle, rate-limit resilience (backoff, poll timeout), content-addressed caching, and the fixtures fallback.
+- `datasheet-ingestion`: Sarvam Digitise integration, the LLM fact-extractor port, the async job lifecycle, rate-limit resilience (backoff, poll timeout), content-addressed caching, and the fixtures fallback.
 - `fact-pipeline`: fact typing, canonical keys, unit normalization, provenance stitching (joining Extract fields to Digitise bounding boxes), and confidence gating to `trusted` / `hold`.
 - `constraint-verdicts`: constraint registry loading and validation, the deterministic fail-closed verdict engine, cited refusals with proposed fixes, and the exportable verification manifest.
 - `registry-memory`: registry persistence of trusted facts, fact reuse on subsequent changes (no repeat extraction), and correction propagation with live verdict recompute.
@@ -32,7 +32,7 @@ None. This is a new, self-contained surface; the Phase 1 agent loop, CLI command
 ## Impact
 
 - New code lives in a self-contained workspace (Next.js App Router app plus a pure TypeScript core), isolated from `src/` so the existing CLI build, `check` contract, and test suite are untouched. Exact layout is a design decision (see design.md).
-- New dependency: `sarvamai` npm package, plus Next.js and React for the UI workspace.
-- New env var: `SARVAM_API_KEY` (env-only, never persisted; transcript-style redaction rules apply to any logged output). `.env` is already gitignored.
-- New fixtures: cached Extract and Digitise JSON for the demo datasheets under the workspace's `fixtures/` directory.
-- The Sarvam SDK method surface is a verify-live item: the REST job contract is the source of truth if the SDK wrapper differs.
+- New dependencies: `sarvamai` npm package and an LLM SDK for the fact extractor, plus Next.js and React for the UI workspace.
+- New env vars: `SARVAM_API_KEY` and the extractor's LLM key (env-only, never persisted; transcript-style redaction rules apply to any logged output). `.env` is already gitignored.
+- New fixtures: cached Digitise and extractor JSON for the demo datasheets under the workspace's `fixtures/` directory.
+- The `sarvamai` JS SDK surface is confirmed from the Sarvam docs (`SarvamAIClient`, `documentIntelligence.createJob`, `uploadFile`, `start`, `waitUntilComplete`, `downloadOutput`); the page-JSON bounding-box schema is confirmed with one live call before fixtures are generated.
