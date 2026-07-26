@@ -13,3 +13,4 @@ manual-tests/runs/
 intake/fixtures/cache/*.output.zip
 intake/fixtures/cache/raw/
 intake/tsconfig.tsbuildinfo
+intake/data/
