@@ -1,0 +1,265 @@
+:root {
+  --bg: #171412;
+  --surface: #1f1b18;
+  --surface-2: #262119;
+  --border: #3a332b;
+  --text: #e8e2da;
+  --text-dim: #a89f93;
+  --copper: #b87333;
+  --copper-soft: rgba(184, 115, 51, 0.16);
+  --amber: #d08700;
+  --amber-soft: rgba(208, 135, 0, 0.14);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: "IBM Plex Sans", "Segoe UI", system-ui, sans-serif;
+  font-size: 15px;
+  line-height: 1.5;
+}
+
+main {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 32px 24px 96px;
+}
+
+h1 {
+  font-size: 20px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  margin: 0;
+}
+
+h1 .accent {
+  color: var(--copper);
+}
+
+h2 {
+  font-size: 13px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--text-dim);
+  margin: 40px 0 12px;
+}
+
+.tagline {
+  color: var(--text-dim);
+  margin: 4px 0 0;
+  font-size: 14px;
+}
+
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 16px 20px;
+}
+
+button {
+  background: var(--copper);
+  color: #171412;
+  border: none;
+  border-radius: 4px;
+  padding: 8px 16px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+button.ghost {
+  background: transparent;
+  color: var(--copper);
+  border: 1px solid var(--copper);
+}
+
+input,
+select {
+  background: var(--surface-2);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 7px 10px;
+  font-size: 14px;
+}
+
+label {
+  display: block;
+  font-size: 12px;
+  color: var(--text-dim);
+  margin-bottom: 4px;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+}
+
+th {
+  text-align: left;
+  color: var(--text-dim);
+  font-weight: 500;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+}
+
+td {
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+  vertical-align: top;
+}
+
+tr.clickable {
+  cursor: pointer;
+}
+
+tr.clickable:hover {
+  background: var(--copper-soft);
+}
+
+.badge {
+  display: inline-block;
+  padding: 1px 8px;
+  border-radius: 3px;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+}
+
+.badge.trusted {
+  border: 1px solid var(--copper);
+  color: var(--copper);
+}
+
+.badge.hold {
+  background: var(--amber-soft);
+  border: 1px solid var(--amber);
+  color: var(--amber);
+}
+
+.page-canvas {
+  position: relative;
+  background: #efeae2;
+  color: #26211b;
+  border-radius: 4px;
+  width: 100%;
+  aspect-ratio: 8.5 / 11;
+  overflow: hidden;
+  font-size: 11px;
+}
+
+.page-canvas .region {
+  position: absolute;
+  border: 1px solid transparent;
+  overflow: hidden;
+  padding: 1px 2px;
+}
+
+.page-canvas .region.highlight {
+  border-color: var(--amber);
+  background: var(--amber-soft);
+  box-shadow: 0 0 0 2px var(--amber);
+}
+
+.page-label {
+  font-size: 12px;
+  color: var(--text-dim);
+  margin: 12px 0 4px;
+}
+
+.verdict {
+  border-left: 4px solid var(--border);
+  padding-left: 16px;
+}
+
+.verdict .decision {
+  font-size: 24px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+
+.verdict.APPROVE {
+  border-left-color: var(--copper);
+}
+
+.verdict.APPROVE .decision {
+  color: var(--copper);
+}
+
+.verdict.REFUSE {
+  border-left-color: var(--text);
+}
+
+.verdict.HOLD {
+  border-left-color: var(--amber);
+}
+
+.verdict.HOLD .decision {
+  color: var(--amber);
+}
+
+.citation {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 10px 14px;
+  margin-top: 10px;
+  font-size: 13px;
+}
+
+.citation .source {
+  color: var(--text-dim);
+  font-size: 12px;
+  margin-top: 4px;
+}
+
+.computed {
+  font-family: "IBM Plex Mono", ui-monospace, monospace;
+  color: var(--copper);
+  margin-top: 8px;
+}
+
+.row {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  align-items: flex-end;
+}
+
+.error {
+  color: var(--amber);
+  font-size: 13px;
+  margin-top: 8px;
+}
+
+.dim {
+  color: var(--text-dim);
+}
+
+.grid-2 {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 24px;
+}
+
+@media (max-width: 900px) {
+  .grid-2 {
+    grid-template-columns: 1fr;
+  }
+}
