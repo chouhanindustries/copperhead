@@ -60,6 +60,36 @@ describe('parseDiagnosis', () => {
     expect(parseDiagnosis(null).verdict).toBe('abort');
     expect(parseDiagnosis('{"reason":"x"}').verdict).toBe('abort');
   });
+
+  // An aborted stage ends the run, so reading a retry as an abort is not a
+  // parsing nit: it discards a recovery the model just asked for.
+  it('finds the verdict past an unbalanced brace in the prose', () => {
+    const d = parseDiagnosis(
+      'The stage emitted a literal { in its output.\n' +
+        '{"verdict":"retry","reason":"dropped edit","guidance":"apply the edit"}',
+    );
+    expect(d.verdict).toBe('retry');
+    expect(d.reason).toBe('dropped edit');
+    expect(d.guidance).toBe('apply the edit');
+  });
+
+  it('skips a preamble object that carries no verdict', () => {
+    const d = parseDiagnosis('{"note":"thinking"}\n{"verdict":"retry","reason":"real reason"}');
+    expect(d.verdict).toBe('retry');
+    expect(d.reason).toBe('real reason');
+  });
+
+  it('still aborts when no object anywhere carries a verdict', () => {
+    const d = parseDiagnosis('{"note":"thinking"}\n{"reason":"still no verdict"}');
+    expect(d.verdict).toBe('abort');
+    expect(d.reason).toBe('diagnosis was not valid JSON');
+  });
+
+  it('does not treat a brace inside a JSON string as structure', () => {
+    const d = parseDiagnosis('{"verdict":"retry","reason":"x","guidance":"call it with {\\"path\\": \\"a.md\\"}"}');
+    expect(d.verdict).toBe('retry');
+    expect(d.guidance).toBe('call it with {"path": "a.md"}');
+  });
 });
 
 describe('diagnoseStageFailure', () => {

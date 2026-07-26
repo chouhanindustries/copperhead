@@ -48,13 +48,51 @@ export interface StageDiagnosis {
   usage?: { inputTokens: number; outputTokens: number };
 }
 
-/** Extract the first brace-balanced JSON object from text, tolerating quoting and
- * escaping, and interpret it as a StageDiagnosis. Anything unparseable is treated
- * as "abort" so an ambiguous diagnosis never loops the pipeline forever. */
+/**
+ * Interpret a diagnosis turn as a StageDiagnosis. Anything unparseable is
+ * treated as "abort" so an ambiguous diagnosis never loops the pipeline forever.
+ *
+ * Every brace-balanced object in the text is tried, not just the first one, and
+ * the first that actually carries a `verdict` wins. Scanning only the first
+ * candidate made a *correct* diagnosis abort the whole run in two shapes seen
+ * from real models: an unbalanced brace in prose ahead of the JSON ("the stage
+ * emitted a literal {"), which consumed the real object as part of one
+ * never-closing candidate; and a preamble object such as `{"note":"thinking"}`,
+ * which parsed, lacked a verdict, and was accepted as an abort. Both cost a
+ * retry that the model had just asked for, and an aborted stage ends the run.
+ */
 export function parseDiagnosis(text: string | null): StageDiagnosis {
   if (!text) return { verdict: 'abort', reason: 'no diagnosis produced' };
-  const start = text.indexOf('{');
-  if (start >= 0) {
+  for (const candidate of balancedJsonObjects(text)) {
+    let o: Partial<StageDiagnosis>;
+    try {
+      o = JSON.parse(candidate) as Partial<StageDiagnosis>;
+    } catch {
+      continue; // brace-balanced but not JSON (e.g. prose in braces)
+    }
+    // A parsed object with no verdict is not the diagnosis: keep looking rather
+    // than reading it as an abort.
+    if (o.verdict !== 'retry' && o.verdict !== 'abort') continue;
+    return {
+      verdict: o.verdict,
+      reason: typeof o.reason === 'string' ? o.reason : 'no reason given',
+      ...(o.verdict === 'retry' && typeof o.guidance === 'string' && o.guidance.trim()
+        ? { guidance: o.guidance.trim() }
+        : {}),
+    };
+  }
+  return { verdict: 'abort', reason: 'diagnosis was not valid JSON' };
+}
+
+/**
+ * Every brace-balanced substring of `text`, starting at each `{` in order.
+ * String literals (and their escapes) are respected, so a brace inside a JSON
+ * string does not affect depth. A `{` that never closes yields nothing and the
+ * scan moves on to the next one, which is what keeps a stray brace in prose
+ * from swallowing the object that follows it.
+ */
+function* balancedJsonObjects(text: string): Generator<string> {
+  for (let start = text.indexOf('{'); start >= 0; start = text.indexOf('{', start + 1)) {
     let depth = 0;
     let inStr = false;
     let esc = false;
@@ -69,23 +107,11 @@ export function parseDiagnosis(text: string | null): StageDiagnosis {
       if (ch === '"') inStr = true;
       else if (ch === '{') depth++;
       else if (ch === '}' && --depth === 0) {
-        try {
-          const o = JSON.parse(text.slice(start, i + 1)) as Partial<StageDiagnosis>;
-          const verdict = o.verdict === 'retry' ? 'retry' : 'abort';
-          return {
-            verdict,
-            reason: typeof o.reason === 'string' ? o.reason : 'no reason given',
-            ...(verdict === 'retry' && typeof o.guidance === 'string' && o.guidance.trim()
-              ? { guidance: o.guidance.trim() }
-              : {}),
-          };
-        } catch {
-          break;
-        }
+        yield text.slice(start, i + 1);
+        break;
       }
     }
   }
-  return { verdict: 'abort', reason: 'diagnosis was not valid JSON' };
 }
 
 /** Compact, most-recent-last excerpt of a run's transcript for the diagnostician:
