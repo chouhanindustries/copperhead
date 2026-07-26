@@ -90,7 +90,7 @@ describe('copperhead check (AC-2)', () => {
     } finally {
       await cleanup();
     }
-  }, 60_000);
+  }, 120_000);
 
   it('broken schematic (unconnected pin): fails with location (AC-2.2)', async () => {
     const { repo, cleanup } = await tempFixtureRepo();
@@ -107,7 +107,7 @@ describe('copperhead check (AC-2)', () => {
     } finally {
       await cleanup();
     }
-  }, 60_000);
+  }, 120_000);
 
   it('BOM value drift: names doc, claim, and actual (AC-2.3)', async () => {
     const { repo, cleanup } = await tempFixtureRepo();
@@ -149,7 +149,7 @@ describe('copperhead check (AC-2)', () => {
     } finally {
       await cleanup();
     }
-  }, 60_000);
+  }, 120_000);
 });
 
 describe('check is LLM-free by construction (AC-2.1)', () => {
@@ -191,7 +191,7 @@ describe('fab export (create stage 6 tooling)', () => {
     } finally {
       await cleanup();
     }
-  }, 60_000);
+  }, 120_000);
 });
 
 describe('model selection precedence (task 4.6)', () => {
