@@ -10,6 +10,7 @@ import { verifySchematicSymbols } from '../kicad/symlib.js';
 import { checkDrift } from '../memory/drift.js';
 import { saveConstraint, classifyAffectsTarget, affectsTargetExists } from '../memory/constraints.js';
 import { openspecValidate } from '../openspec/cli.js';
+import { recordExportHash } from '../commands/export.js';
 import { existsSync } from 'node:fs';
 import type { CopperheadConfig } from '../config.js';
 import { ObligationsLedger } from './ledger.js';
@@ -398,6 +399,7 @@ export const TOOLS: ToolDef[] = [
         ctx.config.schematic ? path.join(ctx.repoRoot, ctx.config.schematic) : null,
         outDir,
       );
+      await recordExportHash(ctx.repoRoot);
       ctx.filesTouched.add('outputs/');
       const lines = [`produced: ${res.produced.join(', ') || '(none)'}`];
       for (const f of res.failed) lines.push(`FAILED ${f.artifact}: ${f.reason}`);

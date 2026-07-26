@@ -2,7 +2,16 @@ import { mkdtemp, cp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { execa } from 'execa';
+import { execa, execaSync } from 'execa';
+
+export const hasKicadCli = (() => {
+  try {
+    execaSync('kicad-cli', ['--version']);
+    return true;
+  } catch {
+    return false;
+  }
+})();
 
 export const FIXTURE = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures', 'open-key');
 export const REPORTS = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures', 'reports');

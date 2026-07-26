@@ -1,6 +1,7 @@
 import path from 'node:path';
 import { existsSync } from 'node:fs';
 import { readFile, writeFile, mkdir } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
 import { loadConfig } from '../config.js';
 import { checkDrift } from '../memory/drift.js';
 import { buildExport, parseBom, SUPPLIERS, isSupplier, type Supplier, type ExportResult } from '../kicad/bom-export.js';
@@ -71,6 +72,31 @@ export async function runExportBom(opts: ExportBomOptions): Promise<ExportBomRes
   await writeFile(path.join(opts.repoRoot, outPath), result.csv, 'utf8');
 
   return { ...result, supplier: opts.supplier, outPath };
+}
+
+export async function recordExportHash(repoRoot: string): Promise<void> {
+  const config = await loadConfig(repoRoot);
+  if (!config.board) return;
+  const boardPath = path.join(repoRoot, config.board);
+  if (!existsSync(boardPath)) return;
+
+  const content = await readFile(boardPath);
+  const boardHash = createHash('sha256').update(content).digest('hex');
+  const configPath = path.join(repoRoot, '.copperhead', 'config.json');
+  let raw: Record<string, unknown> = {};
+  if (existsSync(configPath)) {
+    try {
+      raw = JSON.parse(await readFile(configPath, 'utf8'));
+    } catch {
+      raw = {};
+    }
+  }
+  raw.exportHash = {
+    boardHash,
+    exportedAt: new Date().toISOString(),
+  };
+  await mkdir(path.join(repoRoot, '.copperhead'), { recursive: true });
+  await writeFile(configPath, JSON.stringify(raw, null, 2), 'utf8');
 }
 
 /**

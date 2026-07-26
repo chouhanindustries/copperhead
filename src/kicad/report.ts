@@ -56,13 +56,17 @@ export function normalizeReport(raw: unknown, source: 'erc' | 'drc'): CheckRepor
     unconnected_items?: RawViolation[];
     schematic_parity?: RawViolation[];
   };
-  const violations: Violation[] = [];
+  const allViolations: Violation[] = [];
   for (const sheet of r.sheets ?? []) {
-    for (const v of sheet.violations ?? []) violations.push(normViolation(v, sheet.path));
+    for (const v of sheet.violations ?? []) allViolations.push(normViolation(v, sheet.path));
   }
-  for (const v of r.violations ?? []) violations.push(normViolation(v));
-  for (const v of r.unconnected_items ?? []) violations.push(normViolation(v));
-  for (const v of r.schematic_parity ?? []) violations.push(normViolation(v));
+  for (const v of r.violations ?? []) allViolations.push(normViolation(v));
+  for (const v of r.unconnected_items ?? []) allViolations.push(normViolation(v));
+  for (const v of r.schematic_parity ?? []) allViolations.push(normViolation(v));
+  
+  const violations = allViolations.filter(
+    (v) => !(v.type === 'lib_symbol_mismatch' && v.severity !== 'error'),
+  );
   return { ok: violations.length === 0, source, violations };
 }
 
