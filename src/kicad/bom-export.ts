@@ -38,7 +38,7 @@ export interface BomRow {
 
 // Header aliases → canonical field. Matched after normalizing a header cell to
 // lowercase alphanumerics, so "LCSC Part #" and "lcsc_part" both hit `lcsc`.
-const HEADER_ALIASES: Record<string, keyof Pick<BomRow, 'refdes' | 'value' | 'footprint' | 'mpn' | 'manufacturer' | 'lcsc'>> = {
+export const HEADER_ALIASES: Record<string, keyof Pick<BomRow, 'refdes' | 'value' | 'footprint' | 'mpn' | 'manufacturer' | 'lcsc'>> = {
   refdes: 'refdes',
   ref: 'refdes',
   designator: 'refdes',
@@ -60,7 +60,7 @@ const HEADER_ALIASES: Record<string, keyof Pick<BomRow, 'refdes' | 'value' | 'fo
   lcscpartnumber: 'lcsc',
 };
 
-const norm = (s: string): string => s.toLowerCase().replace(/[^a-z0-9]/g, '');
+export const norm = (s: string): string => s.toLowerCase().replace(/[^a-z0-9]/g, '');
 
 // MPN cells that mean "no orderable part number yet". `UNVERIFIED` is the
 // init/scaffold placeholder (src/memory/scaffold.ts writes it into the MPN
