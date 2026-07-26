@@ -56,17 +56,18 @@ export interface TableRow {
   }
 
   /**
-   * Like parseCanonicalRows, but keeps each kept table's header row so a caller
-   * can resolve columns by *name* instead of a fixed position. PINOUT.md's
-   * column count is not fixed in practice: the scaffold writes
-   * `Refdes | Pin | Name | Net | Notes`, but a hand- or LLM-authored table may
-   * legitimately drop the optional Name/Notes columns and write
-   * `Refdes | Pin | Net`. A fixed positional net index then reads the wrong cell
-   * and reports every pin as net "NC" against a doc that is in fact correct —
-   * a false drift the agent cannot diagnose (the doc plainly shows the net), so
-   * it loops on finish forever. Resolving by header name fixes that.
+   * Group a document's pipe-rows into tables without deciding which of them is
+   * canonical: a run of pipe-rows is one table, and any non-pipe line (blank or
+   * prose) ends it. Separator rows stay inside their table.
+   *
+   * `parseCanonicalTables` is this plus the Refdes/Pin `isHeader` test. It is
+   * exported separately because a caller can recognize a header this module
+   * does not: the supplier exporter accepts `Ref`/`Designator`/`Reference` as
+   * well as `Refdes`. Such a caller still needs the grouping — without it, the
+   * only alternative is the flat `parseMarkdownTables`, which merges every
+   * table in the file and turns a supporting table's rows into parts.
    */
-  export function parseCanonicalTables(md: string): Array<{ header: TableRow; rows: TableRow[] }> {
+  export function groupPipeTables(md: string): TableRow[][] {
     const groups: TableRow[][] = [];
     let current: TableRow[] | null = null;
     for (const line of md.split('\n')) {
@@ -86,8 +87,23 @@ export interface TableRow {
       }
       current.push({ cells });
     }
+    return groups;
+  }
+
+  /**
+   * Like parseCanonicalRows, but keeps each kept table's header row so a caller
+   * can resolve columns by *name* instead of a fixed position. PINOUT.md's
+   * column count is not fixed in practice: the scaffold writes
+   * `Refdes | Pin | Name | Net | Notes`, but a hand- or LLM-authored table may
+   * legitimately drop the optional Name/Notes columns and write
+   * `Refdes | Pin | Net`. A fixed positional net index then reads the wrong cell
+   * and reports every pin as net "NC" against a doc that is in fact correct —
+   * a false drift the agent cannot diagnose (the doc plainly shows the net), so
+   * it loops on finish forever. Resolving by header name fixes that.
+   */
+  export function parseCanonicalTables(md: string): Array<{ header: TableRow; rows: TableRow[] }> {
     const tables: Array<{ header: TableRow; rows: TableRow[] }> = [];
-    for (const g of groups) {
+    for (const g of groupPipeTables(md)) {
       if (g.length && isHeader(g[0]!)) tables.push({ header: g[0]!, rows: g.slice(1) });
     }
     return tables;

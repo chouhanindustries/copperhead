@@ -53,6 +53,57 @@ describe('BOM parsing (supplier-bom-export)', () => {
   it('returns no rows when there is no Refdes-headed table', () => {
     expect(parseBom('# nothing here\n\njust prose\n')).toEqual([]);
   });
+
+  // I5 taught the drift gate that BOM.md legitimately carries supporting
+  // tables (a quiescent-current roll-up, a cost summary). The exporter read a
+  // flat row list, so those rows became parts and their header row became one
+  // too — the literal cell "MPN" ordered as a part number.
+  const BOM_WITH_ROLLUP = `# Bill of Materials
+
+| Refdes | Value | Footprint | MPN | Manufacturer |
+|---|---|---|---|---|
+| R1 | 5.1k | Resistor_SMD:R_0603_1608Metric | RC0603FR-075K1L | Yageo |
+
+## Quiescent-current roll-up
+
+| Item | Current | Notes | MPN | Manufacturer |
+|---|---|---|---|---|
+| LED branch | 0.9 mA | at 5 V | ROLLUP-NOT-A-PART | n/a |
+| Total | 0.9 mA | | ROLLUP-NOT-A-PART | n/a |
+`;
+
+  it('stops at the end of the parts table, ignoring a supporting table (I5)', () => {
+    expect(parseBom(BOM_WITH_ROLLUP).map((r) => r.refdes)).toEqual(['R1']);
+  });
+
+  it('never lets a supporting table reach a supplier cart', () => {
+    const rows = parseBom(BOM_WITH_ROLLUP);
+    const { csv } = buildExport(rows, 'digikey', { boards: 1, spares: 10, includeUnverified: false });
+    expect(csv).toBe(
+      'Manufacturer Part Number,Manufacturer,Quantity,Customer Reference\n' +
+        'RC0603FR-075K1L,Yageo,3,R1\n',
+    );
+    // The two failure shapes specifically: the roll-up's own header row read as
+    // a part, and its data rows read as parts.
+    expect(csv).not.toContain('MPN,Manufacturer,2,Item');
+    expect(csv).not.toContain('ROLLUP-NOT-A-PART');
+  });
+
+  it('reads the parts table when a supporting table comes first', () => {
+    const md = `## Cost summary
+
+| Item | Cost |
+|---|---|
+| Total | $4.20 |
+
+## Parts
+
+| Refdes | Value | Footprint | MPN |
+|---|---|---|---|
+| C1 | 10uF | Capacitor_SMD:C_0603_1608Metric | GRM188R61A106KE69D |
+`;
+    expect(parseBom(md).map((r) => r.refdes)).toEqual(['C1']);
+  });
 });
 
 describe('quantity arithmetic (supplier-bom-export)', () => {
