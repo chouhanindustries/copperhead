@@ -111,7 +111,9 @@ export async function toolSearch(
   // pointing at an ancestor is otherwise descended until the OS throws ELOOP,
   // which takes down search for the whole run.
   const realRoot = await realpath(repoRoot).catch(() => path.resolve(repoRoot));
-  const seenDirs = new Set<string>();
+  // Seeded with the root: a link pointing back at it would otherwise be walked
+  // once more, duplicating every root-level match under the link's path.
+  const seenDirs = new Set<string>([realRoot]);
 
   /** The real path of `abs`, or null when it resolves outside the repo. */
   async function insideRoot(abs: string): Promise<string | null> {

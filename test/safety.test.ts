@@ -161,6 +161,23 @@ describe('file tools', () => {
     expect(matches[0]!.file).toBe(path.join('sub', 'a.txt'));
   });
 
+  it('search does not report a file twice through a link back to the repo root', async () => {
+    const base = await mkdtemp(path.join(tmpdir(), 'ch-search-dup-'));
+    const repo = path.join(base, 'repo');
+    await mkdir(path.join(repo, 'sub'), { recursive: true });
+    // A match at the ROOT is what exposes this: the loop test above only has a
+    // file under sub/, so re-walking the root produced nothing to duplicate.
+    await writeFile(path.join(repo, 'a.txt'), 'needle A\n', 'utf8');
+    await writeFile(path.join(repo, 'sub', 'b.txt'), 'needle B\n', 'utf8');
+    await symlink(repo, path.join(repo, 'sub', 'back'));
+
+    const matches = await toolSearch(repo, 'needle');
+
+    // Without seeding seenDirs with the root, this returns a third match at
+    // sub/back/a.txt — the same file reported under the link's path.
+    expect(matches.map((m) => m.file).sort()).toEqual(['a.txt', path.join('sub', 'b.txt')]);
+  });
+
   it('search still follows a symlink that stays inside the repo', async () => {
     const base = await mkdtemp(path.join(tmpdir(), 'ch-search-in-'));
     const repo = path.join(base, 'repo');
