@@ -1,6 +1,6 @@
 # Tasks: Build copperhead Phase 1
 
-> **Status (2026-07-18, evening): 52/61 complete.** Every deterministic capability is
+> **Status (2026-07-18, evening): 53/61 complete.** Every deterministic capability is
 > implemented and covered by the offline suite (57 tests green). The agent loop is now
 > **verified live** with an OpenAI key (model `gpt-5-nano`, the only model on this key):
 > AC-3.1 net rename with surgical <5% diff (AC-3.7), AC-3.4 budget refusal via compliant
