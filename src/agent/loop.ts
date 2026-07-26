@@ -12,7 +12,16 @@ import { Transcript, type ExitPath, type RunStats } from './transcript.js';
 import { collectRunMeta, renderCliHeader, type RunMeta, type RunMetaInput } from './runmeta.js';
 import { plainRenderer, fmtDuration, fmtTokens, type ProgressRenderer } from './render.js';
 import { ObligationsLedger } from './ledger.js';
-import { gitPreflight, isDirty, snapshot, restore, commitAll, changedFiles, preserveFailedRun } from '../util/git.js';
+import {
+  gitPreflight,
+  isDirty,
+  snapshot,
+  restore,
+  commitAll,
+  changedFiles,
+  preserveFailedRun,
+  type GitSnapshot,
+} from '../util/git.js';
 import { withRetry, isRateLimit, sessionLimit } from '../util/retry.js';
 import { openspecArchive } from '../openspec/cli.js';
 import { existsSync } from 'node:fs';
@@ -121,6 +130,29 @@ function otherProvider(current: Provider): Provider | null {
   if (current.name === 'openai' && process.env.ANTHROPIC_API_KEY) return new AnthropicProvider();
   if (current.name === 'anthropic' && process.env.OPENAI_API_KEY) return new OpenAIProvider();
   return null;
+}
+
+/**
+ * Roll the working tree back, and never let that be the thing that ends the
+ * run. `restore` shells out to git, so it throws on anything git refuses:
+ * most reachably, `git stash apply` when the snapshot's stash object is gone.
+ * `git stash create` leaves that object unreferenced by design, so a `git gc`
+ * during a long run collects it and the rollback throws afterwards.
+ *
+ * An unhandled throw here skips `run-end` and `summary.md`, which are most
+ * valuable exactly when the tree has been left in an unknown state. Returns
+ * the error message so a caller that surfaces it can, and records the failure
+ * on the transcript either way.
+ */
+async function rollBack(repoRoot: string, snap: GitSnapshot, transcript: Transcript): Promise<string | null> {
+  try {
+    await restore(repoRoot, snap);
+    return null;
+  } catch (err) {
+    const message = (err as Error).message;
+    await transcript.event('restore-failed', { error: message });
+    return message;
+  }
 }
 
 async function appendChangelog(
@@ -340,16 +372,7 @@ async function runWithMemory(
     // it, so a budget-exhaustion (or any) failure is recoverable (issue #15).
     const preserved = await preserveFailedRun(repoRoot, ctx.runId);
     if (preserved) await transcript.event('work-preserved', { stash: preserved });
-    // The rollback itself can fail (git in a bad state). That must not become
-    // an unhandled throw that skips run-end and summary.md — the summary is
-    // most valuable exactly when the tree is left in an unknown state.
-    let restoreError: string | null = null;
-    try {
-      await restore(repoRoot, snap);
-    } catch (err) {
-      restoreError = (err as Error).message;
-      await transcript.event('restore-failed', { error: restoreError });
-    }
+    const restoreError = await rollBack(repoRoot, snap, transcript);
     const runStats = stats(exitPath);
     await transcript.event('run-end', runStats);
     const summaryPath = await transcript.writeSummary({
@@ -571,7 +594,10 @@ async function runWithMemory(
       const { outcome, summary } = ctx.finishRequest;
       const files = [...ctx.filesTouched];
       if (outcome === 'refuse') {
-        await restore(repoRoot, snap);
+        const restoreError = await rollBack(repoRoot, snap, transcript);
+        if (restoreError) {
+          log(`WARNING: rollback failed (${restoreError}); the working tree may be in a partial state`);
+        }
         await transcript.event('run-refused', { summary });
         const runStats = stats('refused');
         await transcript.event('run-end', runStats);
@@ -587,7 +613,9 @@ async function runWithMemory(
           tokensOut,
           outcome: 'aborted',
           openObligations: null,
-          detail: `REFUSED: ${summary}`,
+          detail: restoreError
+            ? `REFUSED: ${summary}\n\nROLLBACK FAILED: ${restoreError} — the working tree may be in a partial state; inspect it with git status/git diff before rerunning`
+            : `REFUSED: ${summary}`,
           env: meta,
           stats: runStats,
         });
@@ -631,7 +659,16 @@ async function runWithMemory(
         log('--- dry run: proposed diff ---');
         log(diff || '(no diff)');
         if (untracked) log(`new files:\n${untracked}`);
-        await restore(repoRoot, snap);
+        // A dry run's whole contract is that it leaves nothing behind, so a
+        // failed revert has to be said out loud rather than reported as
+        // "changes reverted".
+        const restoreError = await rollBack(repoRoot, snap, transcript);
+        if (restoreError) {
+          log(`WARNING: dry-run revert failed (${restoreError}); the proposed changes may still be in the working tree`);
+        }
+        const dryRunDetail = restoreError
+          ? `dry run: REVERT FAILED: ${restoreError} — the proposed changes may still be in the working tree; inspect it with git status/git diff`
+          : 'dry run: changes reverted';
         const runStats = stats('done');
         await transcript.event('run-end', runStats);
         await transcript.writeSummary({
@@ -646,11 +683,11 @@ async function runWithMemory(
           tokensOut,
           outcome: 'success',
           openObligations: null,
-          detail: 'dry run: changes reverted',
+          detail: dryRunDetail,
           env: meta,
           stats: runStats,
         });
-        r.finish(outcomeLine(runStats, 'dry run: changes reverted'));
+        r.finish(outcomeLine(runStats, dryRunDetail));
         return {
           outcome: 'success',
           exitPath: 'done',
