@@ -22,8 +22,9 @@ import {
 import { sha256 } from "./cache";
 import { POLL_INTERVAL_MS, POLL_TIMEOUT_MS, TimeoutError, withBackoff, withTimeout } from "./resilience";
 
-/** The demo feeds at most this many pages (Sarvam caps at 10). */
+/** The demo feeds at most this many pages; Sarvam hard-caps at 10. */
 export const MAX_PAGES = 2;
+export const SARVAM_PAGE_LIMIT = 10;
 
 /** Cheap page-count estimate: counts PDF page objects. Undercounts never block. */
 export function estimatePdfPageCount(bytes: Buffer): number {
@@ -48,16 +49,26 @@ function mapBbox(raw: unknown, page: number, pageW?: number, pageH?: number): Bo
     if (x0 === undefined || y0 === undefined || x1 === undefined || y1 === undefined) return undefined;
     x = x0; y = y0; w = x1 - x0; h = y1 - y0;
   } else if (isRecord(raw)) {
-    const rx = asNumber(raw.x) ?? asNumber(raw.x0) ?? asNumber(raw.left);
-    const ry = asNumber(raw.y) ?? asNumber(raw.y0) ?? asNumber(raw.top);
-    const rw = asNumber(raw.width) ?? asNumber(raw.w);
-    const rh = asNumber(raw.height) ?? asNumber(raw.h);
-    const x1 = asNumber(raw.x1) ?? asNumber(raw.right);
-    const y1 = asNumber(raw.y1) ?? asNumber(raw.bottom);
-    if (rx === undefined || ry === undefined) return undefined;
-    x = rx; y = ry;
-    w = rw ?? (x1 !== undefined ? x1 - rx : undefined);
-    h = rh ?? (y1 !== undefined ? y1 - ry : undefined);
+    // Confirmed live schema: coordinates {x1, y1, x2, y2} as top-left and
+    // bottom-right pixel corners.
+    const cx1 = asNumber(raw.x1);
+    const cy1 = asNumber(raw.y1);
+    const cx2 = asNumber(raw.x2);
+    const cy2 = asNumber(raw.y2);
+    if (cx1 !== undefined && cy1 !== undefined && cx2 !== undefined && cy2 !== undefined) {
+      x = cx1; y = cy1; w = cx2 - cx1; h = cy2 - cy1;
+    } else {
+      const rx = asNumber(raw.x) ?? asNumber(raw.x0) ?? asNumber(raw.left);
+      const ry = asNumber(raw.y) ?? asNumber(raw.y0) ?? asNumber(raw.top);
+      const rw = asNumber(raw.width) ?? asNumber(raw.w);
+      const rh = asNumber(raw.height) ?? asNumber(raw.h);
+      const rRight = asNumber(raw.right);
+      const rBottom = asNumber(raw.bottom);
+      if (rx === undefined || ry === undefined) return undefined;
+      x = rx; y = ry;
+      w = rw ?? (rRight !== undefined ? rRight - rx : undefined);
+      h = rh ?? (rBottom !== undefined ? rBottom - ry : undefined);
+    }
   }
   if (x === undefined || y === undefined || w === undefined || h === undefined || w <= 0 || h <= 0) {
     return undefined;
@@ -85,9 +96,13 @@ function textOf(entry: Record<string, unknown>): string {
 /** Map one parsed page-level JSON object into a DigitisedPage. */
 function mapPage(raw: Record<string, unknown>, fallbackPage: number): DigitisedPage {
   const page =
-    asNumber(raw.page) ?? asNumber(raw.page_number) ?? asNumber(raw.pageNumber) ?? fallbackPage;
-  const pageW = asNumber(raw.width) ?? asNumber(raw.page_width);
-  const pageH = asNumber(raw.height) ?? asNumber(raw.page_height);
+    asNumber(raw.page_num) ??
+    asNumber(raw.page) ??
+    asNumber(raw.page_number) ??
+    asNumber(raw.pageNumber) ??
+    fallbackPage;
+  const pageW = asNumber(raw.image_width) ?? asNumber(raw.width) ?? asNumber(raw.page_width);
+  const pageH = asNumber(raw.image_height) ?? asNumber(raw.height) ?? asNumber(raw.page_height);
 
   const regionSource = ["blocks", "regions", "elements", "items", "paragraphs", "cells", "lines"]
     .map((k) => raw[k])
@@ -98,7 +113,8 @@ function mapPage(raw: Record<string, unknown>, fallbackPage: number): DigitisedP
     if (!isRecord(entry)) continue;
     const text = textOf(entry);
     if (!text) continue;
-    const bboxRaw = entry.bbox ?? entry.bounding_box ?? entry.boundingBox ?? entry.bounds;
+    const bboxRaw =
+      entry.coordinates ?? entry.bbox ?? entry.bounding_box ?? entry.boundingBox ?? entry.bounds;
     const bbox = mapBbox(bboxRaw, page, pageW, pageH);
     if (bbox) regions.push({ text, bbox });
   }
@@ -148,17 +164,28 @@ export class SarvamProvider implements DigitisationProvider {
   }
 
   async digitise(doc: DocumentInput): Promise<DigitisedPage[]> {
+    // The estimate is a heuristic (object-count based, can over-count), so
+    // it hard-blocks only at Sarvam's own limit and warns above the budget.
     const estimated = estimatePdfPageCount(doc.bytes);
-    if (estimated > MAX_PAGES) {
+    if (estimated > SARVAM_PAGE_LIMIT) {
       throw new DigitiseFailedError(
-        `document appears to have ${estimated} pages; trim to the ${MAX_PAGES} relevant pages before ingesting`,
+        `document appears to have ~${estimated} pages, over Sarvam's ${SARVAM_PAGE_LIMIT}-page limit; trim to the ${MAX_PAGES} relevant pages before ingesting`,
+      );
+    }
+    if (estimated > MAX_PAGES) {
+      console.warn(
+        `[intake] ${doc.fileName}: estimated ~${estimated} pages; the demo budget is ${MAX_PAGES} relevant pages`,
       );
     }
 
     const job = await withBackoff(() =>
+      // Live API accepts only "html" or "md" (the SDK type also lists
+      // "json", but the endpoint 400s on it); the page-level structured
+      // JSON is always included in the output ZIP alongside the primary
+      // format.
       this.client.documentIntelligence.createJob({
         language: "en-IN",
-        outputFormat: "json",
+        outputFormat: "md",
         pollingIntervalMs: POLL_INTERVAL_MS,
       }),
     );

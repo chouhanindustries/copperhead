@@ -7,6 +7,33 @@ function entry(obj: unknown): Uint8Array {
 }
 
 describe("mapSarvamOutput (tolerant page-JSON mapping)", () => {
+  it("maps the confirmed live schema: metadata_page_NNN.json with blocks/coordinates", () => {
+    const pages = mapSarvamOutput({
+      "metadata_page_001.json": entry({
+        page_num: 1,
+        image_width: 2550,
+        image_height: 3300,
+        blocks: [
+          {
+            block_id: "b0",
+            coordinates: { x1: 216, y1: 123, x2: 937, y2: 261 },
+            layout_tag: "header",
+            confidence: 0.9,
+            reading_order: 1,
+            text: "SN5400, SN54LS00, SN54S00",
+          },
+        ],
+      }),
+      "document.md": strToU8("# not json"),
+    });
+    expect(pages).toHaveLength(1);
+    expect(pages[0]?.page).toBe(1);
+    expect(pages[0]?.text).toContain("SN54LS00");
+    const region = pages[0]?.regions[0];
+    expect(region?.bbox.x).toBeCloseTo(216 / 2550, 6);
+    expect(region?.bbox.height).toBeCloseTo((261 - 123) / 3300, 6);
+  });
+
   it("maps a pages-array document with normalized bboxes", () => {
     const pages = mapSarvamOutput({
       "output.json": entry({

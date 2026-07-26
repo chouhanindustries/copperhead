@@ -1,0 +1,384 @@
+[
+  {
+    "page": 1,
+    "text": "5 Electrical Characteristics\n5 Electrical Characteristics\n5.1 Absolute Maximum Ratings\nStresses beyond the absolute maximum ratings listed in Table 12 Absolute Maximum Ratings below may cause\npermanent damage to the device. These are stress ratings only, and do not refer to the functional operation of\nthe device that should follow the Table 13 Recommended Operating Conditions.\nTable 12: Absolute Maximum Ratings\n<table>\n<thead>\n<tr>\n<th>Symbol</th>\n<th>Parameter</th>\n<th>Min</th>\n<th>Max</th>\n<th>Unit</th>\n</tr>\n</thead>\n<tbody>\n<tr>\n<td>VDD33</td>\n<td>Power supply voltage</td>\n<td>-0.3</td>\n<td>3.6</td>\n<td>V</td>\n</tr>\n<tr>\n<td>I_{output}^1</td>\n<td>Cumulative IO output current</td>\n<td>-</td>\n<td>1,100</td>\n<td>mA</td>\n</tr>\n<tr>\n<td>T_{store}</td>\n<td>Storage temperature</td>\n<td>-40</td>\n<td>105</td>\n<td>°C</td>\n</tr>\n</tbody>\n</table>\n1. The module worked properly after a 24-hour test in ambient temperature at 25 ^∘C, and the IOs in three domains\n(VDD3P3_RTC, VDD3P3_CPU, VDD_SDIO) output high logic level to ground. Please note that pins occupied by flash\nand/or PSRAM in the VDD_SDIO power domain were excluded from the test.\n2. Please see Appendix IO_MUX of ESP32 Datasheet for IO's power domain.\n5.2 Recommended Operating Conditions\nTable 13: Recommended Operating Conditions\n<table>\n<thead>\n<tr>\n<th>Symbol</th>\n<th>Parameter</th>\n<th>Min</th>\n<th>Typical</th>\n<th>Max</th>\n<th>Unit</th>\n</tr>\n</thead>\n<tbody>\n<tr>\n<td>VDD33</td>\n<td>Power supply voltage</td>\n<td>3.0</td>\n<td>3.3</td>\n<td>3.6</td>\n<td>V</td>\n</tr>\n<tr>\n<td>I_{VDD}</td>\n<td>Current delivered by external power supply</td>\n<td>0.5</td>\n<td>-</td>\n<td>-</td>\n<td>A</td>\n</tr>\n<tr>\n<td>T</td>\n<td>Operating ambient temperature</td>\n<td>−40</td>\n<td>-</td>\n<td>85</td>\n<td>°C</td>\n</tr>\n</tbody>\n</table>\n5.3 DC Characteristics (3.3 V, 25 °C)\nTable 14: DC Characteristics (3.3 V, 25 °C)\n<table>\n<thead>\n<tr>\n<th>Symbol</th>\n<th colspan=\"2\">Parameter</th>\n<th>Min</th>\n<th>Typ</th>\n<th>Max</th>\n<th>Unit</th>\n</tr>\n</thead>\n<tbody>\n<tr>\n<td>C_{IN}</td>\n<td colspan=\"2\">Pin capacitance</td>\n<td>-</td>\n<td>2</td>\n<td>-</td>\n<td>pF</td>\n</tr>\n<tr>\n<td>V_{IH}</td>\n<td colspan=\"2\">High-level input voltage</td>\n<td>0.75×VDD^1</td>\n<td>-</td>\n<td>VDD^1+0.3</td>\n<td>V</td>\n</tr>\n<tr>\n<td>V_{IL}</td>\n<td colspan=\"2\">Low-level input voltage</td>\n<td>−0.3</td>\n<td>-</td>\n<td>0.25×VDD^1</td>\n<td>V</td>\n</tr>\n<tr>\n<td>I_{IH}</td>\n<td colspan=\"2\">High-level input current</td>\n<td>-</td>\n<td>-</td>\n<td>50</td>\n<td>nA</td>\n</tr>\n<tr>\n<td>I_{IL}</td>\n<td colspan=\"2\">Low-level input current</td>\n<td>-</td>\n<td>-</td>\n<td>50</td>\n<td>nA</td>\n</tr>\n<tr>\n<td>V_{OH}</td>\n<td colspan=\"2\">High-level output voltage</td>\n<td>0.8×VDD^1</td>\n<td>-</td>\n<td>-</td>\n<td>V</td>\n</tr>\n<tr>\n<td>V_{OL}</td>\n<td colspan=\"2\">Low-level output voltage</td>\n<td>-</td>\n<td>-</td>\n<td>0.1×VDD^1</td>\n<td>V</td>\n</tr>\n<tr>\n<td rowspan=\"3\">I_{OH}</td>\n<td rowspan=\"3\">High-level source current<br/>(VDD^1 = 3.3 V, V_{OH} >= 2.64 V,<br/>output drive strength set to<br/>the maximum)</td>\n<td>VDD3P3_CPU power domain ^1, ^2</td>\n<td>-</td>\n<td>40</td>\n<td>-</td>\n<td>mA</td>\n</tr>\n<tr>\n<td>VDD3P3_RTC power domain ^1, ^2</td>\n<td>-</td>\n<td>40</td>\n<td>-</td>\n<td>mA</td>\n</tr>\n<tr>\n<td>VDD_SDIO power domain ^1, ^3</td>\n<td>-</td>\n<td>20</td>\n<td>-</td>\n<td>mA</td>\n</tr>\n</tbody>\n</table>\nEspressif Systems\nNot Recommended For New Designs (NRND)\n26\nSubmit Documentation Feedback\nESP32-WROOM-32 Datasheet v3.6",
+    "regions": [
+      {
+        "text": "5 Electrical Characteristics",
+        "bbox": {
+          "page": 1,
+          "x": 0.09230149133413947,
+          "y": 0.02280501710376283,
+          "width": 0.21039903264812576,
+          "height": 0.013968072976054732
+        }
+      },
+      {
+        "text": "5 Electrical Characteristics",
+        "bbox": {
+          "page": 1,
+          "x": 0.09028617492946392,
+          "y": 0.07354618015963511,
+          "width": 0.3720274083031036,
+          "height": 0.021379703534777653
+        }
+      },
+      {
+        "text": "5.1 Absolute Maximum Ratings",
+        "bbox": {
+          "page": 1,
+          "x": 0.09068923821039904,
+          "y": 0.11915621436716077,
+          "width": 0.3502619911326078,
+          "height": 0.018814139110604332
+        }
+      },
+      {
+        "text": "Stresses beyond the absolute maximum ratings listed in Table 12 Absolute Maximum Ratings below may cause\npermanent damage to the device. These are stress ratings only, and do not refer to the functional operation of\nthe device that should follow the Table 13 Recommended Operating Conditions.",
+        "bbox": {
+          "page": 1,
+          "x": 0.09028617492946392,
+          "y": 0.14880273660205245,
+          "width": 0.8182184602982668,
+          "height": 0.05188141391106044
+        }
+      },
+      {
+        "text": "Table 12: Absolute Maximum Ratings",
+        "bbox": {
+          "page": 1,
+          "x": 0.36275695284159615,
+          "y": 0.21522234891676167,
+          "width": 0.2785167271261588,
+          "height": 0.015108323831242873
+        }
+      },
+      {
+        "text": "<table>\n<thead>\n<tr>\n<th>Symbol</th>\n<th>Parameter</th>\n<th>Min</th>\n<th>Max</th>\n<th>Unit</th>\n</tr>\n</thead>\n<tbody>\n<tr>\n<td>VDD33</td>\n<td>Power supply voltage</td>\n<td>-0.3</td>\n<td>3.6</td>\n<td>V</td>\n</tr>\n<tr>\n<td>I_{output}^1</td>\n<td>Cumulative IO output current</td>\n<td>-</td>\n<td>1,100</td>\n<td>mA</td>\n</tr>\n<tr>\n<td>T_{store}</td>\n<td>Storage temperature</td>\n<td>-40</td>\n<td>105</td>\n<td>°C</td>\n</tr>\n</tbody>\n</table>",
+        "bbox": {
+          "page": 1,
+          "x": 0.0951229343006852,
+          "y": 0.24201824401368302,
+          "width": 0.8186215235792019,
+          "height": 0.07696693272519954
+        }
+      },
+      {
+        "text": "1. The module worked properly after a 24-hour test in ambient temperature at 25 ^∘C, and the IOs in three domains\n(VDD3P3_RTC, VDD3P3_CPU, VDD_SDIO) output high logic level to ground. Please note that pins occupied by flash\nand/or PSRAM in the VDD_SDIO power domain were excluded from the test.",
+        "bbox": {
+          "page": 1,
+          "x": 0.11567916162837566,
+          "y": 0.3329532497149373,
+          "width": 0.7932285368802902,
+          "height": 0.039908779931584946
+        }
+      },
+      {
+        "text": "2. Please see Appendix IO_MUX of ESP32 Datasheet for IO's power domain.",
+        "bbox": {
+          "page": 1,
+          "x": 0.11043933897621927,
+          "y": 0.37628278221208666,
+          "width": 0.5163240628778718,
+          "height": 0.014823261117445839
+        }
+      },
+      {
+        "text": "5.2 Recommended Operating Conditions",
+        "bbox": {
+          "page": 1,
+          "x": 0.09028617492946392,
+          "y": 0.43500570125427596,
+          "width": 0.4651350261991133,
+          "height": 0.02023945267958951
+        }
+      },
+      {
+        "text": "Table 13: Recommended Operating Conditions",
+        "bbox": {
+          "page": 1,
+          "x": 0.3369609028617493,
+          "y": 0.4749144811858609,
+          "width": 0.3518742442563482,
+          "height": 0.015678449258836945
+        }
+      },
+      {
+        "text": "<table>\n<thead>\n<tr>\n<th>Symbol</th>\n<th>Parameter</th>\n<th>Min</th>\n<th>Typical</th>\n<th>Max</th>\n<th>Unit</th>\n</tr>\n</thead>\n<tbody>\n<tr>\n<td>VDD33</td>\n<td>Power supply voltage</td>\n<td>3.0</td>\n<td>3.3</td>\n<td>3.6</td>\n<td>V</td>\n</tr>\n<tr>\n<td>I_{VDD}</td>\n<td>Current delivered by external power supply</td>\n<td>0.5</td>\n<td>-</td>\n<td>-</td>\n<td>A</td>\n</tr>\n<tr>\n<td>T</td>\n<td>Operating ambient temperature</td>\n<td>−40</td>\n<td>-</td>\n<td>85</td>\n<td>°C</td>\n</tr>\n</tbody>\n</table>",
+        "bbox": {
+          "page": 1,
+          "x": 0.09552599758162031,
+          "y": 0.5014253135689852,
+          "width": 0.8387746876259573,
+          "height": 0.07753705815279362
+        }
+      },
+      {
+        "text": "5.3 DC Characteristics (3.3 V, 25 °C)",
+        "bbox": {
+          "page": 1,
+          "x": 0.09068923821039904,
+          "y": 0.6040478905359179,
+          "width": 0.4127367996775494,
+          "height": 0.01966932725199544
+        }
+      },
+      {
+        "text": "Table 14: DC Characteristics (3.3 V, 25 °C)",
+        "bbox": {
+          "page": 1,
+          "x": 0.3688029020556227,
+          "y": 0.6436716077537058,
+          "width": 0.31680773881499397,
+          "height": 0.01539338654503991
+        }
+      },
+      {
+        "text": "<table>\n<thead>\n<tr>\n<th>Symbol</th>\n<th colspan=\"2\">Parameter</th>\n<th>Min</th>\n<th>Typ</th>\n<th>Max</th>\n<th>Unit</th>\n</tr>\n</thead>\n<tbody>\n<tr>\n<td>C_{IN}</td>\n<td colspan=\"2\">Pin capacitance</td>\n<td>-</td>\n<td>2</td>\n<td>-</td>\n<td>pF</td>\n</tr>\n<tr>\n<td>V_{IH}</td>\n<td colspan=\"2\">High-level input voltage</td>\n<td>0.75×VDD^1</td>\n<td>-</td>\n<td>VDD^1+0.3</td>\n<td>V</td>\n</tr>\n<tr>\n<td>V_{IL}</td>\n<td colspan=\"2\">Low-level input voltage</td>\n<td>−0.3</td>\n<td>-</td>\n<td>0.25×VDD^1</td>\n<td>V</td>\n</tr>\n<tr>\n<td>I_{IH}</td>\n<td colspan=\"2\">High-level input current</td>\n<td>-</td>\n<td>-</td>\n<td>50</td>\n<td>nA</td>\n</tr>\n<tr>\n<td>I_{IL}</td>\n<td colspan=\"2\">Low-level input current</td>\n<td>-</td>\n<td>-</td>\n<td>50</td>\n<td>nA</td>\n</tr>\n<tr>\n<td>V_{OH}</td>\n<td colspan=\"2\">High-level output voltage</td>\n<td>0.8×VDD^1</td>\n<td>-</td>\n<td>-</td>\n<td>V</td>\n</tr>\n<tr>\n<td>V_{OL}</td>\n<td colspan=\"2\">Low-level output voltage</td>\n<td>-</td>\n<td>-</td>\n<td>0.1×VDD^1</td>\n<td>V</td>\n</tr>\n<tr>\n<td rowspan=\"3\">I_{OH}</td>\n<td rowspan=\"3\">High-level source current<br/>(VDD^1 = 3.3 V, V_{OH} >= 2.64 V,<br/>output drive strength set to<br/>the maximum)</td>\n<td>VDD3P3_CPU power domain ^1, ^2</td>\n<td>-</td>\n<td>40</td>\n<td>-</td>\n<td>mA</td>\n</tr>\n<tr>\n<td>VDD3P3_RTC power domain ^1, ^2</td>\n<td>-</td>\n<td>40</td>\n<td>-</td>\n<td>mA</td>\n</tr>\n<tr>\n<td>VDD_SDIO power domain ^1, ^3</td>\n<td>-</td>\n<td>20</td>\n<td>-</td>\n<td>mA</td>\n</tr>\n</tbody>\n</table>",
+        "bbox": {
+          "page": 1,
+          "x": 0.09552599758162031,
+          "y": 0.6704675028506272,
+          "width": 0.8673921805723499,
+          "height": 0.22719498289623719
+        }
+      },
+      {
+        "text": "Espressif Systems",
+        "bbox": {
+          "page": 1,
+          "x": 0.09230149133413947,
+          "y": 0.9398517673888256,
+          "width": 0.13784764207980654,
+          "height": 0.01539338654503991
+        }
+      },
+      {
+        "text": "Not Recommended For New Designs (NRND)",
+        "bbox": {
+          "page": 1,
+          "x": 0.5703345425231762,
+          "y": 0.9241733181299886,
+          "width": 0.3373639661426844,
+          "height": 0.014253135689851768
+        }
+      },
+      {
+        "text": "26",
+        "bbox": {
+          "page": 1,
+          "x": 0.48851269649334944,
+          "y": 0.9415621436716077,
+          "width": 0.022168480451430876,
+          "height": 0.011687571265678449
+        }
+      },
+      {
+        "text": "Submit Documentation Feedback",
+        "bbox": {
+          "page": 1,
+          "x": 0.38694074969770254,
+          "y": 0.9552451539338654,
+          "width": 0.2253123740427247,
+          "height": 0.01282782212086659
+        }
+      },
+      {
+        "text": "ESP32-WROOM-32 Datasheet v3.6",
+        "bbox": {
+          "page": 1,
+          "x": 0.6960902861749295,
+          "y": 0.9421322690992018,
+          "width": 0.21120515920999597,
+          "height": 0.011972633979475485
+        }
+      }
+    ]
+  },
+  {
+    "page": 2,
+    "text": "5\nElectrical Characteristics\n<table>\n<thead>\n<tr>\n<th>Symbol</th>\n<th>Parameter</th>\n<th>Min</th>\n<th>Typ</th>\n<th>Max</th>\n<th>Unit</th>\n</tr>\n</thead>\n<tbody>\n<tr>\n<td>I_{OL}</td>\n<td>Low-level sink current<br/>(VDD^1 = 3.3 V, V_{OL} = 0.495 V,<br/>output drive strength set to the maximum)</td>\n<td>-</td>\n<td>28</td>\n<td>-</td>\n<td>mA</td>\n</tr>\n<tr>\n<td>R_{PU}</td>\n<td>Resistance of internal pull-up resistor</td>\n<td>-</td>\n<td>45</td>\n<td>-</td>\n<td>k\\Omega</td>\n</tr>\n<tr>\n<td>R_{PD}</td>\n<td>Resistance of internal pull-down resistor</td>\n<td>-</td>\n<td>45</td>\n<td>-</td>\n<td>k\\Omega</td>\n</tr>\n<tr>\n<td>V_{IL_nRST}</td>\n<td>Low-level input voltage of CHIP_PU to shut down the chip</td>\n<td>-</td>\n<td>-</td>\n<td>0.6</td>\n<td>V</td>\n</tr>\n</tbody>\n</table>\nNotes:\n1. Please see Appendix IO_MUX of ESP32 Datasheet for IO's power domain. VDD is the I/O voltage for a particular\npower domain of pins.\n2. For VDD3P3_CPU and VDD3P3_RTC power domain, per-pin current sourced in the same domain is gradually\nreduced from around 40 mA to around 29 mA, V_OH>=2.64 V, as the number of current-source pins increases.\n3. Pins occupied by flash and/or PSRAM in the VDD_SDIO power domain were excluded from the test.\n5.4 Current Consumption Characteristics\nOwing to the use of advanced power-management technologies, the module can switch between different\npower modes. For details on different power modes, please refer to Section RTC and Low-Power\nManagement in ESP32 Series Datasheet.\n5.5 Memory Specifications\nThe data below is sourced from the memory vendor datasheet. These values are guaranteed through design\nand/or characterization but are not fully tested in production. Devices are shipped with the memory\nerased.\nTable 15: Flash Specifications\n<table>\n<thead>\n<tr>\n<th>Parameter</th>\n<th>Description</th>\n<th>Min</th>\n<th>Typ</th>\n<th>Max</th>\n<th>Unit</th>\n</tr>\n</thead>\n<tbody>\n<tr>\n<td rowspan=\"2\">VCC</td>\n<td>Power supply voltage (1.8 V)</td>\n<td>1.65</td>\n<td>1.80</td>\n<td>2.00</td>\n<td>V</td>\n</tr>\n<tr>\n<td>Power supply voltage (3.3 V)</td>\n<td>2.7</td>\n<td>3.3</td>\n<td>3.6</td>\n<td>V</td>\n</tr>\n<tr>\n<td>F_C</td>\n<td>Maximum clock frequency</td>\n<td>80</td>\n<td>—</td>\n<td>—</td>\n<td>MHz</td>\n</tr>\n<tr>\n<td>—</td>\n<td>Program/erase cycles</td>\n<td>100,000</td>\n<td>—</td>\n<td>—</td>\n<td>cycles</td>\n</tr>\n<tr>\n<td>T_{RET}</td>\n<td>Data retention time</td>\n<td>20</td>\n<td>—</td>\n<td>—</td>\n<td>years</td>\n</tr>\n<tr>\n<td>T_{PP}</td>\n<td>Page program time</td>\n<td>—</td>\n<td>0.8</td>\n<td>5</td>\n<td>ms</td>\n</tr>\n<tr>\n<td>T_{SE}</td>\n<td>Sector erase time (4 KB)</td>\n<td>—</td>\n<td>70</td>\n<td>500</td>\n<td>ms</td>\n</tr>\n<tr>\n<td>T_{BE1}</td>\n<td>Block erase time (32 KB)</td>\n<td>—</td>\n<td>0.2</td>\n<td>2</td>\n<td>s</td>\n</tr>\n<tr>\n<td>T_{BE2}</td>\n<td>Block erase time (64 KB)</td>\n<td>—</td>\n<td>0.3</td>\n<td>3</td>\n<td>s</td>\n</tr>\n<tr>\n<td rowspan=\"5\">T_{CE}</td>\n<td>Chip erase time (16 Mb)</td>\n<td>—</td>\n<td>7</td>\n<td>20</td>\n<td>s</td>\n</tr>\n<tr>\n<td>Chip erase time (32 Mb)</td>\n<td>—</td>\n<td>20</td>\n<td>60</td>\n<td>s</td>\n</tr>\n<tr>\n<td>Chip erase time (64 Mb)</td>\n<td>—</td>\n<td>25</td>\n<td>100</td>\n<td>s</td>\n</tr>\n<tr>\n<td>Chip erase time (128 Mb)</td>\n<td>—</td>\n<td>60</td>\n<td>200</td>\n<td>s</td>\n</tr>\n<tr>\n<td>Chip erase time (256 Mb)</td>\n<td>—</td>\n<td>70</td>\n<td>300</td>\n<td>s</td>\n</tr>\n</tbody>\n</table>\nEspressif Systems\nNot Recommended For New Designs (NRND)\n27\nSubmit Documentation Feedback\nESP32-WROOM-32 Datasheet v3.6",
+    "regions": [
+      {
+        "text": "5",
+        "bbox": {
+          "page": 2,
+          "x": 0.09310761789600967,
+          "y": 0.024230330672748004,
+          "width": 0.014107214832728738,
+          "height": 0.011402508551881414
+        }
+      },
+      {
+        "text": "Electrical Characteristics",
+        "bbox": {
+          "page": 2,
+          "x": 0.1185006045949214,
+          "y": 0.022519954389965794,
+          "width": 0.1833937928254736,
+          "height": 0.014253135689851768
+        }
+      },
+      {
+        "text": "<table>\n<thead>\n<tr>\n<th>Symbol</th>\n<th>Parameter</th>\n<th>Min</th>\n<th>Typ</th>\n<th>Max</th>\n<th>Unit</th>\n</tr>\n</thead>\n<tbody>\n<tr>\n<td>I_{OL}</td>\n<td>Low-level sink current<br/>(VDD^1 = 3.3 V, V_{OL} = 0.495 V,<br/>output drive strength set to the maximum)</td>\n<td>-</td>\n<td>28</td>\n<td>-</td>\n<td>mA</td>\n</tr>\n<tr>\n<td>R_{PU}</td>\n<td>Resistance of internal pull-up resistor</td>\n<td>-</td>\n<td>45</td>\n<td>-</td>\n<td>k\\Omega</td>\n</tr>\n<tr>\n<td>R_{PD}</td>\n<td>Resistance of internal pull-down resistor</td>\n<td>-</td>\n<td>45</td>\n<td>-</td>\n<td>k\\Omega</td>\n</tr>\n<tr>\n<td>V_{IL_nRST}</td>\n<td>Low-level input voltage of CHIP_PU to shut down the chip</td>\n<td>-</td>\n<td>-</td>\n<td>0.6</td>\n<td>V</td>\n</tr>\n</tbody>\n</table>",
+        "bbox": {
+          "page": 2,
+          "x": 0.09552599758162031,
+          "y": 0.06698973774230331,
+          "width": 0.8686013704151552,
+          "height": 0.13169897377423034
+        }
+      },
+      {
+        "text": "Notes:",
+        "bbox": {
+          "page": 2,
+          "x": 0.09270455461507457,
+          "y": 0.21180159635119727,
+          "width": 0.049576783555018135,
+          "height": 0.01282782212086659
+        }
+      },
+      {
+        "text": "1. Please see Appendix IO_MUX of ESP32 Datasheet for IO's power domain. VDD is the I/O voltage for a particular\npower domain of pins.",
+        "bbox": {
+          "page": 2,
+          "x": 0.11446997178557033,
+          "y": 0.23660205245153934,
+          "width": 0.7601773478436115,
+          "height": 0.027366020524515394
+        }
+      },
+      {
+        "text": "2. For VDD3P3_CPU and VDD3P3_RTC power domain, per-pin current sourced in the same domain is gradually\nreduced from around 40 mA to around 29 mA, V_OH>=2.64 V, as the number of current-source pins increases.",
+        "bbox": {
+          "page": 2,
+          "x": 0.11084240225715437,
+          "y": 0.2671037628278221,
+          "width": 0.751309955663039,
+          "height": 0.026795895096921322
+        }
+      },
+      {
+        "text": "3. Pins occupied by flash and/or PSRAM in the VDD_SDIO power domain were excluded from the test.",
+        "bbox": {
+          "page": 2,
+          "x": 0.11124546553808948,
+          "y": 0.2976054732041049,
+          "width": 0.686819830713422,
+          "height": 0.014823261117445839
+        }
+      },
+      {
+        "text": "5.4 Current Consumption Characteristics",
+        "bbox": {
+          "page": 2,
+          "x": 0.09028617492946392,
+          "y": 0.3566134549600912,
+          "width": 0.46392583635630796,
+          "height": 0.018814139110604332
+        }
+      },
+      {
+        "text": "Owing to the use of advanced power-management technologies, the module can switch between different\npower modes. For details on different power modes, please refer to Section RTC and Low-Power\nManagement in ESP32 Series Datasheet.",
+        "bbox": {
+          "page": 2,
+          "x": 0.09068923821039904,
+          "y": 0.3865450399087799,
+          "width": 0.7944377267230955,
+          "height": 0.05330672748004561
+        }
+      },
+      {
+        "text": "5.5 Memory Specifications",
+        "bbox": {
+          "page": 2,
+          "x": 0.09068923821039904,
+          "y": 0.4637970353477765,
+          "width": 0.31519548569125355,
+          "height": 0.01909920182440137
+        }
+      },
+      {
+        "text": "The data below is sourced from the memory vendor datasheet. These values are guaranteed through design\nand/or characterization but are not fully tested in production. Devices are shipped with the memory\nerased.",
+        "bbox": {
+          "page": 2,
+          "x": 0.09068923821039904,
+          "y": 0.49315849486887114,
+          "width": 0.8077388149939541,
+          "height": 0.053021664766248575
+        }
+      },
+      {
+        "text": "Table 15: Flash Specifications",
+        "bbox": {
+          "page": 2,
+          "x": 0.3873438129786376,
+          "y": 0.5578677309007982,
+          "width": 0.2257154373236598,
+          "height": 0.014538198403648802
+        }
+      },
+      {
+        "text": "<table>\n<thead>\n<tr>\n<th>Parameter</th>\n<th>Description</th>\n<th>Min</th>\n<th>Typ</th>\n<th>Max</th>\n<th>Unit</th>\n</tr>\n</thead>\n<tbody>\n<tr>\n<td rowspan=\"2\">VCC</td>\n<td>Power supply voltage (1.8 V)</td>\n<td>1.65</td>\n<td>1.80</td>\n<td>2.00</td>\n<td>V</td>\n</tr>\n<tr>\n<td>Power supply voltage (3.3 V)</td>\n<td>2.7</td>\n<td>3.3</td>\n<td>3.6</td>\n<td>V</td>\n</tr>\n<tr>\n<td>F_C</td>\n<td>Maximum clock frequency</td>\n<td>80</td>\n<td>—</td>\n<td>—</td>\n<td>MHz</td>\n</tr>\n<tr>\n<td>—</td>\n<td>Program/erase cycles</td>\n<td>100,000</td>\n<td>—</td>\n<td>—</td>\n<td>cycles</td>\n</tr>\n<tr>\n<td>T_{RET}</td>\n<td>Data retention time</td>\n<td>20</td>\n<td>—</td>\n<td>—</td>\n<td>years</td>\n</tr>\n<tr>\n<td>T_{PP}</td>\n<td>Page program time</td>\n<td>—</td>\n<td>0.8</td>\n<td>5</td>\n<td>ms</td>\n</tr>\n<tr>\n<td>T_{SE}</td>\n<td>Sector erase time (4 KB)</td>\n<td>—</td>\n<td>70</td>\n<td>500</td>\n<td>ms</td>\n</tr>\n<tr>\n<td>T_{BE1}</td>\n<td>Block erase time (32 KB)</td>\n<td>—</td>\n<td>0.2</td>\n<td>2</td>\n<td>s</td>\n</tr>\n<tr>\n<td>T_{BE2}</td>\n<td>Block erase time (64 KB)</td>\n<td>—</td>\n<td>0.3</td>\n<td>3</td>\n<td>s</td>\n</tr>\n<tr>\n<td rowspan=\"5\">T_{CE}</td>\n<td>Chip erase time (16 Mb)</td>\n<td>—</td>\n<td>7</td>\n<td>20</td>\n<td>s</td>\n</tr>\n<tr>\n<td>Chip erase time (32 Mb)</td>\n<td>—</td>\n<td>20</td>\n<td>60</td>\n<td>s</td>\n</tr>\n<tr>\n<td>Chip erase time (64 Mb)</td>\n<td>—</td>\n<td>25</td>\n<td>100</td>\n<td>s</td>\n</tr>\n<tr>\n<td>Chip erase time (128 Mb)</td>\n<td>—</td>\n<td>60</td>\n<td>200</td>\n<td>s</td>\n</tr>\n<tr>\n<td>Chip erase time (256 Mb)</td>\n<td>—</td>\n<td>70</td>\n<td>300</td>\n<td>s</td>\n</tr>\n</tbody>\n</table>",
+        "bbox": {
+          "page": 2,
+          "x": 0.2063683998387747,
+          "y": 0.5826681870011402,
+          "width": 0.5876662636033857,
+          "height": 0.2853477765108324
+        }
+      },
+      {
+        "text": "Espressif Systems",
+        "bbox": {
+          "page": 2,
+          "x": 0.09310761789600967,
+          "y": 0.9401368301026226,
+          "width": 0.13663845223700122,
+          "height": 0.014823261117445839
+        }
+      },
+      {
+        "text": "Not Recommended For New Designs (NRND)",
+        "bbox": {
+          "page": 2,
+          "x": 0.5707376058041113,
+          "y": 0.9244583808437856,
+          "width": 0.3365578395808142,
+          "height": 0.013683010262257697
+        }
+      },
+      {
+        "text": "27",
+        "bbox": {
+          "page": 2,
+          "x": 0.48972188633615477,
+          "y": 0.9412770809578107,
+          "width": 0.019750100765820233,
+          "height": 0.011687571265678449
+        }
+      },
+      {
+        "text": "Submit Documentation Feedback",
+        "bbox": {
+          "page": 2,
+          "x": 0.3873438129786376,
+          "y": 0.9552451539338654,
+          "width": 0.2245062474808545,
+          "height": 0.01282782212086659
+        }
+      },
+      {
+        "text": "ESP32-WROOM-32 Datasheet v3.6",
+        "bbox": {
+          "page": 2,
+          "x": 0.6964933494558646,
+          "y": 0.9421322690992018,
+          "width": 0.21080209592906085,
+          "height": 0.011687571265678449
+        }
+      }
+    ]
+  }
+]

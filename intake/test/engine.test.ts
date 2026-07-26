@@ -16,6 +16,13 @@ const railChange: ChangeDescriptor = {
 };
 
 describe("budget refusal (AC-6.1)", () => {
+  it("sums magnitudes: a signed input current (IIL = -0.4 mA) still busts the budget", () => {
+    const iil = trustedFact({ value: -400 });
+    const { verdict } = evaluate(pullUpChange, [iil], [sleepBudget()]);
+    expect(verdict.decision).toBe("REFUSE");
+    expect(verdict.computed).toMatchObject({ result: 400, limit: 25, unit: "uA" });
+  });
+
   it("refuses 33uA against a 25uA budget_sum, citing both lines", () => {
     const { verdict } = evaluate(pullUpChange, [trustedFact()], [sleepBudget()]);
     expect(verdict.decision).toBe("REFUSE");

@@ -81,10 +81,13 @@ function evaluateCheck(change: string, check: Check): Verdict | undefined {
     case "budget_sum": {
       // The change's draw against a summed budget. The magnitude is the
       // explicit contribution when given, otherwise the fact value itself
-      // (e.g. the datasheet leakage figure is the added draw).
+      // (e.g. the datasheet leakage figure is the added draw). Datasheets
+      // print current direction as sign (IIL = -0.4 mA); a budget sums
+      // magnitudes, so the draw is the absolute value.
       const raw = contribution.value ?? factValue;
-      const draw = toConstraintUnit(raw, contribution.value !== undefined ? contribution.unit : constraint.unit, constraint);
-      if (draw === undefined) return hold(change, `Cannot decide: contribution unit "${contribution.unit}" is not comparable to ${constraint.unit}.`, fact);
+      const converted = toConstraintUnit(raw, contribution.value !== undefined ? contribution.unit : constraint.unit, constraint);
+      if (converted === undefined) return hold(change, `Cannot decide: contribution unit "${contribution.unit}" is not comparable to ${constraint.unit}.`, fact);
+      const draw = Math.abs(converted);
       if (draw > constraint.limit) {
         return {
           change,
