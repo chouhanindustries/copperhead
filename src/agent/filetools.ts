@@ -135,17 +135,20 @@ export async function toolSearch(
       // and hide that this is a link at all.
       const link = await lstat(abs).catch(() => null);
       if (link === null) continue; // vanished mid-walk
-      if (link.isSymbolicLink() && (await insideRoot(abs)) === null) continue; // escapes the repo
+      // Resolved once and reused below: containment and loop detection are the
+      // same question about the same entry, and realpath is a syscall.
+      const real = link.isSymbolicLink() ? await insideRoot(abs) : null;
+      if (link.isSymbolicLink() && real === null) continue; // escapes the repo
 
       const st = await stat(abs).catch(() => null);
       if (st === null) continue; // broken link or race
       if (st.isDirectory()) {
-        const real = await insideRoot(abs);
-        if (real === null) continue;
-        if (ancestors.has(real)) continue; // on the current path already: a loop
-        ancestors.add(real);
+        const realDir = real ?? (await insideRoot(abs));
+        if (realDir === null) continue;
+        if (ancestors.has(realDir)) continue; // on the current path already: a loop
+        ancestors.add(realDir);
         await walk(abs);
-        ancestors.delete(real);
+        ancestors.delete(realDir);
       } else if (st.size < 5_000_000 && (!globRe || globRe.test(rel))) {
         let text: string;
         try {

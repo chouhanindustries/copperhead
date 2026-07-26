@@ -216,6 +216,17 @@ describe('file tools', () => {
     ]);
   });
 
+  it('search steps over a dangling symlink instead of failing the walk', async () => {
+    const repo = await mkdtemp(path.join(tmpdir(), 'ch-search-dangle-'));
+    await writeFile(path.join(repo, 'a.txt'), 'needle A\n', 'utf8');
+    await symlink(path.join(repo, 'gone'), path.join(repo, 'dangle'));
+
+    // A broken link is an ordinary thing to find in a checkout. The arm that
+    // actually saves the walk is realpath's in insideRoot: it fails first and
+    // drops the entry, so stat is never reached with a dangling target.
+    expect((await toolSearch(repo, 'needle')).map((m) => m.file)).toEqual(['a.txt']);
+  });
+
   it('isKicadFile covers the design formats', () => {
     expect(isKicadFile('a/b.kicad_sch')).toBe(true);
     expect(isKicadFile('a/b.kicad_pcb')).toBe(true);
