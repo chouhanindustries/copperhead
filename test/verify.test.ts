@@ -41,15 +41,19 @@ describe('Part verification (verify-parts-networked)', () => {
     expect(r2.status).toBe('NO STOCK');
     expect(r2.item?.lcscCode).toBe('C67890');
 
-    // 3. NOT FOUND case
+    // 3. NOT FOUND case with candidates
     fetchSpy.mockResolvedValueOnce({
       ok: true,
       json: async () => ({
-        components: []
+        components: [
+          { lcsc: 111, mfr: 'ESP32-S3-WROOM-1-N16R8', package: 'SMD', stock: 100, price: 2.5 }
+        ]
       })
     } as Response);
     const r3 = await verifyMpn('ESP32-S3-WROOM-1');
     expect(r3.status).toBe('NOT FOUND');
+    expect(r3.candidates).toHaveLength(1);
+    expect(r3.candidates?.[0]?.mfr).toBe('ESP32-S3-WROOM-1-N16R8');
   });
 
   it('verifyMpn handles fetch rejection (network failure)', async () => {
@@ -111,7 +115,7 @@ describe('Part verification (verify-parts-networked)', () => {
 `, 'utf8');
 
       // Mock 503 response from catalog
-      fetchSpy.mockResolvedValueOnce({
+      fetchSpy.mockResolvedValue({
         ok: false,
         statusText: 'Service Unavailable',
       } as Response);
@@ -173,6 +177,34 @@ describe('Part verification (verify-parts-networked)', () => {
 
       const res = await runVerifyParts({ repoRoot: repo, strict: true });
       expect(res.ok).toBe(false); // fails strict check since stock is 0
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it('runVerifyParts retries catalog lookup once and succeeds on second attempt', async () => {
+    const { repo, cleanup } = await tempFixtureRepo();
+    try {
+      const bomPath = path.join(repo, 'docs', 'BOM.md');
+      await mkdir(path.dirname(bomPath), { recursive: true });
+      await writeFile(bomPath, `# BOM
+| Refdes | Value | Footprint | MPN | Manufacturer | LCSC |
+|---|---|---|---|---|---|
+| R1 | 10k | R_0603 | RC0603FR-0710KL | Yageo | |
+`, 'utf8');
+
+      // First fetch fails, second fetch succeeds
+      fetchSpy.mockRejectedValueOnce(new Error('Network offline'));
+      fetchSpy.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          components: [{ lcsc: 25804, mfr: 'RC0603FR-0710KL', package: '0603', stock: 500, price: 0.01 }]
+        })
+      } as Response);
+
+      const res = await runVerifyParts({ repoRoot: repo });
+      expect(res.ok).toBe(true);
+      expect(res.results[0]).toMatchObject({ refdes: 'R1', status: 'RESOLVED', lcscCode: 'C25804' });
     } finally {
       await cleanup();
     }

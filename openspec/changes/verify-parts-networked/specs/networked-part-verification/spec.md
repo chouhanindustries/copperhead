@@ -3,7 +3,7 @@
 ## ADDED Requirements
 
 ### Requirement: Networked part verification
-`copperhead verify-parts` SHALL read `docs/BOM.md` and query the JLC/LCSC catalog API (`https://jlcsearch.tscircuit.com/api/search`) to verify that each orderable MPN exists and is in stock.
+`copperhead verify-parts` SHALL read `docs/BOM.md` and query the JLC/LCSC catalog API (`https://jlcsearch.tscircuit.com/api/search`) to verify that each orderable MPN exists and report its stock status.
 
 #### Scenario: Verification report
 - **WHEN** `verify-parts` runs on a BOM with a mixture of resolved, out-of-stock, and missing parts

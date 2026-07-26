@@ -110,23 +110,33 @@ export async function runVerifyParts(opts: VerifyPartsOptions): Promise<VerifyPa
   const rows = parseBom(bomContent);
 
   const uniqueMpns = [...new Set(rows.filter(r => r.hasMpn).map(r => r.mpn.trim()))];
-  const mpnResolutions = new Map<string, { status: MpnStatus; lcscCode?: string }>();
+  const mpnResolutions = new Map<string, { status: MpnStatus; lcscCode?: string; candidates?: import('../kicad/catalog.js').CatalogItem[] }>();
 
   // Fetch resolutions in parallel batches of 5 to limit concurrency
   await batchParallel(uniqueMpns, 5, async (mpn) => {
-    try {
-      const res = await verifyMpn(mpn);
-      mpnResolutions.set(mpn.toLowerCase(), {
-        status: res.status,
-        lcscCode: res.item?.lcscCode,
-      });
-    } catch (err) {
-      // Degrade connection errors to LOOKUP FAILED / failed state for strict mode,
-      // but surface that this was a lookup failure, not a genuine catalog miss.
-      console.warn(err instanceof Error ? err.message : String(err));
-      mpnResolutions.set(mpn.toLowerCase(), {
-        status: 'LOOKUP FAILED',
-      });
+    let attempts = 0;
+    while (attempts < 2) {
+      try {
+        const res = await verifyMpn(mpn);
+        mpnResolutions.set(mpn.toLowerCase(), {
+          status: res.status,
+          lcscCode: res.item?.lcscCode,
+          candidates: res.candidates,
+        });
+        return;
+      } catch (err) {
+        attempts++;
+        if (attempts < 2) {
+          await new Promise((resolve) => setTimeout(resolve, 500));
+          continue;
+        }
+        // Degrade connection errors to LOOKUP FAILED / failed state for strict mode,
+        // but surface that this was a lookup failure, not a genuine catalog miss.
+        console.warn(err instanceof Error ? err.message : String(err));
+        mpnResolutions.set(mpn.toLowerCase(), {
+          status: 'LOOKUP FAILED',
+        });
+      }
     }
   });
 
@@ -146,6 +156,7 @@ export async function runVerifyParts(opts: VerifyPartsOptions): Promise<VerifyPa
       mpn: cleanMpn,
       status: resolution?.status ?? 'NOT FOUND',
       lcscCode: resolution?.lcscCode || row.lcsc || undefined,
+      candidates: resolution?.candidates,
     };
   });
 
@@ -171,6 +182,10 @@ export async function runVerifyParts(opts: VerifyPartsOptions): Promise<VerifyPa
         r.status.padEnd(15) +
         (r.lcscCode || '-')
       );
+      if (r.status === 'NOT FOUND' && r.candidates && r.candidates.length > 0) {
+        const suggestions = r.candidates.slice(0, 3).map(c => c.mfr).join(', ');
+        log(`  └─ Hint (near matches in catalog): ${suggestions}`);
+      }
     }
     log('');
   }

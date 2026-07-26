@@ -21,6 +21,7 @@ export interface VerificationResult {
   mpn: string;
   status: MpnStatus;
   lcscCode?: string;
+  candidates?: CatalogItem[];
 }
 
 /**
@@ -52,7 +53,7 @@ export async function queryPartCatalog(mpn: string): Promise<CatalogItem[]> {
 /**
  * Verifies if the exact MPN exists and is in stock.
  */
-export async function verifyMpn(mpn: string): Promise<{ status: MpnStatus; item?: CatalogItem }> {
+export async function verifyMpn(mpn: string): Promise<{ status: MpnStatus; item?: CatalogItem; candidates?: CatalogItem[] }> {
   const trimmedMpn = mpn.trim();
   if (trimmedMpn.length === 0) {
     return { status: 'NOT FOUND' };
@@ -61,7 +62,7 @@ export async function verifyMpn(mpn: string): Promise<{ status: MpnStatus; item?
   const target = trimmedMpn.toLowerCase();
   const matched = items.find((item) => item.mfr.trim().toLowerCase() === target);
   if (!matched) {
-    return { status: 'NOT FOUND' };
+    return { status: 'NOT FOUND', candidates: items.length > 0 ? items : undefined };
   }
   if (matched.stock <= 0) {
     return { status: 'NO STOCK', item: matched };
