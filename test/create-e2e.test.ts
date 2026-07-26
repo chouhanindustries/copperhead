@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { existsSync, readFileSync } from 'node:fs';
-import { mkdtemp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { cp, mkdtemp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { execa } from 'execa';
@@ -326,6 +326,132 @@ async function stageSummaries(repo: string): Promise<string[]> {
     .sort();
 }
 
+function normalizeCapturedSummary(summary: string): string {
+  return summary
+    .replace(
+      /^(- \*\*Run:\*\* .*?) · [^\n]+$/m,
+      '$1 · deterministic replay',
+    )
+    .replace(
+      /^(- \*\*Brief:\*\*) .*\/brief\.md (\(sha256 .*)$/m,
+      '$1 project/brief.md $2',
+    )
+    .replace(
+      /^(- \*\*copperhead:\*\* v\S+) at .*$/m,
+      '$1 at repository checkout',
+    );
+}
+
+async function captureReplayArtifacts(repo: string): Promise<void> {
+  const requested = process.env.COPPERHEAD_E2E_ARTIFACT_DIR;
+  if (!requested) return;
+
+  const destination = path.resolve(requested);
+  const existing = await readdir(destination).catch((error: NodeJS.ErrnoException) => {
+    if (error.code === 'ENOENT') return [];
+    throw error;
+  });
+  if (existing.length > 0) {
+    throw new Error(`artifact destination must be empty: ${destination}`);
+  }
+
+  const project = path.join(destination, 'project');
+  await mkdir(path.join(project, '.copperhead'), { recursive: true });
+  await Promise.all([
+    cp(
+      path.join(repo, '.copperhead', 'config.json'),
+      path.join(project, '.copperhead', 'config.json'),
+    ),
+    cp(path.join(repo, 'brief.md'), path.join(project, 'brief.md')),
+    cp(path.join(repo, 'docs'), path.join(project, 'docs'), { recursive: true }),
+    cp(path.join(repo, 'firmware'), path.join(project, 'firmware'), { recursive: true }),
+    cp(path.join(repo, 'outputs'), path.join(project, 'outputs'), { recursive: true }),
+    ...['replay-board.kicad_pcb', 'replay-board.kicad_pro', 'replay-board.kicad_sch'].map(
+      (file) => cp(path.join(repo, file), path.join(project, file)),
+    ),
+  ]);
+
+  const summaries = (await stageSummaries(repo)).slice(-STAGES.length);
+  if (summaries.length !== STAGES.length) {
+    throw new Error(`expected ${STAGES.length} replay summaries, found ${summaries.length}`);
+  }
+
+  const runSummaries = path.join(destination, 'run-summaries');
+  await mkdir(runSummaries, { recursive: true });
+  await Promise.all(
+    summaries.map(async (summary, index) =>
+      writeFile(
+        path.join(
+          runSummaries,
+          `${String(index + 1).padStart(2, '0')}-${STAGES[index]!.name}.md`,
+        ),
+        normalizeCapturedSummary(await readFile(summary, 'utf8')),
+        'utf8',
+      ),
+    ),
+  );
+
+  const runs = path.join(repo, '.copperhead', 'runs');
+  await cp(path.join(runs, 'REPORT.md'), path.join(destination, 'REPORT.md'));
+  await cp(path.join(runs, 'report.json'), path.join(destination, 'report.json'));
+  await cp(
+    path.join(path.dirname(summaries[5]!), 'artifacts'),
+    path.join(destination, 'run-artifacts'),
+    { recursive: true },
+  );
+
+  const gitLog = (
+    await execa('git', ['log', '--reverse', '--format=%H  %s'], { cwd: repo })
+  ).stdout;
+  const gitStatus = (await execa('git', ['status', '--short'], { cwd: repo })).stdout;
+  await writeFile(path.join(destination, 'git-log.txt'), `${gitLog}\n`, 'utf8');
+  await writeFile(
+    path.join(destination, 'git-status.txt'),
+    gitStatus ? `${gitStatus}\n` : 'clean\n',
+    'utf8',
+  );
+  await writeFile(
+    path.join(destination, '.gitattributes'),
+    'project/outputs/** -whitespace\nrun-artifacts/** -whitespace\n',
+    'utf8',
+  );
+  await writeFile(
+    path.join(destination, 'README.md'),
+    `# Deterministic eight-stage replay artifacts
+
+This bundle is captured from the cache-only replay in
+\`test/create-e2e.test.ts\`. The production \`runCreate\` path executes all
+eight stages with KiCad verification. A deliberately unavailable fallback
+proves all 16 recorded responses came from the warmed on-disk cache.
+
+This bundle is evidence for the deterministic replay. It is not presented as
+the separate medium-complexity live run, which remains incomplete and is
+documented as such in the pull request.
+
+## Contents
+
+- \`project/\`: generated brief, KiCad project, design documents, firmware,
+  and fabrication outputs.
+- \`run-artifacts/\`: rendered board and schematic SVGs from the outputs stage.
+- \`run-summaries/\`: one \`summary.md\` from each cache-only replay stage.
+- \`REPORT.md\` and \`report.json\`: aggregate run reports.
+- \`git-log.txt\`: the seed plus eight independently committed stages.
+- \`git-status.txt\`: final working-tree state.
+
+## Reproduce
+
+\`\`\`bash
+COPPERHEAD_E2E_ARTIFACT_DIR=pipeline-run-artifacts/deterministic-8-stage-replay \\
+  npm test -- --run test/create-e2e.test.ts
+\`\`\`
+
+The destination must be empty, and \`kicad-cli\` must be available on
+\`PATH\`.
+`,
+    'utf8',
+  );
+}
+
 function options(
   repo: string,
   briefPath: string,
@@ -407,6 +533,8 @@ describe('create pipeline deterministic end-to-end replay', () => {
     expect(replayLines.filter((line) => line.includes('llm-cache: replayed'))).toHaveLength(16);
     expect(await stageSummaries(repo)).toHaveLength(16);
     expect(replayLines.join('\n')).toContain('create pipeline complete; all checks green');
+
+    await captureReplayArtifacts(repo);
 
     if (process.env.COPPERHEAD_E2E_EVIDENCE === '1') {
       const report = await readFile(path.join(repo, '.copperhead', 'runs', 'REPORT.md'), 'utf8');

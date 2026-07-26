@@ -1,0 +1,104 @@
+{
+  "generatedAtMs": 1785095453937,
+  "stageCount": 8,
+  "ran": 8,
+  "resumed": 0,
+  "stages": [
+    {
+      "name": "spec-seed",
+      "resumed": false,
+      "wallMs": 461,
+      "turns": 2,
+      "tokensIn": 0,
+      "tokensOut": 0,
+      "cacheHits": 2,
+      "cacheHitPct": 100
+    },
+    {
+      "name": "architecture",
+      "resumed": false,
+      "wallMs": 409,
+      "turns": 2,
+      "tokensIn": 0,
+      "tokensOut": 0,
+      "cacheHits": 2,
+      "cacheHitPct": 100
+    },
+    {
+      "name": "part-selection",
+      "resumed": false,
+      "wallMs": 390,
+      "turns": 2,
+      "tokensIn": 0,
+      "tokensOut": 0,
+      "cacheHits": 2,
+      "cacheHitPct": 100
+    },
+    {
+      "name": "schematic",
+      "resumed": false,
+      "wallMs": 1598,
+      "turns": 2,
+      "tokensIn": 0,
+      "tokensOut": 0,
+      "cacheHits": 2,
+      "cacheHitPct": 100
+    },
+    {
+      "name": "layout-draft",
+      "resumed": false,
+      "wallMs": 1604,
+      "turns": 2,
+      "tokensIn": 0,
+      "tokensOut": 0,
+      "cacheHits": 2,
+      "cacheHitPct": 100
+    },
+    {
+      "name": "outputs",
+      "resumed": false,
+      "wallMs": 4413,
+      "turns": 2,
+      "tokensIn": 0,
+      "tokensOut": 0,
+      "cacheHits": 2,
+      "cacheHitPct": 100
+    },
+    {
+      "name": "firmware",
+      "resumed": false,
+      "wallMs": 545,
+      "turns": 2,
+      "tokensIn": 0,
+      "tokensOut": 0,
+      "cacheHits": 2,
+      "cacheHitPct": 100
+    },
+    {
+      "name": "devplan",
+      "resumed": false,
+      "wallMs": 511,
+      "turns": 2,
+      "tokensIn": 0,
+      "tokensOut": 0,
+      "cacheHits": 2,
+      "cacheHitPct": 100
+    }
+  ],
+  "total": {
+    "wallMs": 9931,
+    "turns": 16,
+    "tokensIn": 0,
+    "tokensOut": 0,
+    "cacheHits": 16,
+    "cacheHitPct": 100
+  },
+  "slowestStage": {
+    "name": "outputs",
+    "wallMs": 4413
+  },
+  "mostExpensiveStage": {
+    "name": "spec-seed",
+    "tokensOut": 0
+  }
+}

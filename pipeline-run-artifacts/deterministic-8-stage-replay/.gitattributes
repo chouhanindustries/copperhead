@@ -1,0 +1,2 @@
+project/outputs/** -whitespace
+run-artifacts/** -whitespace

@@ -1,0 +1,9 @@
+86f5474ec980a0d710fe9921c140a5553664c6f3  replay seed
+494cac12d1cf516abb72316c8ce3ac48cb6f3d81  copperhead: create pipeline stage: spec-seed
+4336ba1cb5217a9d828e83a2893ac2a9604dc508  copperhead: create pipeline stage: architecture
+4606619fb4fc7ca5ce488b991fb489c113f7fe33  copperhead: create pipeline stage: part-selection
+77a33f12b3482609222887ff9825b30a2bc5d65b  copperhead: create pipeline stage: schematic
+f24e37717d500ef5163fc9ec3e787cc93e3d02ba  copperhead: create pipeline stage: layout-draft
+6f643ea11b2e6b38b3cffaf7b5b4509e0d35f52a  copperhead: create pipeline stage: outputs
+547277ec4245c3f606b042a76110f6e235c84616  copperhead: create pipeline stage: firmware
+641c63e11bd6654a88d582deb5c586cc7e201b18  copperhead: create pipeline stage: devplan
