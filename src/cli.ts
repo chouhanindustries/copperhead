@@ -271,6 +271,27 @@ exportCmd
     }
   });
 
+program
+  .command('explain')
+  .description('explain a refdes, net, or pin from docs + schematic context (deterministic; no LLM)')
+  .argument('<target>', 'refdes (e.g. U1), net (e.g. GND), or pin (e.g. U1.1)')
+  .action(async (target: string) => {
+    const repo = repoOf(program.opts());
+    const json = Boolean(program.opts().json);
+    try {
+      const res = await runExplain(repo, target);
+      if (json) {
+        console.log(JSON.stringify(res, null, 2));
+      } else {
+        console.log(formatExplainReport(res));
+      }
+      process.exit(0);
+    } catch (err) {
+      console.error(err instanceof ExplainError ? err.message : (err as Error).message);
+      process.exit(1);
+    }
+  });
+
 program.parseAsync().catch((err: Error) => {
   console.error(err.message);
   process.exit(1);
