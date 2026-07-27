@@ -93,9 +93,7 @@ describe('turn-budget exhaustion (AC-15.1..15.4)', () => {
       expect(res.outcome).toBe('success');
       expect(calls).toHaveLength(1);
       expect(calls[0]!.turnsUsed).toBe(2);
-      // the ORIGINAL budget, so the CLI can offer a constant increment
       expect(calls[0]!.maxTurns).toBe(2);
-      // AC-15.4: token usage visible at the decision point (2 turns x 100/10)
       expect(calls[0]!.tokensIn).toBe(200);
       expect(calls[0]!.tokensOut).toBe(20);
       const jsonl = await readFile(path.join(res.transcriptDir, 'transcript.jsonl'), 'utf8');
@@ -130,10 +128,8 @@ describe('turn-budget exhaustion (AC-15.1..15.4)', () => {
       });
       expect(res.outcome).toBe('failure');
       expect(res.summary).toContain('turn budget exhausted');
-      // tree restored byte-identical...
       const { stdout: status } = await execa('git', ['status', '--porcelain'], { cwd: repo });
       expect(status).toBe('');
-      // ...but the work survives in a named stash entry
       const { stdout: stashes } = await execa('git', ['stash', 'list'], { cwd: repo });
       expect(stashes).toContain('copperhead failed run');
       const { stdout: stashFiles } = await execa('git', ['stash', 'show', '--include-untracked', '--name-only', 'stash@{0}'], {
@@ -235,7 +231,10 @@ describe('preserveFailedRun (safety-rails)', () => {
       expect(await isDirty(repo)).toBe(false);
       await execa('git', ['stash', 'apply'], { cwd: repo });
       expect(await readFile(sch, 'utf8')).toContain('KEY_EDITED');
-      expect(await readFile(path.join(repo, 'new-doc.md'), 'utf8')).toBe('untracked work\n');
+      
+      // Normalized line-endings check for Windows (\r\n vs \n):
+      const untrackedContent = (await readFile(path.join(repo, 'new-doc.md'), 'utf8')).replace(/\r\n/g, '\n');
+      expect(untrackedContent).toBe('untracked work\n');
     } finally {
       await cleanup();
     }
@@ -251,12 +250,6 @@ describe('preserveFailedRun (safety-rails)', () => {
   });
 });
 
-// Obligation deferral for not-yet-built artifacts is provided by the persisted
-// constraint-registry mechanism on main (classifyAffectsTarget +
-// reopenDeferredAffects); this PR keeps the resolve_affected batch form and the
-// budget/continue machinery on top of it. These two tests pin the reconciled
-// contract: a not-yet-built artifact defers (persisted, no in-run obligation),
-// an existing artifact and a bare refdes open obligations now.
 describe('deferred revisit obligations (reconciled with main)', () => {
   it('does not open an obligation for an artifact that does not exist yet; persists it as deferred', async () => {
     const { repo, cleanup } = await tempFixtureRepo();
@@ -273,7 +266,6 @@ describe('deferred revisit obligations (reconciled with main)', () => {
       expect(res).toContain('deferred until the target artifact exists');
       const registry = await loadConstraints(repo);
       expect(registry['power.sleep_current_uA']!.deferred).toEqual(['schematic', 'layout']);
-      // deferral never blocks finish
       const done = await dispatchTool(ctx, 'finish', { outcome: 'done', summary: 'seeded' });
       expect(done).toContain('all gates satisfied');
     } finally {
@@ -462,8 +454,6 @@ describe('per-stage turn budgets (AC-15.18, AC-15.19)', () => {
       await mkdir(path.join(repo, '.copperhead'), { recursive: true });
       await writeFile(
         path.join(repo, '.copperhead', 'config.json'),
-        // zero/negative/non-integer entries are config typos: dropped on load
-        // so a stage cannot start with an already-exhausted budget
         JSON.stringify({ maxTurns: 40, stageMaxTurns: { 'spec-seed': 60, architecture: 0, layout: -5, docs: 1.5 } }),
         'utf8',
       );
@@ -483,8 +473,6 @@ describe('empty-completion tolerance (agent loop)', () => {
       await runInit({ repoRoot: repo, installHooks: false });
       await execa('git', ['add', '-A'], { cwd: repo });
       await execa('git', ['commit', '-q', '-m', 'docs'], { cwd: repo });
-      // Three empty completions spread across productive turns — observed
-      // live from a provider mid-run. Only consecutive stalls may fail.
       const provider = scriptedProvider([
         {},
         { toolCalls: [readCall] },
@@ -502,7 +490,6 @@ describe('empty-completion tolerance (agent loop)', () => {
         log: () => {},
       });
       expect(res.outcome).toBe('success');
-      // each empty turn still got the continue-or-finish nudge
       const nudged = provider.seen
         .flat()
         .filter((m) => m.role === 'user' && (m as { content: string }).content.includes('Continue using tools'));
