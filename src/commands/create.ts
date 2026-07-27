@@ -12,25 +12,39 @@ import { checkDrift } from '../memory/drift.js';
 import { runAgentLoop, makeProvider, type BudgetExhaustedStats } from '../agent/loop.js';
 import { diagnoseStageFailure, transcriptExcerpt, withTimeout, type StageDiagnosis } from '../agent/recovery.js';
 import type { Provider } from '../agent/types.js';
-import type { RunMetaInput } from '../agent/runmeta.js';
+import type { RunMetaInput, StageTrigger } from '../agent/runmeta.js';
 import { fmtDuration, fmtTokens, type ProgressRenderer } from '../agent/render.js';
 import { copper, dim, ok, stageLine, warn } from '../agent/theme.js';
 import { openspecInit } from '../openspec/cli.js';
 import { sweepStaleTempDirs, pruneHistoryDir } from '../util/tmp.js';
 import { assertDiskSpace, DEFAULT_MIN_FREE_BYTES } from '../util/preflight.js';
 import { runCheck } from './check.js';
+import {
+  classifyStages,
+  hashArtifact,
+  saveStageRecord,
+  type ArtifactName,
+  type StageClassification,
+} from '../memory/stagestate.js';
 import { emitCreateJlcpcbBom } from './export.js';
 
 /**
  * Mode A (`copperhead create`, SPEC §2.5): staged pipeline, each stage a
- * do-loop run with a stage prompt and gate. Stage completion is inferred from
- * repo state, which makes the pipeline resumable for free (design D10).
- * Run-to-completion: gates are quality checks the agent must satisfy, not
- * stops that wait for a human (unless --interactive).
+ * do-loop run with a stage prompt and gate. Stage completion is tracked
+ * record-first — content hashes of each stage's inputs/outputs land in
+ * .copperhead/create-state.json inside the stage's own commit — with the
+ * repo-state probes as fallback for unrecorded stages (change
+ * rerun-create-stages; the probe bodies belong to #23/PR #29 and are not
+ * touched here). Run-to-completion: gates are quality checks the agent must
+ * satisfy, not stops that wait for a human (unless --interactive).
  */
 interface Stage {
   name: string;
-  /** true when repo state shows the stage is already done (resume support). */
+  /** Artifacts this stage reads — the incoming edges of the stage graph. */
+  consumes: ArtifactName[];
+  /** Artifacts this stage writes — the outgoing edges of the stage graph. */
+  produces: ArtifactName[];
+  /** Fallback probe when no completion record exists (resume support). */
   isComplete: (repoRoot: string, docs: string) => Promise<boolean> | boolean;
   prompt: (brief: string) => string;
 }
@@ -55,27 +69,40 @@ async function docHasHeading(repoRoot: string, rel: string, word: string): Promi
   return re.test(await readFile(p, 'utf8'));
 }
 
+/**
+ * The array order MUST remain a topological order of the produces→consumes
+ * graph: descendantsOf's single forward pass and the runner's queue ordering
+ * both depend on it. A test asserts this; re-check it when editing the table.
+ */
 export const STAGES: Stage[] = [
   {
     name: 'spec-seed',
+    consumes: ['brief'],
+    produces: ['spec'],
     isComplete: (root, docs) => docHasHeading(root, path.join(docs, 'SPEC.md'), 'Budgets?'),
     prompt: (brief) =>
       `Stage 1 of the create pipeline: seed the requirements. From the product brief below, write docs/SPEC.md (what the device is, top-level constraints and budgets). Every budget you state must also be recorded with record_constraint. Anything the brief does not state: propose a sensible default and flag it ASSUMED. If an openspec/ workspace exists, also seed openspec/specs/ with per-capability requirements using Given/When/Then scenarios.\n\nBrief:\n${brief}`,
   },
   {
     name: 'architecture',
+    consumes: ['spec'],
+    produces: ['subsystems'],
     isComplete: (root, docs) => docExists(root, path.join(docs, 'SUBSYSTEMS.md')),
     prompt: () =>
       'Stage 2: architecture. Write docs/SUBSYSTEMS.md: the block diagram in prose, one section per subsystem (power, MCU, connectivity, UI, ...), with the reasoning and key values for each. Respect every budget in SPEC.md.',
   },
   {
     name: 'part-selection',
+    consumes: ['spec', 'subsystems'],
+    produces: ['bom'],
     isComplete: (root, docs) => docExists(root, path.join(docs, 'BOM.md')),
     prompt: () =>
       'Stage 3: part selection. Write docs/BOM.md with the fixed table format (| Refdes | Value | Footprint | MPN | Rationale |). Every MPN you introduce is flagged UNVERIFIED with a datasheet-verifiable justification. Check leakage/quiescent current of every part against the power budget. Run check_drift before finishing.',
   },
   {
     name: 'schematic',
+    consumes: ['bom', 'subsystems'],
+    produces: ['schematic', 'pinout'],
     isComplete: async (root) => {
       const config = await loadConfig(root);
       if (!config.schematic) return false;
@@ -105,6 +132,8 @@ export const STAGES: Stage[] = [
   },
   {
     name: 'layout-draft',
+    consumes: ['schematic'],
+    produces: ['board', 'layout-intent'],
     isComplete: async (root, docs) => {
       // The LAYOUT.md marker alone is not enough: `copperhead init` scaffolds
       // LAYOUT.md with the literal "## Draft quality" heading, so an init-ed
@@ -122,35 +151,132 @@ export const STAGES: Stage[] = [
   },
   {
     name: 'outputs',
+    consumes: ['board', 'bom'],
+    produces: ['outputs'],
     isComplete: (root) => existsSync(path.join(root, 'outputs')),
     prompt: () =>
       'Stage 6: outputs package. Export into outputs/: gerbers+drill (JLC profile), DXF and STEP outline, SVG renders (export_svg), and an ordering BOM.csv generated from BOM.md (refdes, MPN, qty). Every export must succeed.',
   },
   {
     name: 'firmware',
+    consumes: ['pinout'],
+    produces: ['firmware'],
     isComplete: (root) => existsSync(path.join(root, 'firmware')),
     prompt: () =>
       'Stage 7: firmware scaffold. Generate firmware/ for the chosen MCU HAL: pins.h generated from PINOUT.md (single source of truth), driver stubs, and one working happy path. If the vendor toolchain is available, the build must pass; if not, note "not compiled here" explicitly in DEVPLAN.md.',
   },
   {
     name: 'devplan',
+    consumes: ['schematic', 'firmware', 'layout-intent'],
+    produces: ['devplan'],
     isComplete: (root, docs) => docExists(root, path.join(docs, 'DEVPLAN.md')),
     prompt: () =>
       'Stage 8: DEVPLAN.md. Write docs/DEVPLAN.md: bring-up steps in order, test points and what to meter first, risk list, and the prototype order plan.',
   },
 ];
 
+export const stageNames = (): string[] => STAGES.map((s) => s.name);
+
+const stageIndex = (name: string): number => STAGES.findIndex((s) => s.name === name);
+
+/**
+ * Stages reachable from `name` via produces→consumes edges. A single forward
+ * pass suffices because the STAGES array is a topological order of the graph
+ * (asserted by test); the result is what `--from` re-runs.
+ */
+export function descendantsOf(name: string): string[] {
+  const start = stageIndex(name);
+  if (start === -1) return [];
+  const reachable = new Set<ArtifactName>(STAGES[start]!.produces);
+  const out: string[] = [];
+  for (const s of STAGES.slice(start + 1)) {
+    if (s.consumes.some((a) => reachable.has(a))) {
+      out.push(s.name);
+      for (const a of s.produces) reachable.add(a);
+    }
+  }
+  return out;
+}
+
+/** Where an artifact lives, for the reconciliation preamble (design D6: name and path). */
+function artifactLocation(a: ArtifactName, config: CopperheadConfig): string {
+  const doc = (f: string): string => path.join(config.docs, f);
+  switch (a) {
+    case 'brief':
+      return 'the product brief file';
+    case 'spec':
+      return `${doc('SPEC.md')} and .copperhead/constraints.json`;
+    case 'subsystems':
+      return doc('SUBSYSTEMS.md');
+    case 'bom':
+      return doc('BOM.md');
+    case 'pinout':
+      return doc('PINOUT.md');
+    case 'layout-intent':
+      return doc('LAYOUT.md');
+    case 'devplan':
+      return doc('DEVPLAN.md');
+    case 'schematic':
+      return config.schematic ?? 'the .kicad_sch files';
+    case 'board':
+      return config.board ?? 'the .kicad_pcb';
+    case 'outputs':
+      return 'outputs/';
+    case 'firmware':
+      return 'firmware/';
+  }
+}
+
+function reconciliationPreamble(changed: ArtifactName[], config: CopperheadConfig): string {
+  return [
+    'This stage completed previously, but upstream artifacts it depends on have changed since:',
+    ...changed.map((a) => `- ${a} (${artifactLocation(a, config)})`),
+    'Revise the existing artifacts of this stage to reconcile with those changes; do not recreate them from scratch.',
+    'Read the changed files and use check_drift to find the exact disagreements. Where an item needs no change, say why in one line and move on.',
+  ].join('\n');
+}
+
+const REVISION_PREAMBLE =
+  'This stage completed previously and is being deliberately re-run. Revise its existing artifacts in place with anchored edits; do not recreate them.';
+
 export interface CreateOptions {
   repoRoot: string;
   briefPath: string;
   model: string;
   interactive?: boolean;
+  /** Re-run exactly this stage, then propagate to consumers of changed outputs. */
+  stage?: string;
+  /** Force-re-run this stage and its graph descendants. */
+  from?: string;
+  /** Print stage classification and the would-run set; write nothing. */
+  dryRun?: boolean;
+  confirm?: (question: string) => Promise<boolean>;
   /** Forwarded to each stage's run (attended continue-on-exhaustion prompt). */
   onBudgetExhausted?: (stats: BudgetExhaustedStats) => Promise<number>;
   log: (s: string) => void;
   renderer?: ProgressRenderer;
   /** Command-level metadata; stage and brief identity are filled in per stage. */
   meta?: Omit<RunMetaInput, 'stage' | 'brief'>;
+  /** Test seam: forwarded to every stage's agent-loop run. */
+  provider?: Provider;
+}
+
+const classificationLine = (c: StageClassification): string =>
+  `  ${c.stage}: ${c.status}${c.changedInputs.length ? ` (changed: ${c.changedInputs.join(', ')})` : ''}`;
+
+/** Throws with the valid-name listing; exported so the CLI can fail fast, before model/kicad resolution (AC-9.6). */
+export function validateStageFlags(stage?: string, from?: string): void {
+  for (const [flag, value] of [
+    ['--stage', stage],
+    ['--from', from],
+  ] as const) {
+    if (value && stageIndex(value) === -1) {
+      throw new Error(`unknown stage "${value}" for ${flag}; valid stages: ${stageNames().join(', ')}`);
+    }
+  }
+  if (stage && from) {
+    throw new Error('--stage and --from are mutually exclusive: --stage re-runs one stage and propagates real changes; --from force-re-runs a stage and its descendants');
+  }
 }
 
 /**
@@ -544,15 +670,75 @@ async function writeRunReport(opts: CreateOptions, stageCosts: StageCost[]): Pro
 }
 
 export async function runCreate(opts: CreateOptions): Promise<{ ok: boolean; completed: string[] }> {
+  validateStageFlags(opts.stage, opts.from);
+
   const brief = await readFile(path.resolve(opts.briefPath), 'utf8');
   // Hashed from the content already in hand: a brief edited mid-pipeline shows
   // up as a different sha256 in the next stage's metadata (AC-8.1).
   const briefMeta = { path: opts.briefPath, sha256: createHash('sha256').update(brief).digest('hex') };
-  const config = await loadConfig(opts.repoRoot);
+  const confirm = opts.confirm ?? (async () => true);
+
+  // Classification always reads a fresh config: earlier stages set
+  // schematic/board paths in .copperhead/config.json as they create them.
+  const classify = async (): Promise<{ classifications: StageClassification[]; warning: string | null }> => {
+    const config = await loadConfig(opts.repoRoot);
+    return classifyStages({
+      repoRoot: opts.repoRoot,
+      config,
+      briefPath: opts.briefPath,
+      stages: STAGES.map((s) => ({
+        name: s.name,
+        consumes: s.consumes,
+        isComplete: () => s.isComplete(opts.repoRoot, config.docs),
+      })),
+    });
+  };
+
+  const initial = await classify();
+  if (initial.warning) opts.log(`warning: ${initial.warning}`);
+  const statusOf = new Map(initial.classifications.map((c) => [c.stage, c]));
+
+  const mode = opts.stage ? `--stage ${opts.stage}` : opts.from ? `--from ${opts.from}` : 'default';
+  let planned: string[];
+  if (opts.stage) planned = [opts.stage];
+  else if (opts.from) planned = [opts.from, ...descendantsOf(opts.from)];
+  else
+    planned = initial.classifications
+      .filter((c) => c.status === 'incomplete' || c.status === 'stale')
+      .map((c) => c.stage);
+  const plannedInitially = new Set(planned);
+
+  // A targeted re-run below an incomplete ancestor works against missing
+  // inputs; the probe gate would withhold the record afterwards anyway, but
+  // saying so up front saves the whole model run.
+  if (opts.stage || opts.from) {
+    const target = (opts.stage ?? opts.from)!;
+    const upstreamIncomplete = initial.classifications
+      .filter((c) => c.status === 'incomplete' && descendantsOf(c.stage).includes(target))
+      .map((c) => c.stage);
+    if (upstreamIncomplete.length) {
+      opts.log(
+        `warning: upstream stage(s) ${upstreamIncomplete.join(', ')} are incomplete; ${target} may run against missing inputs`,
+      );
+    }
+  }
+
+  if (opts.dryRun) {
+    opts.log('stage classification:');
+    for (const c of initial.classifications) opts.log(classificationLine(c));
+    opts.log(
+      planned.length
+        ? `would run (${mode}): ${planned.join(' → ')}`
+        : 'nothing to run: pipeline is consistent',
+    );
+    return { ok: true, completed: [] };
+  }
+
   // Fail fast on a nearly-full disk (4.1): a create run writes fab outputs and
   // KiCad local history and can otherwise fill the disk mid-stage, failing with
   // an opaque ENOSPC only after doing expensive work. Threshold overridable via
   // COPPERHEAD_MIN_FREE_MB; an unknown reading (unsupported platform) skips it.
+  // These startup guards sit after the --dry-run return: dry runs write nothing.
   const minFreeMb = Number(process.env.COPPERHEAD_MIN_FREE_MB);
   const minFree = Number.isFinite(minFreeMb) && minFreeMb >= 0 ? minFreeMb * 1024 * 1024 : DEFAULT_MIN_FREE_BYTES;
   await assertDiskSpace(opts.repoRoot, minFree);
@@ -566,82 +752,170 @@ export async function runCreate(opts: CreateOptions): Promise<{ ok: boolean; com
   // across a long run and fill the disk (4.1, I8). Best-effort; keeps the newest.
   const pruned = await pruneHistoryDir(opts.repoRoot);
   if (pruned) opts.log(dim(`startup: pruned ${pruned} old .history/ entrie(s) to cap local-history growth`));
+
   await openspecInit(opts.repoRoot);
+  if (planned.length && (opts.stage || opts.from)) {
+    opts.log(`plan (${mode}): ${planned.join(' → ')}`);
+    // Stage commits use git add -A, so on a mature repo a targeted re-run
+    // would silently sweep unrelated WIP into the stage's commit.
+    if (await isDirty(opts.repoRoot)) {
+      opts.log('warning: working tree is dirty; uncommitted changes will be included in the re-run stage commit(s)');
+    }
+  }
+
   const completed: string[] = [];
   const stageCosts: StageCost[] = [];
+  const resumedCost = (name: string): StageCost => ({
+    name,
+    resumed: true,
+    wallMs: 0,
+    turns: 0,
+    tokensIn: 0,
+    tokensOut: 0,
+    cacheHits: 0,
+  });
+  if (!opts.stage && !opts.from) {
+    const cfg0 = await loadConfig(opts.repoRoot);
+    for (const c of initial.classifications) {
+      if (c.status === 'fresh') opts.log(`stage ${c.stage}: fresh (skipping)`);
+      else if (c.status === 'assumed-complete') opts.log(`stage ${c.stage}: already complete (resuming past it)`);
+      else continue;
+      await commitResumedStage(opts, cfg0, c.stage);
+      completed.push(c.stage);
+      stageCosts.push(resumedCost(c.stage));
+      await emitJlcpcbAfterOutputs(c.stage, opts);
+    }
+  }
 
-  for (const [i, stage] of STAGES.entries()) {
+  const queue = [...planned];
+  const ran = new Set<string>();
+  /** Artifacts actually changed by stages run in this invocation. */
+  const changedThisRun = new Set<ArtifactName>();
+
+  while (queue.length) {
+    queue.sort((a, b) => stageIndex(a) - stageIndex(b));
+    const name = queue.shift()!;
+    const stage = STAGES[stageIndex(name)]!;
+    const cls = statusOf.get(name)!;
+    const forced = opts.stage === name || (opts.from !== undefined && plannedInitially.has(name));
+    // A queued stale stage can turn fresh before it pops (an earlier stage's
+    // run restored its inputs); running it anyway would burn a full LLM stage
+    // run on nothing and mislabel the trigger.
+    if (!forced && cls.status === 'fresh') {
+      opts.log(`stage ${name}: became fresh before running (inputs restored by an earlier stage); skipping`);
+      await commitResumedStage(opts, await loadConfig(opts.repoRoot), name);
+      completed.push(name);
+      stageCosts.push(resumedCost(name));
+      await emitJlcpcbAfterOutputs(name, opts);
+      continue;
+    }
+    const trigger: StageTrigger =
+      opts.stage === name
+        ? 'requested'
+        : opts.from && plannedInitially.has(name)
+          ? 'from'
+          : cls.status === 'stale'
+            ? 'stale'
+            : 'initial';
+
     // The schematic stage is the first to touch KiCad files, but the agent
     // cannot create them (write_file refuses KiCad files; edit_file needs an
     // existing file). Scaffold a minimal empty project and wire config just
-    // before the stage runs, so there is a schematic to populate and the stage
-    // contract can eventually be met. No-op once a project exists.
-    if (stage.name === 'schematic') {
+    // before the stage runs — and before input hashing, so the scaffold is
+    // part of the stage's recorded pre-run state. No-op once a project exists.
+    if (name === 'schematic') {
       const created = await bootstrapKicadProject(opts.repoRoot, brief);
       if (created) {
         opts.log(stageLine('schematic', `scaffolded empty KiCad project (${created} + board + project), wired into config`));
       }
     }
-    if (await stage.isComplete(opts.repoRoot, config.docs)) {
-      opts.log(stageLine(stage.name, 'already complete (resuming past it)', 'ok'));
-      await commitResumedStage(opts, config, stage.name);
-      completed.push(stage.name);
-      stageCosts.push({ name: stage.name, resumed: true, wallMs: 0, turns: 0, tokensIn: 0, tokensOut: 0, cacheHits: 0 });
-      await emitJlcpcbAfterOutputs(stage.name, opts);
-      continue;
-    }
+
+    let config = await loadConfig(opts.repoRoot);
+    const inputs: Partial<Record<ArtifactName, string>> = {};
+    for (const a of stage.consumes) inputs[a] = await hashArtifact(a, opts.repoRoot, config, opts.briefPath);
+    const preOutputs: Partial<Record<ArtifactName, string>> = {};
+    for (const a of stage.produces) preOutputs[a] = await hashArtifact(a, opts.repoRoot, config, opts.briefPath);
+
+    let stagePrompt = stage.prompt(brief);
+    if (trigger === 'stale') stagePrompt = `${reconciliationPreamble(cls.changedInputs, config)}\n\n${stagePrompt}`;
+    else if (cls.status !== 'incomplete') stagePrompt = `${REVISION_PREAMBLE}\n\n${stagePrompt}`;
+
+    const rerunNote =
+      trigger === 'initial' ? '' : ` (${trigger}${cls.changedInputs.length ? `: ${cls.changedInputs.join(', ')}` : ''})`;
+    const stageTurns = config.stageMaxTurns?.[name];
+
     // Auto-recovery loop: run the stage, and if it fails or ends without meeting
     // its contract, ask the model to diagnose whether another attempt is likely
-    // to help. On "retry" the pipeline runs the stage again (with the diagnosis's
-    // guidance prepended); on "abort", or once the retry budget is spent, it
-    // stops and reports for a human — the loop keeps going by itself for the
-    // recoverable cases without silently spinning on the dead-end ones.
-    const stageTurns = config.stageMaxTurns?.[stage.name];
-    const basePrompt = stage.prompt(brief);
+    // to help. On "retry" the stage runs again with the diagnosis's guidance
+    // prepended; on "abort", or once the retry budget is spent, the pipeline
+    // stops and reports for a human.
     let guidance = '';
     let stageDone = false;
     let stageTranscriptDir = '';
-    // Cost accumulates across all attempts of the stage, so a stage that took a
-    // retry to complete shows its true total in the summary (5.2).
     const stageStart = Date.now();
-    const cost: StageCost = { name: stage.name, resumed: false, wallMs: 0, turns: 0, tokensIn: 0, tokensOut: 0, cacheHits: 0 };
+    const cost: StageCost = { name, resumed: false, wallMs: 0, turns: 0, tokensIn: 0, tokensOut: 0, cacheHits: 0 };
     for (let attempt = 1; ; attempt++) {
-      // Re-scaffold before every attempt, not just once per stage. A previous
-      // attempt that failed at the commit gate rolls the tree back
-      // (restore(): `git reset --hard` + `git clean -fd`), which deletes the
-      // still-untracked scaffold (config.json + the empty KiCad files). Without
-      // this the retry would run against a missing schematic and cascade into a
-      // worse failure than the one being recovered from. Idempotent: a no-op
-      // whenever the project already exists.
-      if (stage.name === 'schematic') {
+      // Re-scaffold before every retry: a failed attempt's rollback
+      // (`git reset --hard` + `git clean -fd`) deletes a still-untracked
+      // scaffold, and the retry would otherwise run against a missing
+      // schematic. Idempotent once the project exists.
+      if (name === 'schematic' && attempt > 1) {
         const rescaffolded = await bootstrapKicadProject(opts.repoRoot, brief);
-        if (rescaffolded && attempt > 1) {
-          opts.log(stageLine('schematic', 're-scaffolded empty KiCad project after rollback, wired into config'));
-        }
+        if (rescaffolded) opts.log(stageLine('schematic', 're-scaffolded empty KiCad project after rollback, wired into config'));
       }
       opts.log(
         stageLine(
-          stage.name,
-          `running${attempt > 1 ? ` (attempt ${attempt}/${config.maxStageRetries + 1})` : ''}`,
+          name,
+          `running${rerunNote}${attempt > 1 ? ` (attempt ${attempt}/${config.maxStageRetries + 1})` : ''}`,
         ),
       );
       const res = await runAgentLoop({
         repoRoot: opts.repoRoot,
         model: opts.model,
-        request: `create pipeline stage: ${stage.name}`,
+        request: `create pipeline stage: ${name}`,
         stagePrompt: guidance
-          ? `${basePrompt}\n\n## Recovery guidance (a previous attempt did not complete this stage — do this differently)\n${guidance}`
-          : basePrompt,
+          ? `${stagePrompt}\n\n## Recovery guidance (a previous attempt did not complete this stage — do this differently)\n${guidance}`
+          : stagePrompt,
         interactive: opts.interactive ?? false,
         allowDirty: true, // stages build on each other's uncommitted state within the pipeline
         ...(stageTurns !== undefined ? { maxTurns: stageTurns } : {}),
         ...(opts.onBudgetExhausted ? { onBudgetExhausted: opts.onBudgetExhausted } : {}),
         log: opts.log,
+        ...(opts.confirm ? { confirm: opts.confirm } : {}),
         ...(opts.renderer ? { renderer: opts.renderer } : {}),
+        ...(opts.provider ? { provider: opts.provider } : {}),
+        // The completion record must ride the stage's own commit (design D3).
+        beforeCommit: async ({ runId }) => {
+          const cfgNow = await loadConfig(opts.repoRoot);
+          // The record asserts "this stage's work exists as committed". A run
+          // can pass the loop gates without producing its artifacts (or without
+          // meeting a stricter completion contract); recording it would make
+          // absent work permanently "fresh". Withhold the record — the commit
+          // still lands, and the recovery loop treats the unmet contract as
+          // the stage's failure (AC-9.1: the withheld record says so).
+          if (!(await stage.isComplete(opts.repoRoot, cfgNow.docs))) {
+            opts.log(stageLine(name, 'completion record withheld: the stage contract is not met post-run', 'warn'));
+            return;
+          }
+          const outputs: Partial<Record<ArtifactName, string>> = {};
+          for (const a of stage.produces) outputs[a] = await hashArtifact(a, opts.repoRoot, cfgNow, opts.briefPath);
+          await saveStageRecord(opts.repoRoot, name, {
+            completedAt: new Date().toISOString(),
+            runId,
+            inputs,
+            outputs,
+          });
+        },
         meta: {
           ...opts.meta,
           command: 'create',
-          stage: { name: stage.name, index: i + 1, total: STAGES.length },
+          stage: {
+            name,
+            index: stageIndex(name) + 1,
+            total: STAGES.length,
+            trigger,
+            ...(cls.changedInputs.length ? { changedInputs: cls.changedInputs } : {}),
+          },
           brief: briefMeta,
         },
       });
@@ -652,13 +926,13 @@ export async function runCreate(opts: CreateOptions): Promise<{ ok: boolean; com
       cost.tokensIn += res.stats?.tokensIn ?? 0;
       cost.tokensOut += res.stats?.tokensOut ?? 0;
       cost.cacheHits += res.cacheHits ?? 0;
-      stageTranscriptDir = res.transcriptDir; // last attempt's run dir (for SVG artifacts / report)
+      stageTranscriptDir = res.transcriptDir;
 
       // A successful run is not the same as a completed stage: an agent can
-      // finish "done" with all gates green having only planned the work (seen
-      // with the schematic stage: one header edit, ERC "clean" on an empty
-      // sheet). Advancing anyway lets every later stage run against a design
-      // that isn't there, so the completion contract is the real gate.
+      // finish "done" with all gates green having only planned the work.
+      // Advancing anyway lets every later stage run against a design that
+      // isn't there, so the completion contract is the real gate.
+      config = await loadConfig(opts.repoRoot);
       const failure =
         res.outcome !== 'success'
           ? `the run ended as "${res.outcome}" (${res.exitPath})`
@@ -673,7 +947,7 @@ export async function runCreate(opts: CreateOptions): Promise<{ ok: boolean; com
       if (attempt > config.maxStageRetries) {
         opts.log(
           stageLine(
-            stage.name,
+            name,
             `${failure}; exhausted ${config.maxStageRetries} auto-retry(ies). Stopping for a human.`,
             'err',
           ),
@@ -681,31 +955,30 @@ export async function runCreate(opts: CreateOptions): Promise<{ ok: boolean; com
         break;
       }
 
-      opts.log(stageLine(stage.name, `${failure}; asking the model whether to retry…`, 'warn'));
+      opts.log(stageLine(name, `${failure}; asking the model whether to retry…`, 'warn'));
       const diagnosis = await diagnose({
         model: opts.model,
         timeoutMs: config.turnTimeoutMs,
-        stageName: stage.name,
-        stageGoal: basePrompt,
+        stageName: name,
+        stageGoal: stagePrompt,
         failure,
         transcriptDir: res.transcriptDir,
         attempt,
         maxAttempts: config.maxStageRetries + 1,
       });
       // Fold the diagnosis call's own tokens into the stage cost (F6): it is a
-      // real model call made on behalf of this stage, so the cost table should
-      // not under-report by omitting it.
+      // real model call made on behalf of this stage.
       cost.tokensIn += diagnosis.usage?.inputTokens ?? 0;
       cost.tokensOut += diagnosis.usage?.outputTokens ?? 0;
       opts.log(
         stageLine(
-          stage.name,
+          name,
           `diagnosis → ${diagnosis.verdict} — ${diagnosis.reason}`,
           diagnosis.verdict === 'abort' ? 'err' : 'warn',
         ),
       );
       if (diagnosis.verdict === 'abort') {
-        opts.log(stageLine(stage.name, 'recovery supervisor recommends stopping for a human.', 'err'));
+        opts.log(stageLine(name, 'recovery supervisor recommends stopping for a human.', 'err'));
         break;
       }
       guidance = diagnosis.guidance ?? `The previous attempt failed: ${failure}. ${diagnosis.reason}`;
@@ -715,15 +988,57 @@ export async function runCreate(opts: CreateOptions): Promise<{ ok: boolean; com
     stageCosts.push(cost);
 
     if (!stageDone) {
-      logResumePoint(opts, stage, i);
+      logResumePoint(opts, stage, stageIndex(name));
       printCostTable(opts, stageCosts);
       await writeRunReport(opts, stageCosts);
       return { ok: false, completed };
     }
-    completed.push(stage.name);
-    await renderStageArtifacts(opts, stage.name, stageTranscriptDir);
-    await emitJlcpcbAfterOutputs(stage.name, opts);
+    ran.add(name);
+    completed.push(name);
+    await renderStageArtifacts(opts, name, stageTranscriptDir);
+    await emitJlcpcbAfterOutputs(name, opts);
     logCumulative(opts, stageCosts);
+
+    // Propagation: only outputs that actually changed invalidate consumers.
+    const changed: ArtifactName[] = [];
+    for (const a of stage.produces) {
+      if ((await hashArtifact(a, opts.repoRoot, config, opts.briefPath)) !== preOutputs[a]) changed.push(a);
+    }
+    if (!changed.length) {
+      opts.log(`stage ${name}: outputs unchanged; nothing invalidated`);
+      continue;
+    }
+    for (const a of changed) changedThisRun.add(a);
+
+    const re = await classify();
+    // The state file can go bad mid-invocation too; a silent degradation here
+    // would let recorded stages reclassify by probe with no visible signal.
+    if (re.warning) opts.log(`warning: ${re.warning}`);
+    for (const c of re.classifications) statusOf.set(c.stage, c);
+    // Newly stale = stale because of what THIS invocation changed. Staleness
+    // that predates the run stays where the mode put it: the default mode
+    // already queued it, and a targeted mode must not silently widen itself.
+    const newlyStale = re.classifications.filter(
+      (c) =>
+        c.status === 'stale' &&
+        !ran.has(c.stage) &&
+        !queue.includes(c.stage) &&
+        c.changedInputs.some((a) => changedThisRun.has(a)),
+    );
+    if (!newlyStale.length) continue;
+    opts.log(
+      `stale after ${name}: ${newlyStale.map((c) => `${c.stage} (${c.changedInputs.join(', ')} edge)`).join(', ')}`,
+    );
+    if (opts.interactive) {
+      const approved = await confirm(
+        `Reconcile stale stage(s) ${newlyStale.map((c) => c.stage).join(', ')} now?`,
+      );
+      if (!approved) {
+        opts.log('stale stages left unreconciled; a later `copperhead create` run will pick them up');
+        continue;
+      }
+    }
+    queue.push(...newlyStale.map((c) => c.stage));
   }
 
   const check = await runCheck(opts.repoRoot, opts.log);

@@ -8,7 +8,7 @@ import { runInit, InitError } from './memory/scaffold.js';
 import { runCheck } from './commands/check.js';
 import { runDoctor, formatDoctor } from './commands/doctor.js';
 import { syncVerify, syncResolve, formatSyncReport } from './commands/sync.js';
-import { runCreate } from './commands/create.js';
+import { runCreate, validateStageFlags } from './commands/create.js';
 import { runDemo, demoTourText } from './commands/demo.js';
 import { runRepl } from './commands/repl.js';
 import {
@@ -280,7 +280,7 @@ program
   .command('demo')
   .description('tour of what copperhead does, or run the USB-C breakout create pipeline')
   .option('--model <model>', 'codex | cursor | gpt-5 | claude | claude-code (or a provider-specific model id)')
-  .option('--interactive', 're-enable the human gates (spec approval, pre-export)')
+  .option('--interactive', 're-enable the human gates (spec approval, pre-export, stale-reconcile confirmation)')
   .option('--dir <path>', 'demo repo directory (default: demo-runs/usb-c-breakout)')
   .option('--tour', 'print the overview only; do not run the pipeline')
   .action(async (opts: { model?: string; interactive?: boolean; dir?: string; tour?: boolean }) => {
@@ -328,30 +328,61 @@ program
   .description('Mode A: full pipeline from a product brief to the output package')
   .requiredOption('--brief <file>', 'product brief (markdown)')
   .option('--model <model>', 'codex | cursor | gpt-5 | claude | claude-code (or a provider-specific model id)')
-  .option('--interactive', 're-enable the human gates (spec approval, pre-export)')
-  .action(async (opts: { brief: string; model?: string; interactive?: boolean }) => {
-    const repo = repoOf(program.opts());
-    try {
-      const kicadVer = await kicadCliVersion();
-      const config = await loadConfig(repo);
-      const { model, source } = resolveModel(opts.model, config);
-      const continuePrompt = budgetContinuePrompt();
-      const res = await runCreate({
-        repoRoot: repo,
-        briefPath: opts.brief,
-        model,
-        interactive: opts.interactive ?? false,
-        ...(continuePrompt ? { onBudgetExhausted: continuePrompt } : {}),
-        log: (s) => console.log(s),
-        renderer: rendererOf(),
-        meta: { command: 'create', modelSource: source, version, kicadCliVersion: kicadVer },
-      });
-      process.exit(res.ok ? 0 : 1);
-    } catch (err) {
-      console.error((err as Error).message);
-      process.exit(1);
-    }
-  });
+  .option('--interactive', 're-enable the human gates (spec approval, pre-export, stale-reconcile confirmation)')
+  .option('--stage <name>', 're-run one pipeline stage, then propagate to consumers of changed outputs')
+  .option('--from <name>', 're-run a pipeline stage and every stage downstream of it')
+  .option('--dry-run', 'print stage classification and what would run; write nothing')
+  .action(
+    async (opts: {
+      brief: string;
+      model?: string;
+      interactive?: boolean;
+      stage?: string;
+      from?: string;
+      dryRun?: boolean;
+    }) => {
+      const repo = repoOf(program.opts());
+      try {
+        // Flag validation and --dry-run are deterministic: neither needs a
+        // model, an API key, or kicad-cli, so they must not be preempted by
+        // model resolution or the kicad preflight (AC-9.5/9.6).
+        validateStageFlags(opts.stage, opts.from);
+        if (opts.dryRun) {
+          const res = await runCreate({
+            repoRoot: repo,
+            briefPath: opts.brief,
+            model: 'none (dry run)',
+            ...(opts.stage ? { stage: opts.stage } : {}),
+            ...(opts.from ? { from: opts.from } : {}),
+            dryRun: true,
+            log: (s) => console.log(s),
+          });
+          process.exit(res.ok ? 0 : 1);
+        }
+        const kicadVer = await kicadCliVersion();
+        const config = await loadConfig(repo);
+        const { model, source } = resolveModel(opts.model, config);
+        const continuePrompt = budgetContinuePrompt();
+        const res = await runCreate({
+          repoRoot: repo,
+          briefPath: opts.brief,
+          model,
+          interactive: opts.interactive ?? false,
+          ...(opts.stage ? { stage: opts.stage } : {}),
+          ...(opts.from ? { from: opts.from } : {}),
+          ...(continuePrompt ? { onBudgetExhausted: continuePrompt } : {}),
+          confirm: confirmTty,
+          log: (s) => console.log(s),
+          renderer: rendererOf(),
+          meta: { command: 'create', modelSource: source, version, kicadCliVersion: kicadVer },
+        });
+        process.exit(res.ok ? 0 : 1);
+      } catch (err) {
+        console.error((err as Error).message);
+        process.exit(1);
+      }
+    },
+  );
 
 const exportCmd = program
   .command('export')

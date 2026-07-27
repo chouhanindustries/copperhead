@@ -75,16 +75,28 @@ Eight stages, each one a full `do` loop with its own prompt and gate. A stage th
 
 | Stage | Produces |
 | --- | --- |
-| 1. Spec | `docs/SPEC.md`, every budget also recorded as a constraint |
-| 2. Architecture | `docs/SUBSYSTEMS.md`, one section per subsystem with reasoning |
-| 3. Parts | `docs/BOM.md`, MPNs flagged `UNVERIFIED` with justification |
-| 4. Schematic | The `.kicad_sch`, sheet by sheet, ERC clean after each |
-| 5. Layout | First-draft placement and critical routing, DRC clean |
-| 6. Outputs | `outputs/`: gerbers, drill, DXF, STEP, SVG, `BOM.csv` |
-| 7. Firmware | `firmware/` scaffold with `pins.h` generated from `PINOUT.md` |
-| 8. Dev plan | `docs/DEVPLAN.md`: bring-up order, test points, risks |
+| 1. Spec (`spec-seed`) | `docs/SPEC.md`, every budget also recorded as a constraint |
+| 2. Architecture (`architecture`) | `docs/SUBSYSTEMS.md`, one section per subsystem with reasoning |
+| 3. Parts (`part-selection`) | `docs/BOM.md`, MPNs flagged `UNVERIFIED` with justification |
+| 4. Schematic (`schematic`) | The `.kicad_sch`, sheet by sheet, ERC clean after each |
+| 5. Layout (`layout-draft`) | First-draft placement and critical routing, DRC clean |
+| 6. Outputs (`outputs`) | `outputs/`: gerbers, drill, DXF, STEP, SVG, `BOM.csv` |
+| 7. Firmware (`firmware`) | `firmware/` scaffold with `pins.h` generated from `PINOUT.md` |
+| 8. Dev plan (`devplan`) | `docs/DEVPLAN.md`: bring-up order, test points, risks |
 
-The pipeline is resumable. Stage completion is inferred from repo state, so if a stage fails, fix what it complained about and rerun the same command: it skips past what is already done and picks up at the first incomplete stage.
+The pipeline is resumable. Each completed stage records content hashes of what it read and wrote in `.copperhead/create-state.json`, so if a stage fails, fix what it complained about and rerun the same command: it skips past what is already done and picks up at the first stage that is incomplete or *stale* (something a completed stage depends on has changed since it ran).
+
+### Re-running a stage
+
+Design iteration is backward as often as forward: the BOM changes after the schematic exists, budgets tighten after layout. You can redo one stage deliberately instead of hand-deleting artifacts:
+
+```bash
+copperhead create --brief brief.md --stage part-selection   # revise the BOM, then reconcile
+copperhead create --brief brief.md --from layout-draft      # redo layout and everything after it
+copperhead create --brief brief.md --dry-run                # see what would run, write nothing
+```
+
+`--stage` re-runs one stage against the existing artifacts and then updates, in dependency order, every stage that consumes an output the re-run actually changed: if the BOM revision changed a value, the schematic and outputs reconcile; if nothing changed, nothing else runs. `--from` force-re-runs a stage and its downstream dependents (the graph is followed through artifacts, so `--from layout-draft` never pointlessly redoes firmware). In `--interactive` mode you confirm the reconciliation set before it runs.
 
 Stage 5 writes a `## Draft quality` section into `LAYOUT.md` saying exactly what is fine and what a human or a specialist tool should redo. Non-optimal is acceptable; unlabeled non-optimal is not.
 

@@ -58,6 +58,13 @@ export interface RunOptions {
   renderer?: ProgressRenderer;
   /** Caller-known run identity for the metadata block (design D2). */
   meta?: RunMetaInput;
+  /**
+   * Invoked after every finish gate has passed, immediately before the run's
+   * commit, so caller bookkeeping (e.g. create's stage completion record)
+   * lands in the same commit as the work it describes. Never fires on the
+   * refuse, dry-run, or rollback paths; a throw routes to commit-failed.
+   */
+  beforeCommit?: (info: { runId: string }) => Promise<void>;
 }
 
 export interface RunResult {
@@ -684,6 +691,14 @@ async function runWithMemory(
         const message = (err as Error).message;
         log(`warning: changelog append failed (${message}); committing the verified design without a changelog entry`);
         await transcript.event('changelog-append-failed', { error: message });
+      }
+
+      if (opts.beforeCommit) {
+        try {
+          await opts.beforeCommit({ runId: ctx.runId });
+        } catch (err) {
+          return fail(`commit preparation failed: ${(err as Error).message}`, 'commit-failed');
+        }
       }
 
       const commitMsg = `copperhead: ${opts.request}\n\n${summary}\n\nVerification: ${verification}`;
