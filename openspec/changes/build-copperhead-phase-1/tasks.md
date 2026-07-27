@@ -1,6 +1,6 @@
 # Tasks: Build copperhead Phase 1
 
-> **Status (2026-07-18, evening): 52/61 complete.** Every deterministic capability is
+> **Status (2026-07-18, evening): 53/61 complete.** Every deterministic capability is
 > implemented and covered by the offline suite (57 tests green). The agent loop is now
 > **verified live** with an OpenAI key (model `gpt-5-nano`, the only model on this key):
 > AC-3.1 net rename with surgical <5% diff (AC-3.7), AC-3.4 budget refusal via compliant
@@ -88,7 +88,7 @@
 - [x] 9.5 Stage 6: outputs package via kicad-cli — gerbers+drill zip (JLC/PCBWay profile), DXF/STEP, SVG renders, ordering BOM.csv from BOM.md
 - [x] 9.6 Stage 7: firmware scaffold + pins.h generated from PINOUT.md; vendor toolchain build gate with explicit "not compiled here" fallback in DEVPLAN.md
 - [x] 9.7 Stage 8: DEVPLAN.md (bring-up steps, test points, risk list, prototype order plan)
-- [ ] 9.8 Interactive mode: spec-approval and pre-export gates re-enabled with --interactive; resumability test (kill after BOM stage, re-run continues)
+- [x] 9.8 Interactive mode: spec-approval and pre-export gates re-enabled with `--interactive`; resumability test (kill after BOM stage, re-run continues)
 
 ## 10. `sync` command (full-state verify and resolve)
 
