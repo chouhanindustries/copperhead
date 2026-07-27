@@ -184,6 +184,15 @@ class CopperheadPanel(wx.Panel):
         if self.client is not None:
             self.client.stop()
 
+    def retry_boot(self):
+        """Re-run CLI discovery on re-show: a docked pane is only hidden by
+        its close button, so without this the missing-CLI/dead-serve states
+        would persist until pcbnew restarts."""
+        if self.client is None:
+            self.restarts = 0
+            self.input.Enable()
+            self._boot()
+
     def shutdown(self):
         client, self.client = self.client, None
         if client is not None:
@@ -205,8 +214,12 @@ def toggle_panel():
     if mgr is not None:
         pane = mgr.GetPane(PANE_NAME)
         if pane.IsOk():
-            pane.Show(not pane.IsShown())
+            showing = not pane.IsShown()
+            pane.Show(showing)
             mgr.Update()
+            panel = _state.get("panel")
+            if showing and panel is not None:
+                panel.retry_boot()
             return
         panel = CopperheadPanel(frame)
         _state["panel"] = panel
@@ -227,7 +240,11 @@ def toggle_panel():
     # Floating fallback (AC-114B.5): AUI lookup failed on this platform.
     floater = _state.get("floater")
     if floater is not None and bool(floater):
-        floater.Show(not floater.IsShown())
+        showing = not floater.IsShown()
+        floater.Show(showing)
+        panel = _state.get("panel")
+        if showing and panel is not None:
+            panel.retry_boot()
         return
     floater = wx.Frame(frame, title="copperhead", size=wx.Size(420, 640))
     _state["floater"] = floater
