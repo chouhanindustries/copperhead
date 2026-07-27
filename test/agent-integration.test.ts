@@ -5,7 +5,6 @@ import path from 'node:path';
 import { execa } from 'execa';
 import { runAgentLoop } from '../src/agent/loop.js';
 import { runInit } from '../src/memory/scaffold.js';
-import { toolSearch } from '../src/agent/filetools.js';
 import { saveConstraint } from '../src/memory/constraints.js';
 import { tempFixtureRepo } from './helpers.js';
 
@@ -130,6 +129,8 @@ for (const { model, key } of providers) {
         }
       },
       600_000,
+    );
+
     it(
       'AC-3.2: RTC-capable pin move consults strapping table and synchronizes schematic and PINOUT.md',
       async () => {
@@ -199,6 +200,27 @@ for (const { model, key } of providers) {
       },
       600_000,
     );
+
+    it(
+      'AC-4.1: no API key material anywhere in the tree after runs',
+      async () => {
+        const { repo, cleanup } = await setupRepo();
+        try {
+          await runAgentLoop({
+            repoRoot: repo,
+            request: 'rename net KEY_DAH to KEY_DASH',
+            model,
+            maxTurns: 1,
+            log: () => {},
+          });
+          const matches = await scanTreeForSecret(repo, /sk-[A-Za-z0-9_-]+/);
+          expect(matches).toEqual([]);
+        } finally {
+          await cleanup();
+        }
+      },
+      600_000,
+    );
   });
 }
 
@@ -226,17 +248,7 @@ async function scanTreeForSecret(dir: string, pattern: RegExp, root = dir): Prom
   return matches;
 }
 
-describe.skipIf(!providers.some((p) => p.key))('safety net', () => {
-  it('AC-4.1: no API key material anywhere in the tree after runs', async () => {
-    const { repo, cleanup } = await tempFixtureRepo();
-    try {
-      const matches = await scanTreeForSecret(repo, /sk-[A-Za-z0-9_-]+/);
-      expect(matches).toEqual([]);
-    } finally {
-      await cleanup();
-    }
-  });
-});
+
 
 function diffLineCount(a: string, b: string): number {
   const aLines = a.split('\n');
