@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, beforeAll, afterAll } from 'vitest';
 import { mkdtemp, mkdir, rm, stat, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -8,6 +8,27 @@ import { sweepStaleTempDirs, pruneHistoryDir, TEMP_PREFIX } from '../src/util/tm
 // These exercise the I8 startup sweep. They create real `copperhead-*` dirs in
 // the OS temp dir (the exact place the leak lives) and age them via utimes, so
 // the age gate is tested against the same clock the sweep reads.
+//
+// The fixtures are deliberately ancient, which makes them prey for any OTHER
+// test file whose runCreate performs the real startup sweep in a parallel
+// worker (create-hardening, create-stage-turns, create-stages, ...). os.tmpdir()
+// honors TMPDIR, so this worker gets a private temp root: its aged fixtures are
+// invisible to every other worker's sweep, and its own sweeps see only them.
+let privateTmpRoot: string;
+let realTmpdir: string | undefined;
+
+beforeAll(async () => {
+  realTmpdir = process.env.TMPDIR;
+  privateTmpRoot = await mkdtemp(path.join(tmpdir(), 'copperhead-sweep-tests-'));
+  process.env.TMPDIR = privateTmpRoot;
+});
+
+afterAll(async () => {
+  if (realTmpdir === undefined) delete process.env.TMPDIR;
+  else process.env.TMPDIR = realTmpdir;
+  await rm(privateTmpRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+});
+
 describe('sweepStaleTempDirs (I8: reclaim leaked scratch dirs)', () => {
   const made: string[] = [];
 
