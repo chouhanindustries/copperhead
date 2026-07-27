@@ -43,12 +43,20 @@ Avoids a second `loadConfig()` call (the caller already loaded it). Passed
 through as `Partial<CopperheadConfig> | undefined`; falls back to env-var
 reading when absent, preserving full backwards compatibility.
 
-### D6 — Doctor command is deterministic and network-optional
+### D6 — Doctor command stays LLM-free and network-free
 
-Endpoint reachability (a HEAD request to `${baseURL}/models` with a 5 s
-timeout) is attempted but a timeout is reported as a warning, not a failure,
-because corporate proxies and firewalls can block outbound pings. Key
-presence and format are checked unconditionally.
+`doctor` checks local configuration only — model resolution, and whether the
+API-key env var it resolves to is set and non-empty — and never contacts the
+configured endpoint. Actually reaching the endpoint requires the LLM call
+itself, so it stays out of scope for a fast, offline preflight; `copperhead
+do` with a trivial request is the way to verify end-to-end connectivity.
+
+`doctor` does not classify endpoints as auth-required vs. no-auth; it always
+checks that the configured env var name is set to a non-empty value,
+regardless of whether the endpoint itself needs a real key. Local/no-auth
+backends like Ollama don't require a real credential, so the setup docs have
+the user point the configured env var at any non-empty placeholder (e.g.
+`OLLAMA_API_KEY=ollama`) so the check still passes.
 
 ### D7 — Privacy warning is emitted by `doctor` and at `run-start`
 

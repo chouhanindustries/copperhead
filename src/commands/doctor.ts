@@ -140,9 +140,10 @@ export function checkCredential(
           hint: 'export ANTHROPIC_API_KEY=... (or use --model claude-code for saved login).',
         };
   }
-  // OpenAI or OpenAI-compatible endpoint.
-  const baseURL = env.COPPERHEAD_BASE_URL ?? config?.openaiCompatBaseUrl;
-  const apiKeyEnvName = env.COPPERHEAD_API_KEY_ENV ?? config?.openaiCompatApiKeyEnv ?? 'OPENAI_API_KEY';
+  // OpenAI or OpenAI-compatible endpoint. `||` (not `??`): an env var set to
+  // the empty string must fall through to config/default, not win as "".
+  const baseURL = env.COPPERHEAD_BASE_URL || config?.openaiCompatBaseUrl;
+  const apiKeyEnvName = env.COPPERHEAD_API_KEY_ENV || config?.openaiCompatApiKeyEnv || 'OPENAI_API_KEY';
   const key = env[apiKeyEnvName];
   const endpointStr = baseURL ? ` -> ${baseURL}` : ' -> api.openai.com (default)';
   return key
@@ -167,7 +168,7 @@ function providerCheck(
     const cred = checkCredential(model, env, config);
     const checks: DoctorCheck[] = [cred];
     // Append a privacy info row for known free-tier endpoints.
-    const baseURL = env.COPPERHEAD_BASE_URL ?? config.openaiCompatBaseUrl;
+    const baseURL = env.COPPERHEAD_BASE_URL || config.openaiCompatBaseUrl;
     if (isPrivacySensitiveEndpoint(baseURL, model)) {
       checks.push({
         name: 'privacy',

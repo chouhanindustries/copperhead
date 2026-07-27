@@ -1,4 +1,4 @@
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { OpenAIProvider } from '../src/agent/providers/openai.js';
 import { loadConfig } from '../src/config.js';
 import { makeProvider, isPrivacySensitiveEndpoint } from '../src/agent/loop.js';
@@ -23,8 +23,13 @@ describe('isPrivacySensitiveEndpoint', () => {
     expect(isPrivacySensitiveEndpoint('https://openrouter.ai/api/v1', 'mistral-7b')).toBe(true);
   });
 
-  it('returns true when model name contains :free suffix', () => {
-    expect(isPrivacySensitiveEndpoint('https://openrouter.ai/api/v1', 'mistral-7b:free')).toBe(true);
+  it('returns true when model name contains :free suffix (independent of domain)', () => {
+    // Use a non-listed domain so only the :free branch can trigger.
+    expect(isPrivacySensitiveEndpoint('https://api.example.com/v1', 'mistral-7b:free')).toBe(true);
+  });
+
+  it('returns false for non-:free model on an unlisted domain', () => {
+    expect(isPrivacySensitiveEndpoint('https://api.example.com/v1', 'mistral-7b')).toBe(false);
   });
 
   it('returns false for Groq endpoint', () => {
@@ -40,6 +45,20 @@ describe('isPrivacySensitiveEndpoint', () => {
 // OpenAIProvider — constructor wires baseURL
 // ---------------------------------------------------------------------------
 describe('OpenAIProvider baseURL', () => {
+  // The constructor's `apiKey` default param reads `process.env.OPENAI_API_KEY`
+  // at call time, so an ambient key (dev shell, CI secret) would let the
+  // "missing key" cases below construct successfully instead of throwing.
+  const savedOpenAiKey = process.env.OPENAI_API_KEY;
+
+  beforeEach(() => {
+    delete process.env.OPENAI_API_KEY;
+  });
+
+  afterEach(() => {
+    if (savedOpenAiKey === undefined) delete process.env.OPENAI_API_KEY;
+    else process.env.OPENAI_API_KEY = savedOpenAiKey;
+  });
+
   it('constructs without throwing when a baseURL and key are provided', () => {
     expect(() => new OpenAIProvider('llama-3.3-70b-versatile', 'gsk_test_key', 'https://api.groq.com/openai/v1')).not.toThrow();
   });
@@ -168,5 +187,29 @@ describe('checkCredential OpenAI-compatible endpoint', () => {
     const check = checkCredential('gpt-5', { OPENAI_API_KEY: 'sk-test' });
     expect(check.status).toBe('ok');
     expect(check.detail).toContain('OPENAI_API_KEY');
+  });
+
+  it('env vars override config fields (COPPERHEAD_API_KEY_ENV > openaiCompatApiKeyEnv)', () => {
+    // Config says CEREBRAS_API_KEY, but env says GROQ_API_KEY — env wins.
+    const check = checkCredential(
+      'llama-3.3-70b-versatile',
+      { COPPERHEAD_API_KEY_ENV: 'GROQ_API_KEY', GROQ_API_KEY: 'gsk_test' },
+      { openaiCompatBaseUrl: 'https://api.cerebras.ai/v1', openaiCompatApiKeyEnv: 'CEREBRAS_API_KEY' },
+    );
+    expect(check.status).toBe('ok');
+    expect(check.detail).toContain('GROQ_API_KEY');
+    // Should NOT contain the config-level key name since env overrides it.
+    expect(check.detail).not.toContain('CEREBRAS_API_KEY');
+  });
+
+  it('env COPPERHEAD_BASE_URL overrides config openaiCompatBaseUrl in detail string', () => {
+    const check = checkCredential(
+      'llama-3.3-70b-versatile',
+      { COPPERHEAD_BASE_URL: 'https://api.groq.com/openai/v1', GROQ_API_KEY: 'gsk_test', COPPERHEAD_API_KEY_ENV: 'GROQ_API_KEY' },
+      { openaiCompatBaseUrl: 'https://api.cerebras.ai/v1', openaiCompatApiKeyEnv: 'GROQ_API_KEY' },
+    );
+    expect(check.status).toBe('ok');
+    expect(check.detail).toContain('api.groq.com');
+    expect(check.detail).not.toContain('cerebras');
   });
 });

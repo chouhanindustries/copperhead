@@ -125,9 +125,11 @@ export async function makeProvider(model: string, sessionResume = false, config?
     return new AnthropicProvider(model === 'claude' ? undefined : model);
   }
   // OpenAI-compatible catch-all: resolve baseURL and API key env-var with
-  // precedence: env var > config field > hard default.
-  const baseURL = process.env.COPPERHEAD_BASE_URL ?? config?.openaiCompatBaseUrl;
-  const apiKeyEnv = process.env.COPPERHEAD_API_KEY_ENV ?? config?.openaiCompatApiKeyEnv ?? 'OPENAI_API_KEY';
+  // precedence: env var > config field > hard default. `||` (not `??`): an
+  // env var set to the empty string (e.g. a sourced .env.example placeholder)
+  // must fall through to config/default rather than winning as "".
+  const baseURL = process.env.COPPERHEAD_BASE_URL || config?.openaiCompatBaseUrl;
+  const apiKeyEnv = process.env.COPPERHEAD_API_KEY_ENV || config?.openaiCompatApiKeyEnv || 'OPENAI_API_KEY';
   const apiKey = process.env[apiKeyEnv];
   return new OpenAIProvider(model === 'gpt-5' ? undefined : model, apiKey, baseURL);
 }
@@ -268,7 +270,7 @@ async function runWithMemory(
   // Privacy notice: if the configured endpoint is a known free-tier domain that
   // may train on prompts, surface it at run-start so it appears in the transcript
   // even for non-interactive runs. Doctor surfaces this more prominently pre-run.
-  const privacyBaseURL = process.env.COPPERHEAD_BASE_URL ?? config.openaiCompatBaseUrl;
+  const privacyBaseURL = process.env.COPPERHEAD_BASE_URL || config.openaiCompatBaseUrl;
   if (isPrivacySensitiveEndpoint(privacyBaseURL, opts.model)) {
     log('⚠  warning: configured provider/tier may use prompt data for training. PCB designs are often proprietary — verify the data policy before running on confidential hardware.');
   }

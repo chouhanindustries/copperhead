@@ -66,31 +66,34 @@ Run `copperhead doctor` before any agent session to verify:
 - **kicad-cli** is on PATH and returns a version string
 - The configured **model/provider** resolves correctly
 - The **API key** env var is set and non-empty
-- The **endpoint** responds to a lightweight probe request
 - Whether the configured tier has a known **privacy risk**
 
-```
-  ✓  kicad-cli       found (8.0.8)
-  ✓  model           resolved to "llama-3.3-70b-versatile" (source: env)
-  ✓  api-key         GROQ_API_KEY=gsk_abc12345**** → https://api.groq.com/openai/v1
-  ✓  endpoint        https://api.groq.com/openai/v1 is reachable
-  ✓  privacy         no known training-on-prompts risk for this endpoint
+> Doctor is LLM-free and network-free by design. It checks local
+> configuration only — it does not probe the remote endpoint. Use
+> `copperhead do` with a trivial request to verify end-to-end connectivity.
 
-copperhead doctor: all checks passed
+```
+  [ok]  node      v22.15.0 (>= 20)
+  [ok]  kicad-cli 8.0.8
+  [ok]  git       2.45.0
+  [ok]  provider  llama-3.3-70b-versatile -> openai-compat: GROQ_API_KEY set -> https://api.groq.com/openai/v1
+  [info] project   no .copperhead/config.json (run `copperhead init` to scaffold)
+ready
 ```
 
 ## Privacy warning
 
-Some free tiers may train on your prompts. Copperhead surfaces a warning
-for **Gemini free** (`generativelanguage.googleapis.com`) and **OpenRouter
-`:free` model suffix** both in `copperhead doctor` and at run-start in the
+Some free tiers may train on your prompts. Copperhead surfaces a warning for
+**any Gemini endpoint** (`generativelanguage.googleapis.com` — detection is
+not tier-aware, so this fires for paid Gemini usage too) and **OpenRouter
+`:free` model suffix**, both in `copperhead doctor` and at run-start in the
 transcript.
 
 | Provider | Free tier | Training risk |
 |----------|-----------|---------------|
 | Groq | Yes | Not known (check [data policy](https://groq.com/privacy-policy)) |
 | Cerebras | Yes | Not known (check [data policy](https://cerebras.ai/privacy)) |
-| Gemini | Yes | ⚠ Yes on free tier — use paid tier for confidential designs |
+| Gemini | Yes | ⚠ Yes on free tier — use paid tier for confidential designs. Doctor warns on this endpoint regardless of tier |
 | OpenRouter `:free` | Yes | ⚠ Depends on upstream model — check per-model policy |
 | Ollama local | Fully local | ✓ No data leaves your machine |
 
