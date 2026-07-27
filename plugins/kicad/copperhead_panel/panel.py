@@ -12,6 +12,7 @@ import wx
 import wx.aui
 
 from .client import ServeClient, config_path, find_cli
+from .logic import decide_submit, hello_status, resolve_project_dir, should_respawn
 
 PANE_NAME = "copperhead"
 _state = {"panel": None, "floater": None}
@@ -71,18 +72,15 @@ class CopperheadPanel(wx.Panel):
         """The open board's directory, or home. `_dir_reason` records why the
         fallback was taken so the boot log can say so instead of silently
         running in the wrong place."""
-        self._dir_reason = None
-        try:
+
+        def board_file():
             import pcbnew
 
             board = pcbnew.GetBoard()
-            board_file = board.GetFileName() if board is not None else ""
-            if board_file:
-                return os.path.dirname(os.path.abspath(board_file))
-            self._dir_reason = "no board file is open (unsaved board?)"
-        except Exception as exc:
-            self._dir_reason = "GetBoard failed: %s" % exc
-        return os.path.expanduser("~")
+            return board.GetFileName() if board is not None else ""
+
+        directory, self._dir_reason = resolve_project_dir(board_file)
+        return directory
 
     def _boot(self):
         cli = find_cli()
@@ -128,10 +126,9 @@ class CopperheadPanel(wx.Panel):
         event = obj.get("event")
         if event == "hello":
             self.restarts = 0  # a working serve resets the respawn budget
-            data = obj.get("data", {})
-            model = data.get("model") or "no model configured"
-            self.status.SetLabel("%s · %s" % (model, data.get("repoRoot", "?")))
-            self.status.SetForegroundColour(COPPER if data.get("model") else ERR)
+            label, healthy = hello_status(obj.get("data", {}))
+            self.status.SetLabel(label)
+            self.status.SetForegroundColour(COPPER if healthy else ERR)
             queued, self.pending_request = self.pending_request, None
             if queued and self.client is not None and self.active_id is None:
                 self._send(queued)
@@ -163,7 +160,7 @@ class CopperheadPanel(wx.Panel):
             return  # deliberate shutdown
         stderr = list(self.client.last_stderr)
         self.restarts += 1
-        if self.restarts > 3:
+        if not should_respawn(self.restarts):
             self.status.SetLabel("serve keeps exiting (%s)" % code)
             self.status.SetForegroundColour(ERR)
             for line in stderr:
@@ -184,38 +181,38 @@ class CopperheadPanel(wx.Panel):
     # -- user events -------------------------------------------------------
 
     def _on_submit(self, _evt):
-        text = self.input.GetValue().strip()
-        if not text or self.client is None or not self.client.alive():
+        text = self.input.GetValue()
+        alive = self.client is not None and self.client.alive()
+        current = self.client.project_dir if self.client is not None else None
+        action, arg = decide_submit(
+            text,
+            client_alive=alive,
+            run_active=self.active_id is not None,
+            current_dir=current,
+            want_dir=self._project_dir(),
+        )
+        if action == "ignore":
             return
-        if self.active_id is not None:
-            return  # input is disabled anyway; single flight mirrors serve
-        # Slash commands are REPL vocabulary; running them as change requests
-        # burns an agent run on "/clear". Handle the one that makes sense in
-        # a pane locally and steer the rest.
-        if text.startswith("/"):
+        if action == "clear":
             self.input.SetValue("")
-            if text in ("/clear", "/cls"):
-                self.log.SetValue("")
-            else:
-                self._append(
-                    "%s: slash commands live in the terminal REPL; this pane runs change requests\n" % text,
-                    DIM,
-                )
+            self.log.SetValue("")
             return
-        # The board can change under a long-lived pane; serve's cwd decides
-        # which repo gets edited, so re-resolve per submit and restart the
-        # child in the new project before sending (the request is queued
-        # through the hello so nothing is lost).
-        want = self._project_dir()
-        if self.client is not None and want != self.client.project_dir:
-            self._append("project changed: %s\n" % want, DIM)
+        if action == "steer":
             self.input.SetValue("")
-            self.pending_request = text
+            self._append(arg + "\n", DIM)
+            return
+        if action == "switch":
+            # The board changed under the pane; serve's cwd decides which
+            # repo gets edited, so restart it in the new project and queue
+            # the request through the hello so nothing is lost.
+            self._append("project changed: %s\n" % arg, DIM)
+            self.input.SetValue("")
+            self.pending_request = text.strip()
             client, self.client = self.client, None
             client.stop()
             self._boot()
             return
-        self._send(text)
+        self._send(arg)
 
     def _send(self, text):
         self._append("\n> %s\n" % text, COPPER)

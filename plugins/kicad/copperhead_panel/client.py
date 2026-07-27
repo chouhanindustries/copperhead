@@ -26,19 +26,20 @@ def config_path():
     return os.path.join(_settings_dir(), "copperhead_panel.json")
 
 
-def find_cli():
+def find_cli(config_file=None, which=shutil.which):
     """Locate the copperhead CLI: config file first, then PATH (D4).
 
     Returns the executable path, or None (the panel renders an install hint).
+    The parameters exist for tests; production callers pass nothing.
     """
     try:
-        with open(config_path(), "r", encoding="utf-8") as fh:
+        with open(config_file or config_path(), "r", encoding="utf-8") as fh:
             configured = json.load(fh).get("cli")
         if configured and os.path.exists(configured):
             return configured
     except Exception:
         pass
-    return shutil.which("copperhead")
+    return which("copperhead")
 
 
 class ServeClient:

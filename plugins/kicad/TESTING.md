@@ -4,6 +4,13 @@ Pane behavior needs a live pcbnew, so it is verified by hand (AC-114B.8),
 the same way the Phase A live IPC suite gates on a real KiCad. Run this
 checklist on each platform before a release that touches `plugins/kicad/`.
 
+The pane's decision logic and the serve child client are NOT manual-only:
+`plugins/kicad/tests/` covers them with stdlib unittest (discovery order,
+restart budget, project-dir fallback reasons, project switching, slash
+handling, NDJSON framing, stderr capture, kill semantics), and the vitest
+suite runs it via `test/kicad-panel-py.test.ts`. This checklist is only for
+what genuinely needs wx and a live board.
+
 Setup: KiCad 9 or 10, API server enabled (Preferences > Plugins > "Enable
 KiCad API"), a board open, `copperhead` on PATH, the addon installed from
 the PCM zip (`node scripts/build-pcm-addon.mjs`, then Plugin and Content

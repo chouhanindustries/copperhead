@@ -3,7 +3,10 @@
 Status note: implemented; offline suite green (serve protocol, packaging). The
 end-to-end smoke (plugin client.py driving the real built CLI: hello handshake,
 streamed check, result) passed locally. Live pcbnew pane verification runs via
-plugins/kicad/TESTING.md before release.
+plugins/kicad/TESTING.md before release. Post-implementation hardening from
+live bring-up: wx-free decision logic extracted to copperhead_panel/logic.py
+and covered, with client.py, by plugins/kicad/tests/ (29 unittest scenarios,
+bridged into vitest via test/kicad-panel-py.test.ts).
 
 Implements AC-114B.1 through AC-114B.8 (proposal.md). Design decisions D1 through D6 in design.md.
 

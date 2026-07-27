@@ -179,6 +179,58 @@ describe('streamed runs (AC-114B.2)', () => {
   });
 });
 
+describe('protocol edges (AC-114B.1, AC-114B.2)', () => {
+  it('rejects an empty request string as bad-request', async () => {
+    const s = session();
+    s.send({ id: 'e', method: 'run', params: { request: '   ' } });
+    await sleep(30);
+    s.end();
+    await s.done;
+    expect(s.wire().find((o) => o.id === 'e')!.error).toMatchObject({ code: 'bad-request' });
+  });
+
+  it('accepts numeric ids and echoes them as strings', async () => {
+    const s = session();
+    s.send({ id: 7, method: 'run', params: { request: 'x' } });
+    await sleep(30);
+    s.end();
+    await s.done;
+    expect(s.wire().find((o) => o.result)?.id).toBe('7');
+  });
+
+  it('splits multi-line log output into one event per line', async () => {
+    const s = session({
+      runRequest: async (_r, log) => {
+        log('line one\nline two');
+        return { outcome: 'success', summary: 'ok', filesTouched: [] };
+      },
+    });
+    s.send({ id: 'm', method: 'run', params: { request: 'x' } });
+    await sleep(30);
+    s.end();
+    await s.done;
+    const lines = s.wire().filter((o) => o.id === 'm' && o.event === 'log').map((o) => o.data?.line);
+    expect(lines).toEqual(['line one', 'line two']);
+  });
+
+  it('EOF during an in-flight run still emits the result before exiting', async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const s = session({
+      runRequest: async () => {
+        await gate;
+        return { outcome: 'success', summary: 'late finish', filesTouched: [] };
+      },
+    });
+    s.send({ id: 'r', method: 'run', params: { request: 'slow' } });
+    await sleep(20);
+    s.end(); // the consumer walks away mid-run
+    release();
+    await s.done; // resolves only after the run drained
+    expect(s.wire().find((o) => o.id === 'r' && o.result)?.result).toMatchObject({ summary: 'late finish' });
+  });
+});
+
 describe('single flight (AC-114B.3)', () => {
   it('rejects a second run with busy while the first is active, without disturbing it', async () => {
     let release!: () => void;
@@ -204,6 +256,26 @@ describe('single flight (AC-114B.3)', () => {
       outcome: 'success',
       summary: 'finished first',
     });
+  });
+
+  it('check is also rejected while a run is active', async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const s = session({
+      runRequest: async () => {
+        await gate;
+        return { outcome: 'success', summary: 'ok', filesTouched: [] };
+      },
+    });
+    s.send({ id: 'slow', method: 'run', params: { request: 'first' } });
+    await sleep(20);
+    s.send({ id: 'chk', method: 'check' });
+    await sleep(20);
+    expect(s.wire().find((o) => o.id === 'chk')!.error).toMatchObject({ code: 'busy' });
+    release();
+    await sleep(20);
+    s.end();
+    await s.done;
   });
 });
 
