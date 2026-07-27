@@ -1,0 +1,22 @@
+name: Labeler
+
+# Applies area:* / documentation / chore labels from the paths a PR touches.
+# Config lives in .github/labeler.yml.
+#
+# pull_request_target so the token can write labels on fork PRs. Safe because
+# the job never checks out or runs PR code; the labeler action only reads the
+# changed-files list from the API.
+on:
+  pull_request_target:
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  label:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/labeler@v5
+        with:
+          sync-labels: true

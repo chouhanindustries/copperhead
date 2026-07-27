@@ -11,6 +11,7 @@ import { loadConfig, CONFIG_DIR, type CopperheadConfig } from '../config.js';
 import { Transcript, type ExitPath, type RunStats } from './transcript.js';
 import { collectRunMeta, renderCliHeader, type RunMeta, type RunMetaInput } from './runmeta.js';
 import { plainRenderer, fmtDuration, fmtTokens, type ProgressRenderer } from './render.js';
+import { styleHeaderLines } from './theme.js';
 import { ObligationsLedger } from './ledger.js';
 import { gitPreflight, isDirty, snapshot, restore, commitAll, changedFiles, preserveFailedRun } from '../util/git.js';
 import { withRetry, isRateLimit, sessionLimit } from '../util/retry.js';
@@ -254,7 +255,7 @@ async function runWithMemory(
     interactive: opts.interactive ?? false,
     input: opts.meta,
   });
-  for (const line of renderCliHeader(meta)) log(line);
+  for (const line of styleHeaderLines(renderCliHeader(meta))) log(line);
   // Revisit obligations deferred while their artifact didn't exist re-open now
   // if it does (must run before loadConstraints so the prompt sees the updated
   // registry). They land in this run's fresh ledger, so finish gates on them.

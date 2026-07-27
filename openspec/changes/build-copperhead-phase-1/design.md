@@ -51,7 +51,7 @@ Tools are defined once as `{ name, description, jsonSchema, handler }` in `src/a
 
 ### D6 — Run lifecycle: git snapshot, transcript, structured commit
 
-`do` refuses a dirty tree unless `--allow-dirty` (which takes a `git stash create` snapshot; clean trees snapshot via the current HEAD). Every run writes a JSONL transcript to `.copperhead/runs/<timestamp>/`, with a redaction pass (`sk-[A-Za-z0-9_-]+` and generic bearer-token patterns) applied at write time, not post-hoc (AC-4.1). Success path: single `git commit` with the structured message; failure path: hard restore to snapshot, print transcript path, exit 1.
+`do` and `repl` refuse a dirty tree unless `--allow-dirty` (whose snapshot pairs a `git stash create` object for tracked changes with a tree object for the untracked, non-ignored files the stash cannot capture, so the rollback's `git clean -fd` cannot destroy them; clean trees snapshot via the current HEAD). Every run writes a JSONL transcript to `.copperhead/runs/<timestamp>/`, with a redaction pass (`sk-[A-Za-z0-9_-]+` and generic bearer-token patterns) applied at write time, not post-hoc (AC-4.1). Success path: single `git commit` with the structured message; failure path: hard restore to snapshot, print transcript path, exit 1.
 
 ### D7 — Spec-gating: OpenSpec as subprocess, proposal-as-plan
 

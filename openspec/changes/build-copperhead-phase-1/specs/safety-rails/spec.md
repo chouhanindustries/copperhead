@@ -10,11 +10,19 @@ All file tools SHALL resolve paths relative to the repo root and reject any path
 - **THEN** the call is rejected with an error and no file outside the repo is read or written
 
 ### Requirement: Git-state preconditions and rollback
-`do` SHALL refuse to start on a dirty git tree unless `--allow-dirty` is passed (which snapshots via `git stash create`); on unrecoverable failure the working tree SHALL be restored to the pre-run snapshot.
+`do` and `repl` SHALL refuse to start on a dirty git tree unless `--allow-dirty` is passed, whose snapshot pairs a `git stash create` object for tracked changes with a tree object for the untracked-but-not-ignored files that `git stash create` cannot capture; on unrecoverable failure the working tree SHALL be restored to the pre-run snapshot, tracked and untracked alike.
 
 #### Scenario: Dirty tree refusal (AC-3.8)
-- **WHEN** the repo has uncommitted changes and `do` runs without `--allow-dirty`
+- **WHEN** the repo has uncommitted changes and `do` or `repl` runs without `--allow-dirty`
 - **THEN** it refuses to start and suggests `--allow-dirty`
+
+#### Scenario: Untracked work survives a rollback (AC-3.8)
+- **WHEN** a run started with `--allow-dirty` fails unrecoverably and the tree held untracked, non-ignored files before the run
+- **THEN** the rollback restores those files along with the tracked modifications, and gitignored paths are neither captured nor disturbed
+
+#### Scenario: Unsnapshottable untracked file refused
+- **WHEN** a run starts with `--allow-dirty` and an untracked, non-ignored file exists that copperhead cannot read
+- **THEN** it refuses to start, names the file, and explains that the rollback would delete it with nothing to restore it from
 
 #### Scenario: Snapshot restore
 - **WHEN** a run fails unrecoverably

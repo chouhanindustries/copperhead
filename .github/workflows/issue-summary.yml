@@ -1,0 +1,46 @@
+name: Issue summary
+
+# Posts a short tl;dr comment on new issues so maintainers can triage from
+# the notification list without opening every issue. Uses GitHub Models via
+# actions/ai-inference; the token only needs models: read for that.
+on:
+  issues:
+    types: [opened]
+
+permissions:
+  contents: read
+  issues: write
+  models: read
+
+jobs:
+  summary:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Summarize the issue
+        id: inference
+        uses: actions/ai-inference@v1
+        with:
+          system-prompt: >
+            You write one-line triage notes for a maintainer of copperhead,
+            a CLI tool that edits KiCad circuit board projects. Write like a
+            person leaving a quick note, not like a report. Plain sentences
+            only: no headings, no bullet points, no bold text, no em dashes,
+            and never phrases like "the user reports" or "this issue
+            describes". Just say what is going on and what part of the tool
+            it touches, in two or three short sentences at most. If the
+            issue is too thin to summarize, say what is missing instead.
+          prompt: |
+            Issue title: ${{ github.event.issue.title }}
+
+            Issue body:
+            ${{ github.event.issue.body }}
+
+      - name: Post the summary
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ISSUE_URL: ${{ github.event.issue.html_url }}
+          # Passed via env, never interpolated into the script, so model
+          # output cannot inject shell.
+          RESPONSE: ${{ steps.inference.outputs.response }}
+        run: |
+          gh issue comment "$ISSUE_URL" --body "tl;dr: $RESPONSE"
