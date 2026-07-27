@@ -3,7 +3,7 @@
 **Bounty:** `copperhead create` end-to-end test + smoke harness ($50)
 **Author:** Chirag6722
 **Date:** 2026-07-25
-**PR:** https://github.com/chouhanindustries/copperhead/pull/77
+**PR:** <https://github.com/chouhanindustries/copperhead/pull/77>
 
 ## Summary
 
