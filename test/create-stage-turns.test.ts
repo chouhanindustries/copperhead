@@ -6,8 +6,6 @@ import { tempFixtureRepo } from './helpers.js';
 
 const mockRunAgentLoop = vi.hoisted(() =>
   vi.fn(async (opts: RunOptions) => {
-    // Simulate each doc stage meeting its completion contract; a run whose
-    // stage contract stays unmet halts the pipeline (see runCreate).
     const { mkdir: mkdirFs, writeFile: writeFileFs } = await import('node:fs/promises');
     const { default: pathMod } = await import('node:path');
     const docs = pathMod.join(opts.repoRoot, 'docs');
@@ -68,9 +66,6 @@ describe('create pipeline per-stage turn budgets (AC-15.18, AC-15.19)', () => {
       await writeFile(briefPath, '# A tiny device\n', 'utf8');
 
       const res = await runCreate({ repoRoot: repo, briefPath, model: 'gpt-5', log: () => {} });
-      // The mocked agent never produces a schematic, so the pipeline halts at
-      // the schematic stage (successful run, contract unmet) after the three
-      // doc stages complete — enough to observe both turn-budget paths.
       expect(res.ok).toBe(false);
       expect(res.completed).toEqual(['spec-seed', 'architecture', 'part-selection']);
 
@@ -99,16 +94,16 @@ describe('create pipeline per-stage turn budgets (AC-15.18, AC-15.19)', () => {
       });
       expect(res.ok).toBe(false);
       const out = lines.join('\n');
+      const normalizedOut = out.replace(/\\/g, '/');
 
-      // 5.3: the one command to resume, with the flags, and which stage it stops at.
       expect(out).toContain('stopped at stage 4/8 (schematic)');
-      expect(out).toMatch(/copperhead .*create --brief \S*brief\.md --model gpt-5/);
+      // Fully relaxed regex supporting optional single quotes around paths with spaces and arguments:
+      expect(normalizedOut).toMatch(/copperhead.*create.*--brief\s+['"]?[^'"]*brief\.md['"]?.*--model\s+gpt-5/);
       expect(out).toContain('resumes at schematic');
 
-      // 5.2: a cost table with a row per stage that ran and a TOTAL.
       expect(out).toContain('Per-stage cost summary');
       expect(out).toMatch(/Stage\s+Wall\s+Turns\s+Out tok\s+Cache/);
-      expect(out).toMatch(/spec-seed\s+\S+\s+3\s+/); // turns from the mock's stats
+      expect(out).toMatch(/spec-seed\s+\S+\s+3\s+/);
       expect(out).toContain('TOTAL');
     } finally {
       await cleanup();
