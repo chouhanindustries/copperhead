@@ -5,7 +5,7 @@ Scenarios map onto AC-114B.1 through AC-114B.4 and AC-114B.8 in the proposal.
 ## ADDED Requirements
 
 ### Requirement: NDJSON handshake and protocol hygiene
-`copperhead serve` SHALL communicate exclusively in NDJSON (one JSON object per line) over stdio. On startup it SHALL emit exactly one `hello` object carrying the protocol version, copperhead version, resolved repo root, and resolved model, then wait for requests. A line that is not valid JSON or names an unknown method SHALL produce an `error` object referencing the offending input and SHALL NOT terminate the process. When stdin reaches EOF, serve SHALL exit.
+`copperhead serve` SHALL communicate exclusively in NDJSON (one JSON object per line) over stdio. On startup it SHALL emit exactly one `hello` object carrying the protocol version, copperhead version, resolved repo root, and resolved model (null when no model is configured: serve still starts, `check` still works, and each `run` request fails with a `no-model` error carrying the configuration guidance; exiting at startup instead would put embedders into a respawn loop), then wait for requests. A line that is not valid JSON or names an unknown method SHALL produce an `error` object referencing the offending input and SHALL NOT terminate the process. When stdin reaches EOF, serve SHALL exit.
 
 #### Scenario: Handshake (AC-114B.1)
 - **WHEN** `copperhead serve` starts in a configured repo
@@ -14,6 +14,10 @@ Scenarios map onto AC-114B.1 through AC-114B.4 and AC-114B.8 in the proposal.
 #### Scenario: Malformed input (AC-114B.1)
 - **WHEN** a client sends a line that is not valid JSON, or a valid object with an unknown method
 - **THEN** serve emits an `error` object and continues serving subsequent requests
+
+#### Scenario: No model configured (AC-114B.1)
+- **WHEN** serve starts in a repo where no model resolves (no flag, env, config, or key)
+- **THEN** the `hello` object carries `model: null`, `check` requests succeed, and `run` requests receive a `no-model` error instead of the process exiting
 
 #### Scenario: Consumer disappears
 - **WHEN** stdin closes

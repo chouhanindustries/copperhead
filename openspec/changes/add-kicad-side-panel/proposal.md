@@ -26,7 +26,7 @@ Phase A gave the agent eyes into a running KiCad; the user still has to keep a t
 
 ## Acceptance Criteria (AC-114B)
 
-- **AC-114B.1 serve handshake**: `copperhead serve` started in a repo prints exactly one `hello` NDJSON object (protocol version, copperhead version, repo root, resolved model) and then waits; malformed input lines produce an `error` object, never a crash.
+- **AC-114B.1 serve handshake**: `copperhead serve` started in a repo prints exactly one `hello` NDJSON object (protocol version, copperhead version, repo root, resolved model or null) and then waits; malformed input lines produce an `error` object, never a crash; an unresolvable model is not fatal (check works, runs get a `no-model` error).
 - **AC-114B.2 streamed run**: a `run` request streams `log` events during the run and ends with exactly one `result` object carrying the run outcome (`success`/`refused`/`failure`), summary, and files touched; the underlying run is the same gated loop `do` uses (spec-gated in, verification-gated out).
 - **AC-114B.3 single flight**: a `run` sent while a run is active is rejected with a `busy` error without disturbing the active run.
 - **AC-114B.4 redaction**: strings matching the secret pattern (AC-4.1) are redacted in every NDJSON object serve emits.

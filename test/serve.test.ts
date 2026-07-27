@@ -102,6 +102,27 @@ describe('handshake and protocol hygiene (AC-114B.1)', () => {
   });
 });
 
+describe('model-less startup (AC-114B.1)', () => {
+  it('still handshakes and checks; runs fail with a no-model error instead of exiting', async () => {
+    const s = session({
+      model: null,
+      modelSource: null,
+      modelError: 'no model configured: pass --model, set COPPERHEAD_MODEL, or export an API key',
+    });
+    s.send({ id: 'r', method: 'run', params: { request: 'add an LED' } });
+    s.send({ id: 'c', method: 'check' });
+    await sleep(40);
+    s.end();
+    await s.done; // process-level: EOF still resolves, no startup crash
+    const wire = s.wire();
+    expect(wire[0]!.event).toBe('hello');
+    expect(wire[0]!.data!.model).toBeNull();
+    expect(wire.find((o) => o.id === 'r')!.error).toMatchObject({ code: 'no-model' });
+    expect(String(wire.find((o) => o.id === 'r')!.error!.message)).toContain('COPPERHEAD_MODEL');
+    expect(wire.find((o) => o.id === 'c' && o.result)?.result).toEqual({ ok: true });
+  });
+});
+
 describe('streamed runs (AC-114B.2)', () => {
   it('streams log events then exactly one result with outcome, summary, files', async () => {
     const s = session();

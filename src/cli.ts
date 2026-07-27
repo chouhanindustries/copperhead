@@ -272,11 +272,22 @@ program
     try {
       const kicadVer = await kicadCliVersion();
       const config = await loadConfig(repo);
-      const { model, source } = resolveModel(opts.model, config);
+      // No model is not fatal for serve: the handshake and `check` work
+      // without one, and each `run` gets a no-model error with guidance.
+      // Exiting here instead put embedders into a respawn loop (AC-114B.1).
+      let model: string | null = null;
+      let source: ModelSource | null = null;
+      let modelError: string | undefined;
+      try {
+        ({ model, source } = resolveModel(opts.model, config));
+      } catch (err) {
+        modelError = (err as Error).message;
+      }
       await runServe({
         repoRoot: repo,
         model,
         modelSource: source,
+        ...(modelError !== undefined ? { modelError } : {}),
         version,
         kicadCliVersion: kicadVer,
         ...(opts.maxTurns ? { maxTurns: parseMaxTurns(opts.maxTurns) } : {}),

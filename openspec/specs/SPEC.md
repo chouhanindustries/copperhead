@@ -534,7 +534,7 @@ Format: Given / When / Then. "Fixture" = the open-telegraph repo (or the tiny te
 
 ### AC-114B · KiCad side panel (change: add-kicad-side-panel, issue #114 Phase B)
 
-- **AC-114B.1 (serve handshake)** `copperhead serve` emits exactly one `hello` NDJSON object (protocol version, copperhead version, repo root, resolved model) and then waits; malformed input lines produce an `error` object, never a crash; stdin EOF exits the process.
+- **AC-114B.1 (serve handshake)** `copperhead serve` emits exactly one `hello` NDJSON object (protocol version, copperhead version, repo root, resolved model or null) and then waits; malformed input lines produce an `error` object, never a crash; stdin EOF exits the process. An unresolvable model is not fatal: `check` works and `run` requests get a `no-model` error with guidance.
 - **AC-114B.2 (streamed run)** A `run` request streams `log` events and ends with exactly one `result` object (outcome, summary, files touched); the run is the same gated loop `do` uses.
 - **AC-114B.3 (single flight)** A `run` sent while a run is active is rejected with a `busy` error without disturbing the active run. The protocol has no cancel method; interruption is the embedder terminating the process.
 - **AC-114B.4 (redaction)** Secret-pattern strings (AC-4.1) are redacted in every NDJSON object serve emits.

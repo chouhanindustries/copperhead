@@ -92,9 +92,13 @@ class CopperheadPanel(wx.Panel):
             )
             self.input.Disable()
             return
+        project_dir = self._project_dir()
+        # Name the exact CLI and cwd: when something misbehaves, "which
+        # binary did it actually run" is the first diagnostic question.
+        self._append("serve: %s (in %s)\n" % (cli, project_dir), DIM)
         self.client = ServeClient(
             cli,
-            self._project_dir(),
+            project_dir,
             on_message=lambda obj: wx.CallAfter(self._on_message, obj),
             on_exit=lambda code: wx.CallAfter(self._on_serve_exit, code),
         )
@@ -114,10 +118,9 @@ class CopperheadPanel(wx.Panel):
         if event == "hello":
             self.restarts = 0  # a working serve resets the respawn budget
             data = obj.get("data", {})
-            self.status.SetLabel(
-                "%s · %s" % (data.get("model", "?"), data.get("repoRoot", "?"))
-            )
-            self.status.SetForegroundColour(COPPER)
+            model = data.get("model") or "no model configured"
+            self.status.SetLabel("%s · %s" % (model, data.get("repoRoot", "?")))
+            self.status.SetForegroundColour(COPPER if data.get("model") else ERR)
             return
         if event == "log":
             self._append(str(obj.get("data", {}).get("line", "")) + "\n", None)

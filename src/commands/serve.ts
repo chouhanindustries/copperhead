@@ -30,8 +30,16 @@ export const SERVE_PROTOCOL_VERSION = 1;
 
 export interface ServeOptions {
   repoRoot: string;
-  model: string;
-  modelSource: ModelSource;
+  /**
+   * Null when no model is configured anywhere. Serve still starts (the
+   * handshake and `check` need no model); only `run` requests fail, each
+   * with a `no-model` error carrying `modelError`'s guidance. Dying at
+   * startup instead turned a config gap into an embedder respawn loop.
+   */
+  model: string | null;
+  modelSource: ModelSource | null;
+  /** The resolveModel failure message shown on `no-model` run errors. */
+  modelError?: string;
   version: string;
   kicadCliVersion: string;
   maxTurns?: number;
@@ -76,7 +84,9 @@ export async function runServe(opts: ServeOptions): Promise<void> {
       const res = await runAgentLoop({
         repoRoot: opts.repoRoot,
         request,
-        model: opts.model,
+        // The no-model guard in the run dispatch keeps this unreachable
+        // when model is null; the assertion is for the type system.
+        model: opts.model as string,
         ...(opts.maxTurns !== undefined ? { maxTurns: opts.maxTurns } : {}),
         allowDirty: true,
         interactive: false,
@@ -85,7 +95,7 @@ export async function runServe(opts: ServeOptions): Promise<void> {
         log,
         meta: {
           command: 'serve',
-          modelSource: opts.modelSource,
+          ...(opts.modelSource ? { modelSource: opts.modelSource } : {}),
           version: opts.version,
           kicadCliVersion: opts.kicadCliVersion,
         },
@@ -134,6 +144,16 @@ export async function runServe(opts: ServeOptions): Promise<void> {
         const request = (req.params as { request?: unknown } | undefined)?.request;
         if (typeof request !== 'string' || request.trim() === '') {
           emit({ id, error: { code: 'bad-request', message: 'params.request must be a non-empty string' } });
+          return;
+        }
+        if (opts.model === null) {
+          emit({
+            id,
+            error: {
+              code: 'no-model',
+              message: opts.modelError ?? 'no model configured: pass --model, set COPPERHEAD_MODEL, or export an API key',
+            },
+          });
           return;
         }
         if (active !== null) {
