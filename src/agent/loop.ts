@@ -73,7 +73,19 @@ export interface RunResult {
   cacheHits: number;
 }
 
-export async function makeProvider(model: string, sessionResume = false): Promise<Provider> {
+/** Free-tier domains known to potentially train on prompts. */
+const PRIVACY_WARN_DOMAINS = ['generativelanguage.googleapis.com', 'openrouter.ai'];
+
+/** True when the configured base URL or model name suggests a free tier that may train on prompts. */
+export function isPrivacySensitiveEndpoint(baseURL: string | undefined, model: string): boolean {
+  if (!baseURL) return false;
+  const url = baseURL.toLowerCase();
+  if (PRIVACY_WARN_DOMAINS.some((d) => url.includes(d))) return true;
+  if (model.includes(':free')) return true;
+  return false;
+}
+
+export async function makeProvider(model: string, sessionResume = false, config?: { openaiCompatBaseUrl?: string; openaiCompatApiKeyEnv?: string }): Promise<Provider> {
   if (model === 'codex' || model.startsWith('codex:')) {
     const codexModel = model.startsWith('codex:') ? model.slice('codex:'.length) : undefined;
     if (codexModel === '') throw new Error('codex model override cannot be empty; use "codex" or "codex:<model-id>"');
@@ -112,7 +124,12 @@ export async function makeProvider(model: string, sessionResume = false): Promis
   if (model === 'claude' || model.startsWith('claude')) {
     return new AnthropicProvider(model === 'claude' ? undefined : model);
   }
-  return new OpenAIProvider(model === 'gpt-5' ? undefined : model);
+  // OpenAI-compatible catch-all: resolve baseURL and API key env-var with
+  // precedence: env var > config field > hard default.
+  const baseURL = process.env.COPPERHEAD_BASE_URL ?? config?.openaiCompatBaseUrl;
+  const apiKeyEnv = process.env.COPPERHEAD_API_KEY_ENV ?? config?.openaiCompatApiKeyEnv ?? 'OPENAI_API_KEY';
+  const apiKey = process.env[apiKeyEnv];
+  return new OpenAIProvider(model === 'gpt-5' ? undefined : model, apiKey, baseURL);
 }
 
 function otherProvider(current: Provider): Provider | null {
@@ -219,7 +236,7 @@ async function runWithMemory(
   // it only when the env flag is set AND config.llmCache is disabled — the same
   // condition under which we skip the CachingProvider wrap below.
   const sessionResume = process.env.COPPERHEAD_CC_SESSION_RESUME === '1' && !config.llmCache;
-  let provider = opts.provider ?? (await makeProvider(opts.model, sessionResume));
+  let provider = opts.provider ?? (await makeProvider(opts.model, sessionResume, config));
   // Cache every turn's response so a retried/restarted stage replays what it
   // already paid for instead of re-calling the model (repo-scoped, cross-run).
   // Skip an injected provider (tests drive scripted providers directly).
@@ -248,6 +265,13 @@ async function runWithMemory(
     input: opts.meta,
   });
   for (const line of renderCliHeader(meta)) log(line);
+  // Privacy notice: if the configured endpoint is a known free-tier domain that
+  // may train on prompts, surface it at run-start so it appears in the transcript
+  // even for non-interactive runs. Doctor surfaces this more prominently pre-run.
+  const privacyBaseURL = process.env.COPPERHEAD_BASE_URL ?? config.openaiCompatBaseUrl;
+  if (isPrivacySensitiveEndpoint(privacyBaseURL, opts.model)) {
+    log('⚠  warning: configured provider/tier may use prompt data for training. PCB designs are often proprietary — verify the data policy before running on confidential hardware.');
+  }
   // Revisit obligations deferred while their artifact didn't exist re-open now
   // if it does (must run before loadConstraints so the prompt sees the updated
   // registry). They land in this run's fresh ledger, so finish gates on them.

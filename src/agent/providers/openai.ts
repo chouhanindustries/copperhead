@@ -6,13 +6,20 @@ export class OpenAIProvider implements Provider {
   constructor(
     private readonly model = 'gpt-5',
     private readonly apiKey = process.env.OPENAI_API_KEY,
+    private readonly baseURL?: string,
   ) {
-    if (!this.apiKey) throw new Error('OPENAI_API_KEY is not set');
+    if (!this.apiKey) {
+      const hint = this.baseURL ? 'Set the env var named in COPPERHEAD_API_KEY_ENV (or openaiCompatApiKeyEnv in config).' : 'OPENAI_API_KEY is not set.';
+      throw new Error(hint);
+    }
   }
 
   async chat(messages: Msg[], tools: ToolSchema[], opts: ChatOpts = {}): Promise<Turn> {
     const { default: OpenAI } = await import('openai');
-    const client = new OpenAI({ apiKey: this.apiKey });
+    const client = new OpenAI({
+      apiKey: this.apiKey,
+      ...(this.baseURL ? { baseURL: this.baseURL } : {}),
+    });
     const res = await client.chat.completions.create({
       model: this.model,
       max_completion_tokens: opts.maxTokens ?? 8192,

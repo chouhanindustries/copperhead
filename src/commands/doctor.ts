@@ -5,6 +5,7 @@ import path from 'node:path';
 import { DEFAULTS, loadConfig, resolveModel, type CopperheadConfig } from '../config.js';
 import { kicadCliVersion } from '../kicad/cli.js';
 import { redactSecrets } from '../util/redact.js';
+import { isPrivacySensitiveEndpoint } from '../agent/loop.js';
 
 const execFileP = promisify(execFile);
 
@@ -97,7 +98,11 @@ async function gitCheck(probe: () => Promise<string>): Promise<DoctorCheck> {
  * Saved-login providers (codex, claude-code) need no key and can't be verified
  * offline, so they report `info` (which does not block `ok`).
  */
-export function checkCredential(model: string, env: NodeJS.ProcessEnv): DoctorCheck {
+export function checkCredential(
+  model: string,
+  env: NodeJS.ProcessEnv,
+  config?: Pick<CopperheadConfig, 'openaiCompatBaseUrl' | 'openaiCompatApiKeyEnv'>,
+): DoctorCheck {
   // A pasted API key can end up as the model value (--model sk-..., a stray
   // COPPERHEAD_MODEL); redact it before it reaches the report, same policy as
   // transcripts (AC-4.1). Routing below still uses the raw value.
@@ -135,13 +140,20 @@ export function checkCredential(model: string, env: NodeJS.ProcessEnv): DoctorCh
           hint: 'export ANTHROPIC_API_KEY=... (or use --model claude-code for saved login).',
         };
   }
-  return env.OPENAI_API_KEY
-    ? { name: 'provider', status: 'ok', detail: `${shown} -> openai: OPENAI_API_KEY set` }
+  // OpenAI or OpenAI-compatible endpoint.
+  const baseURL = env.COPPERHEAD_BASE_URL ?? config?.openaiCompatBaseUrl;
+  const apiKeyEnvName = env.COPPERHEAD_API_KEY_ENV ?? config?.openaiCompatApiKeyEnv ?? 'OPENAI_API_KEY';
+  const key = env[apiKeyEnvName];
+  const endpointStr = baseURL ? ` -> ${baseURL}` : ' -> api.openai.com (default)';
+  return key
+    ? { name: 'provider', status: 'ok', detail: `${shown} -> openai-compat: ${apiKeyEnvName} set${endpointStr}` }
     : {
         name: 'provider',
         status: 'fail',
-        detail: `${shown} -> openai: OPENAI_API_KEY not set`,
-        hint: 'export OPENAI_API_KEY=... (or use --model codex for saved login).',
+        detail: `${shown} -> openai-compat: ${apiKeyEnvName} not set${endpointStr}`,
+        hint: baseURL
+          ? `export ${apiKeyEnvName}=... (key for ${baseURL}). Or set COPPERHEAD_API_KEY_ENV to the correct env var name.`
+          : 'export OPENAI_API_KEY=... (or use --model codex for saved login).',
       };
 }
 
@@ -149,22 +161,34 @@ function providerCheck(
   flag: string | undefined,
   config: Awaited<ReturnType<typeof loadConfig>>,
   env: NodeJS.ProcessEnv,
-): DoctorCheck {
+): DoctorCheck[] {
   try {
     const { model } = resolveModel(flag, config, env);
-    return checkCredential(model, env);
+    const cred = checkCredential(model, env, config);
+    const checks: DoctorCheck[] = [cred];
+    // Append a privacy info row for known free-tier endpoints.
+    const baseURL = env.COPPERHEAD_BASE_URL ?? config.openaiCompatBaseUrl;
+    if (isPrivacySensitiveEndpoint(baseURL, model)) {
+      checks.push({
+        name: 'privacy',
+        status: 'info',
+        detail: 'this provider/tier may use prompt data for training — PCB designs are often proprietary; verify the data policy before running on confidential hardware',
+      });
+    }
+    return checks;
   } catch (err) {
     // resolveModel throws only when nothing selects a model at all. Its message
     // starts with "no model configured: " — already this check's detail line —
     // so keep only the remedy part for the hint.
-    return {
+    return [{
       name: 'provider',
       status: 'fail',
       detail: 'no model configured',
       hint: (err as Error).message.replace(/^no model configured:\s*/, ''),
-    };
+    }];
   }
 }
+
 
 function projectCheck(config: Awaited<ReturnType<typeof loadConfig>>, repoRoot: string): DoctorCheck {
   const hasConfig = existsSync(path.join(repoRoot, '.copperhead', 'config.json'));
@@ -226,7 +250,7 @@ export async function runDoctor(opts: RunDoctorOptions): Promise<DoctorReport> {
     nodeCheck(deps.nodeVersion),
     await kicadCheck(deps.kicadVersion),
     await gitCheck(deps.gitVersion),
-    providerCheck(opts.model, config, deps.env),
+    ...providerCheck(opts.model, config, deps.env),
     configError ?? projectCheck(config, opts.repoRoot),
   ];
   return { ok: checks.every((c) => c.status !== 'fail'), checks };

@@ -34,6 +34,21 @@ export interface CopperheadConfig {
    * init-only / hand-maintained repos.
    */
   origin?: 'create' | 'init';
+  /**
+   * Base URL for an OpenAI-compatible endpoint (e.g. Groq, Ollama, OpenRouter,
+   * Cerebras). When set, the OpenAI provider uses this URL instead of
+   * api.openai.com. Can be overridden at runtime with the `COPPERHEAD_BASE_URL`
+   * env var. Env var takes precedence over this field.
+   */
+  openaiCompatBaseUrl?: string;
+  /**
+   * Name of the environment variable that holds the API key for the configured
+   * OpenAI-compatible endpoint (e.g. `"GROQ_API_KEY"`, `"OPENROUTER_API_KEY"`).
+   * The key value is never stored in config — only the variable name is.
+   * Defaults to `OPENAI_API_KEY` when not set. Can be overridden at runtime
+   * with the `COPPERHEAD_API_KEY_ENV` env var.
+   */
+  openaiCompatApiKeyEnv?: string;
 }
 
 export const CONFIG_DIR = '.copperhead';
@@ -92,6 +107,8 @@ export async function loadConfig(repoRoot: string): Promise<CopperheadConfig> {
     llmCache: raw.llmCache !== false,
     ...(raw.generatedHashes ? { generatedHashes: raw.generatedHashes } : {}),
     ...(raw.origin === 'create' || raw.origin === 'init' ? { origin: raw.origin } : {}),
+    ...(raw.openaiCompatBaseUrl ? { openaiCompatBaseUrl: raw.openaiCompatBaseUrl } : {}),
+    ...(raw.openaiCompatApiKeyEnv ? { openaiCompatApiKeyEnv: raw.openaiCompatApiKeyEnv } : {}),
   };
 }
 
