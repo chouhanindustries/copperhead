@@ -12,6 +12,7 @@ export type ExitPath =
   | 'repair-cycles-exhausted'
   | 'commit-failed'
   | 'provider-error'
+  | 'session-limit'
   | 'stalled';
 
 /** Post-run addenda recorded at every terminal branch (AC-8.5). */

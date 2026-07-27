@@ -1,7 +1,8 @@
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, rm, utimes } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import type { ChatOpts, Msg, Provider, ToolCall, ToolSchema, Turn } from '../types.js';
+import type { ChatOpts, Msg, Provider, ToolSchema, Turn } from '../types.js';
+import { parseToolCalls, renderConversation, renderDelta, renderToolProtocol } from './tool-protocol.js';
 
 /**
  * Saved-login provider: drives Claude Code through the Claude Agent SDK
@@ -51,6 +52,16 @@ export interface QueryOptions {
   cwd?: string;
   env?: Record<string, string | undefined>;
   maxTurns?: number;
+  /** Aborting this controller stops the query and tears down the `claude`
+   * subprocess it spawned (Agent SDK `Options.abortController`). Used so the
+   * watchdog's `close()` on a hung turn kills the process instead of orphaning
+   * it (2.2/4.1) — a stranded subprocess keeps writing to its temp cwd and, with
+   * KiCad local history, was a source of the disk-fill halt (I8). */
+  abortController?: AbortController;
+  /** Resume a prior SDK session by id so the subprocess reconstructs earlier
+   * turns itself instead of us re-sending the whole conversation each turn (1.1,
+   * `Options.resume`). Only set in the opt-in session-resume mode. */
+  resume?: string;
 }
 export interface QueryArgs {
   prompt: string;
@@ -59,6 +70,7 @@ export interface QueryArgs {
 export interface QueryMessage {
   type: string;
   subtype?: string;
+  session_id?: string;
   message?: { content?: Array<{ type: string; text?: string }> };
   usage?: { input_tokens?: number; output_tokens?: number };
 }
@@ -93,17 +105,35 @@ export class ClaudeCodeProvider implements Provider {
   readonly name = 'claude-code';
   private callSeq = 0;
   private cwdPromise?: Promise<string>;
+  /** In-flight query aborters, so close() (called by the turn watchdog on a
+   * hung turn) can tear down the live subprocess, not just delete its cwd. */
+  private readonly inFlight = new Set<AbortController>();
+  /** Session-resume state (1.1). `sessionId` is the last session the SDK reported;
+   * `sentCount` is how many `messages` we have already handed it, so a resumed
+   * turn sends only the delta. Unused unless `sessionResume` is on. */
+  private sessionId?: string;
+  private sentCount = 0;
 
   constructor(
     private readonly model?: string,
     private readonly injectedQuery?: QueryLike,
     private readonly importSdk: ImportLike = (specifier) => import(specifier),
+    /**
+     * Opt-in: resume one SDK session across turns and send only new messages,
+     * instead of flattening and re-sending the entire conversation every turn
+     * (1.1). Cuts the ~quadratic history re-send that dominates long-stage cost.
+     * OFF by default and deliberately mutually exclusive with the response cache:
+     * the cache replays turns the resumed session never saw, so mixing them would
+     * desync the session. `makeProvider` enables it only when the cache is off.
+     */
+    private readonly sessionResume = false,
   ) {}
 
-  // `_opts.maxTokens` is intentionally ignored: the Agent SDK drives the Claude
-  // Code subprocess and exposes no per-call max-tokens knob. loop.ts calls
-  // chat() without opts today; noted so a future opts pass is not a surprise.
-  async chat(messages: Msg[], tools: ToolSchema[], _opts: ChatOpts = {}): Promise<Turn> {
+  // `opts.maxTokens` is intentionally ignored: the Agent SDK drives the Claude
+  // Code subprocess and exposes no per-call max-tokens knob. `opts.onStream` is
+  // honored: this provider streams, so it reports cumulative streamed-text length
+  // as blocks arrive, which the loop turns into a liveness heartbeat (5.1).
+  async chat(messages: Msg[], tools: ToolSchema[], opts: ChatOpts = {}): Promise<Turn> {
     const query = await this.resolveQuery();
 
     const system = messages
@@ -111,19 +141,28 @@ export class ClaudeCodeProvider implements Provider {
       .map((m) => m.content)
       .join('\n\n');
     const systemPrompt = [system, renderToolProtocol(tools)].filter(Boolean).join('\n\n');
-    const prompt = renderConversation(messages);
+    // Session-resume mode (1.1): once the SDK has given us a session id, resume it
+    // and send only the messages added since our last turn — the subprocess still
+    // holds the earlier conversation, so re-sending it would just re-bill it. The
+    // first turn (no session id yet) sends the full flattened history as usual.
+    const resume = this.sessionResume ? this.sessionId : undefined;
+    const prompt = resume ? renderDelta(messages, this.sentCount) : renderConversation(messages);
     const catalog = new Set(tools.map((t) => t.name));
     const cwd = await this.ensureCwd();
 
     let text: string | null = null;
     let inputTokens = 0;
     let outputTokens = 0;
+    // One aborter per turn: close() aborts it to kill a hung subprocess.
+    const aborter = new AbortController();
+    this.inFlight.add(aborter);
     try {
       for await (const msg of query({
         prompt,
         options: {
           systemPrompt,
           ...(this.model ? { model: this.model } : {}),
+          abortController: aborter,
           // Layered "the SDK executes nothing" defense (D1/D5):
           //  1. `tools: []` disables ALL built-in tools (Agent SDK 0.3.x docs:
           //     "[] (empty array) - Disable all built-in tools").
@@ -134,6 +173,7 @@ export class ClaudeCodeProvider implements Provider {
           //  4. The tool_use tripwire below fails the run loudly if one is
           //     emitted anyway. Any single layer failing is caught by the next.
           tools: [],
+          ...(resume ? { resume } : {}),
           disallowedTools: DISALLOWED_BUILTINS,
           canUseTool: async (toolName) => ({
             behavior: 'deny',
@@ -153,6 +193,9 @@ export class ClaudeCodeProvider implements Provider {
           for (const block of msg.message?.content ?? []) {
             if (block.type === 'text' && block.text) {
               text = (text ?? '') + block.text;
+              // Report progress so the loop's heartbeat shows this turn is alive
+              // and streaming, not hung, during a multi-minute large-output turn.
+              opts.onStream?.(text.length);
             } else if (block.type === 'tool_use') {
               // Load-bearing invariant (D1): the SDK must execute nothing, so it
               // must never emit a tool_use block. If it does, `tools: []` was not
@@ -169,6 +212,9 @@ export class ClaudeCodeProvider implements Provider {
           if (typeof msg.usage?.input_tokens === 'number') inputTokens = msg.usage.input_tokens;
           if (typeof msg.usage?.output_tokens === 'number') outputTokens = msg.usage.output_tokens;
         }
+        // The session id can arrive on any message (init/system/result); keep the
+        // latest so the next turn can resume it (1.1). No-op unless resume is on.
+        if (this.sessionResume && typeof msg.session_id === 'string') this.sessionId = msg.session_id;
       }
     } catch (err) {
       // Auth failures get an actionable message (non-retryable); everything else
@@ -177,15 +223,40 @@ export class ClaudeCodeProvider implements Provider {
       // distinct `name` makes otherProvider() return null for us.
       if (isAuthError(err)) throw new Error(authHint((err as Error).message));
       throw err;
+    } finally {
+      this.inFlight.delete(aborter);
     }
 
+    // Only advance the high-water mark on a turn that completed: a thrown turn
+    // (rate limit, timeout) is retried, and must re-send the same delta so no
+    // message is lost from the resumed session (1.1).
+    if (this.sessionResume) this.sentCount = messages.length;
+
     const parsed = parseToolCalls(text, () => `cc-${++this.callSeq}`, catalog);
-    return { text: parsed.text, toolCalls: parsed.toolCalls, usage: { inputTokens, outputTokens } };
+    return {
+      text: parsed.text,
+      toolCalls: parsed.toolCalls,
+      usage: { inputTokens, outputTokens },
+      nudge: parsed.nudge,
+    };
   }
 
-  /** Remove the scratch cwd. loop.ts calls this on every provider in a finally,
-   * so the one temp dir this instance created does not leak past the run. */
+  /** Tear down in-flight work and remove the scratch cwd. Called by the turn
+   * watchdog on a hung turn (via withTimeout's onTimeout) AND once per run in a
+   * finally. Aborting first kills the `claude` subprocess a hung turn spawned —
+   * without it the process is orphaned and keeps writing to its temp cwd, which
+   * (with KiCad local history) was a source of the disk-fill halt (2.2/4.1, I8).
+   * A leftover empty dir in the OS tmpdir is harmless; the startup sweep reclaims
+   * any that a hard SIGKILL bypassed this cleanup for. */
   async close(): Promise<void> {
+    for (const aborter of this.inFlight) {
+      try {
+        aborter.abort();
+      } catch {
+        // best effort: a controller that already settled throws nothing useful
+      }
+    }
+    this.inFlight.clear();
     const pending = this.cwdPromise;
     this.cwdPromise = undefined;
     if (!pending) return;
@@ -199,9 +270,17 @@ export class ClaudeCodeProvider implements Provider {
   /** One isolated scratch cwd per provider instance, created once and reused
    * across turns so a long run does not leak a temp dir per turn. Even with
    * tools disabled this guarantees the SDK has no path into the repo (D5). */
-  private ensureCwd(): Promise<string> {
+  private async ensureCwd(): Promise<string> {
     if (!this.cwdPromise) this.cwdPromise = mkdtemp(path.join(os.tmpdir(), 'copperhead-cc-'));
-    return this.cwdPromise;
+    const cwd = await this.cwdPromise;
+    // Keep this reused scratch dir's mtime fresh on every turn. It is the only
+    // long-lived temp dir a run holds (kicad-cli dirs are per-call), so a
+    // multi-hour run would otherwise leave it with a stale mtime and a concurrent
+    // run's startup sweep (sweepStaleTempDirs, age-gated) could delete it out from
+    // under the live process (F4). Best-effort: a touch failure is harmless.
+    const now = new Date();
+    await utimes(cwd, now, now).catch(() => {});
+    return cwd;
   }
 
   private async resolveQuery(): Promise<QueryLike> {
@@ -234,116 +313,6 @@ export class ClaudeCodeProvider implements Provider {
     }
     return query;
   }
-}
-
-function renderToolProtocol(tools: ToolSchema[]): string {
-  if (!tools.length) return '';
-  const lines = [
-    '# Tool protocol',
-    '',
-    'You are the reasoning half of a tool-driven workflow; you cannot run anything yourself.',
-    'To take an action, reply with EXACTLY ONE JSON object and nothing else, wrapped in a',
-    '```json fenced code block:',
-    '',
-    '```json',
-    '{"tool": "<tool_name>", "args": { ... }}',
-    '```',
-    '',
-    'Use only the tools listed below, with `args` matching the tool\'s JSON Schema. If you have',
-    'no tool to call and only want to say something, reply with plain prose and no JSON block.',
-    '',
-    '## Available tools',
-  ];
-  for (const t of tools) {
-    lines.push(
-      '',
-      `### ${t.name}`,
-      t.description,
-      `Parameters (JSON Schema): ${JSON.stringify(t.parameters)}`,
-    );
-  }
-  return lines.join('\n');
-}
-
-function renderConversation(messages: Msg[]): string {
-  const idToName = new Map<string, string>();
-  const parts: string[] = [];
-  for (const m of messages) {
-    if (m.role === 'system') continue;
-    if (m.role === 'user') {
-      parts.push(`[user]\n${m.content}`);
-    } else if (m.role === 'assistant') {
-      if (m.content) parts.push(`[assistant]\n${m.content}`);
-      for (const call of m.toolCalls ?? []) {
-        idToName.set(call.id, call.name);
-        parts.push(
-          `[assistant tool call]\n\`\`\`json\n${JSON.stringify({ tool: call.name, args: call.args })}\n\`\`\``,
-        );
-      }
-    } else {
-      const name = idToName.get(m.toolCallId) ?? m.toolCallId;
-      parts.push(`[result of ${name}]\n${m.content}`);
-    }
-  }
-  return parts.join('\n\n');
-}
-
-interface Parsed {
-  text: string | null;
-  toolCalls: ToolCall[];
-}
-
-/**
- * Extract tool-call JSON from the model's reply. Tolerant by design (D1):
- * unparseable output is returned as plain text with no tool calls rather than
- * throwing, so a non-conforming turn degrades to the loop's stall/nudge path.
- * A parsed block only counts as a tool call when its name is in the current
- * turn's catalog (`availableTools(ctx)`): a hallucinated or locked tool name is
- * left as prose so the loop nudges, rather than dispatching a bogus call.
- */
-function parseToolCalls(text: string | null, nextId: () => string, catalog: Set<string>): Parsed {
-  if (!text) return { text: null, toolCalls: [] };
-  const toolCalls: ToolCall[] = [];
-  let prose = text;
-
-  const fence = /```(?:json)?\s*([\s\S]*?)```/gi;
-  let match: RegExpExecArray | null;
-  const consumed: string[] = [];
-  while ((match = fence.exec(text)) !== null) {
-    const call = toToolCall(match[1], nextId, catalog);
-    if (call) {
-      toolCalls.push(call);
-      consumed.push(match[0]);
-    }
-  }
-  for (const block of consumed) prose = prose.replace(block, '');
-
-  // No fenced tool block: maybe the whole reply is a bare JSON object.
-  if (!toolCalls.length) {
-    const call = toToolCall(text, nextId, catalog);
-    if (call) return { text: null, toolCalls: [call] };
-  }
-
-  const trimmed = prose.trim();
-  return { text: trimmed.length ? trimmed : null, toolCalls };
-}
-
-function toToolCall(raw: string | undefined, nextId: () => string, catalog: Set<string>): ToolCall | null {
-  if (!raw) return null;
-  let obj: unknown;
-  try {
-    obj = JSON.parse(raw.trim());
-  } catch {
-    return null;
-  }
-  if (!obj || typeof obj !== 'object') return null;
-  const rec = obj as Record<string, unknown>;
-  if (typeof rec.tool !== 'string') return null;
-  // Only accept names the turn actually advertised. An empty catalog means the
-  // turn offered no tools, so nothing parses as a call.
-  if (!catalog.has(rec.tool)) return null;
-  const args = rec.args && typeof rec.args === 'object' ? (rec.args as Record<string, unknown>) : {};
-  return { id: nextId(), name: rec.tool, args };
 }
 
 function isAuthError(err: unknown): boolean {

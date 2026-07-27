@@ -28,6 +28,10 @@ const providers: { model: string; key: string | undefined }[] = [
     model: process.env.COPPERHEAD_TEST_CLAUDE_CODE_MODEL ?? 'claude-code',
     key: claudeCodeSdkInstalled() ? process.env.CLAUDE_CODE_OAUTH_TOKEN : undefined,
   },
+  {
+    model: process.env.COPPERHEAD_TEST_CURSOR_MODEL ?? 'cursor',
+    key: process.env.COPPERHEAD_TEST_CURSOR === '1' ? 'saved-cursor-login' : undefined,
+  },
 ];
 
 function claudeCodeSdkInstalled(): boolean {

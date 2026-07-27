@@ -141,6 +141,57 @@ describe('ClaudeCodeProvider — tool protocol', () => {
     expect(new Set(turn.toolCalls.map((c) => c.id)).size).toBe(2); // ids are distinct
   });
 
+  it('parses a write_file call whose content contains nested ``` fences (does not truncate at the inner fence)', async () => {
+    // Regression: a markdown doc written via write_file legitimately contains
+    // ``` code fences. A fence-delimited parser truncates the JSON at the first
+    // inner fence, JSON.parse fails, and the call is silently dropped — the file
+    // never gets written and the stage stalls. The brace-balanced scan must keep
+    // the whole call intact.
+    const writeTool: ToolSchema = {
+      name: 'write_file',
+      description: 'Create a file',
+      parameters: {
+        type: 'object',
+        properties: { path: { type: 'string' }, content: { type: 'string' } },
+        required: ['path', 'content'],
+      },
+    };
+    const doc = '# Subsystems\n\n```text\nUSB-C -> Rd -> VBUS\n```\n\nSee `docs/SPEC.md`.\n';
+    const reply = '```json\n' + JSON.stringify({ tool: 'write_file', args: { path: 'docs/SUBSYSTEMS.md', content: doc } }) + '\n```';
+    const provider = new ClaudeCodeProvider(undefined, fakeQuery([assistant(reply), result()]));
+    const turn = await provider.chat(messages, [...tools, writeTool]);
+    expect(turn.toolCalls).toHaveLength(1);
+    expect(turn.toolCalls[0]!.name).toBe('write_file');
+    expect(turn.toolCalls[0]!.args).toEqual({ path: 'docs/SUBSYSTEMS.md', content: doc });
+  });
+
+  it('nudges on a malformed near-miss tool call instead of silently dropping it (#I10)', async () => {
+    // One closing brace short: scanJsonObject never balances the outer object,
+    // so zero calls dispatch. The old parser returned no signal; now it detects
+    // the `"tool":"read_file"` near-miss and returns a re-emit nudge.
+    const reply = '```json\n{"tool":"read_file","args":{"path":"docs/BOM.md"}\n```';
+    const provider = new ClaudeCodeProvider(undefined, fakeQuery([assistant(reply), result()]));
+    const turn = await provider.chat(messages, tools);
+    expect(turn.toolCalls).toHaveLength(0);
+    expect(turn.nudge).toMatch(/read_file/);
+    expect(turn.nudge).toMatch(/malformed|re-emit/i);
+  });
+
+  it('does not nudge on ordinary prose with no intended tool call (#I10)', async () => {
+    const provider = new ClaudeCodeProvider(undefined, fakeQuery([assistant('Let me think about the design.'), result()]));
+    const turn = await provider.chat(messages, tools);
+    expect(turn.toolCalls).toHaveLength(0);
+    expect(turn.nudge).toBeUndefined();
+  });
+
+  it('does not nudge when a valid tool call did dispatch (#I10)', async () => {
+    const reply = '```json\n{"tool":"read_file","args":{"path":"a"}}\n```';
+    const provider = new ClaudeCodeProvider(undefined, fakeQuery([assistant(reply), result()]));
+    const turn = await provider.chat(messages, tools);
+    expect(turn.toolCalls).toHaveLength(1);
+    expect(turn.nudge).toBeUndefined();
+  });
+
   it('reuses one isolated scratch cwd across turns (no per-turn temp-dir leak)', async () => {
     const cwds: unknown[] = [];
     const provider = new ClaudeCodeProvider(undefined, fakeQuery([assistant('ok'), result()], (a) => {
@@ -247,6 +298,63 @@ describe('ClaudeCodeProvider — tool protocol', () => {
     const turn = await provider.chat(messages, tools);
     expect(turn.toolCalls).toEqual([]);
     expect(turn.text).not.toBeNull();
+  });
+});
+
+describe('ClaudeCodeProvider — session resume (1.1)', () => {
+  const withSession = (sid: string, out: QueryMessage[]): QueryMessage[] => [
+    { type: 'system', subtype: 'init', session_id: sid },
+    ...out,
+  ];
+
+  it('first turn sends full history and no resume; a later turn resumes and sends only the delta', async () => {
+    const seen: Array<{ prompt: string; options?: Record<string, unknown> }> = [];
+    const q: QueryLike = (args) => {
+      seen.push(args);
+      return (async function* () {
+        for (const m of withSession('sess-123', [assistant('ok'), result()])) yield m;
+      })();
+    };
+    const provider = new ClaudeCodeProvider(undefined, q, undefined, true); // resume ON
+
+    const first: Msg[] = [
+      { role: 'system', content: 'sys' },
+      { role: 'user', content: 'do it' },
+    ];
+    await provider.chat(first, tools);
+    expect((seen[0]!.options ?? {}).resume).toBeUndefined(); // no session yet
+    expect(seen[0]!.prompt).toContain('do it'); // full history on the first turn
+
+    const second: Msg[] = [
+      ...first,
+      { role: 'assistant', content: null, toolCalls: [{ id: 'cc-1', name: 'read_file', args: { path: 'a' } }] },
+      { role: 'tool', toolCallId: 'cc-1', content: 'FILE BODY' },
+    ];
+    await provider.chat(second, tools);
+    expect((seen[1]!.options ?? {}).resume).toBe('sess-123'); // resumes the session
+    expect(seen[1]!.prompt).toContain('FILE BODY'); // sends the new tool result
+    expect(seen[1]!.prompt).toContain('[result of read_file]');
+    expect(seen[1]!.prompt).not.toContain('do it'); // earlier turns live in the session, not re-sent
+    expect(seen[1]!.prompt).not.toContain('[assistant tool call]'); // our own reply isn't re-sent
+  });
+
+  it('is off by default: every turn re-sends the full flattened history, never resume', async () => {
+    const seen: Array<{ prompt: string; options?: Record<string, unknown> }> = [];
+    const q: QueryLike = (args) => {
+      seen.push(args);
+      return (async function* () {
+        for (const m of withSession('sess-x', [assistant('ok'), result()])) yield m;
+      })();
+    };
+    const provider = new ClaudeCodeProvider(undefined, q); // resume OFF (default)
+    const base: Msg[] = [
+      { role: 'system', content: 'sys' },
+      { role: 'user', content: 'do it' },
+    ];
+    await provider.chat(base, tools);
+    await provider.chat([...base, { role: 'assistant', content: 'thinking' }, { role: 'user', content: 'again' }], tools);
+    expect((seen[1]!.options ?? {}).resume).toBeUndefined();
+    expect(seen[1]!.prompt).toContain('do it'); // full history re-sent when resume is off
   });
 });
 
