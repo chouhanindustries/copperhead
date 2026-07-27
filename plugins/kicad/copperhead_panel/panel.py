@@ -38,6 +38,9 @@ class CopperheadPanel(wx.Panel):
         # serve that dies at startup (no model configured) must become a
         # readable error, not an infinite restart loop.
         self.restarts = 0
+        # Request queued across a project-switch serve restart; sent on hello.
+        self.pending_request = None
+        self._dir_reason = None
 
         sizer = wx.BoxSizer(wx.VERTICAL)
         self.status = wx.StaticText(self, label="starting…")
@@ -65,14 +68,20 @@ class CopperheadPanel(wx.Panel):
     # -- serve lifecycle ---------------------------------------------------
 
     def _project_dir(self):
+        """The open board's directory, or home. `_dir_reason` records why the
+        fallback was taken so the boot log can say so instead of silently
+        running in the wrong place."""
+        self._dir_reason = None
         try:
             import pcbnew
 
-            board_file = pcbnew.GetBoard().GetFileName()
+            board = pcbnew.GetBoard()
+            board_file = board.GetFileName() if board is not None else ""
             if board_file:
                 return os.path.dirname(os.path.abspath(board_file))
-        except Exception:
-            pass
+            self._dir_reason = "no board file is open (unsaved board?)"
+        except Exception as exc:
+            self._dir_reason = "GetBoard failed: %s" % exc
         return os.path.expanduser("~")
 
     def _boot(self):
@@ -96,6 +105,8 @@ class CopperheadPanel(wx.Panel):
         # Name the exact CLI and cwd: when something misbehaves, "which
         # binary did it actually run" is the first diagnostic question.
         self._append("serve: %s (in %s)\n" % (cli, project_dir), DIM)
+        if self._dir_reason:
+            self._append("note: %s; running in home instead\n" % self._dir_reason, DIM)
         self.client = ServeClient(
             cli,
             project_dir,
@@ -121,6 +132,9 @@ class CopperheadPanel(wx.Panel):
             model = data.get("model") or "no model configured"
             self.status.SetLabel("%s · %s" % (model, data.get("repoRoot", "?")))
             self.status.SetForegroundColour(COPPER if data.get("model") else ERR)
+            queued, self.pending_request = self.pending_request, None
+            if queued and self.client is not None and self.active_id is None:
+                self._send(queued)
             return
         if event == "log":
             self._append(str(obj.get("data", {}).get("line", "")) + "\n", None)
@@ -188,6 +202,22 @@ class CopperheadPanel(wx.Panel):
                     DIM,
                 )
             return
+        # The board can change under a long-lived pane; serve's cwd decides
+        # which repo gets edited, so re-resolve per submit and restart the
+        # child in the new project before sending (the request is queued
+        # through the hello so nothing is lost).
+        want = self._project_dir()
+        if self.client is not None and want != self.client.project_dir:
+            self._append("project changed: %s\n" % want, DIM)
+            self.input.SetValue("")
+            self.pending_request = text
+            client, self.client = self.client, None
+            client.stop()
+            self._boot()
+            return
+        self._send(text)
+
+    def _send(self, text):
         self._append("\n> %s\n" % text, COPPER)
         self.active_id = self.client.run(text)
         self.input.SetValue("")
