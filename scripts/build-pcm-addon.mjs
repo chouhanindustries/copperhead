@@ -129,9 +129,13 @@ export function addonEntries() {
   return [
     { name: 'metadata.json', data: Buffer.from(JSON.stringify(pcmMetadata(version), null, 2) + '\n') },
     { name: 'resources/icon.png', data: readFileSync(iconSrc) },
+    // Package files sit DIRECTLY under plugins/: PCM installs the zip's
+    // plugins/ content into 3rdparty/plugins/<munged-identifier>/, and
+    // pcbnew's loader imports that directory itself as the package — an
+    // __init__.py nested one level deeper is never found.
     ...walk(pluginSrc)
       .filter(({ rel }) => !rel.includes('__pycache__'))
-      .map(({ rel, full }) => ({ name: `plugins/copperhead_panel/${rel}`, data: readFileSync(full) })),
+      .map(({ rel, full }) => ({ name: `plugins/${rel}`, data: readFileSync(full) })),
   ];
 }
 

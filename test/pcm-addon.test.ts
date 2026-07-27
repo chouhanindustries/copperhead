@@ -36,10 +36,12 @@ describe('addon layout (AC-114B.7)', () => {
     const names = (addonEntries() as Array<{ name: string }>).map((e) => e.name);
     expect(names).toContain('metadata.json');
     expect(names).toContain('resources/icon.png');
-    expect(names).toContain('plugins/copperhead_panel/__init__.py');
-    expect(names).toContain('plugins/copperhead_panel/panel.py');
-    expect(names).toContain('plugins/copperhead_panel/client.py');
-    expect(names).toContain('plugins/copperhead_panel/icon.png');
+    // Directly under plugins/: PCM makes the installed addon dir itself the
+    // python package, so __init__.py must land at its root.
+    expect(names).toContain('plugins/__init__.py');
+    expect(names).toContain('plugins/panel.py');
+    expect(names).toContain('plugins/client.py');
+    expect(names).toContain('plugins/icon.png');
     for (const n of names) expect(n).not.toContain('__pycache__');
   });
 
