@@ -1,5 +1,6 @@
-import { describe, it, expect } from 'vitest';
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { describe, it, expect, vi } from 'vitest';
+import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { resolveInRepo, SandboxError, isKicadFile } from '../src/util/paths.js';
@@ -8,6 +9,7 @@ import { withRetry } from '../src/util/retry.js';
 import { toolWriteFile, toolEditFile, toolSearch } from '../src/agent/filetools.js';
 import { Transcript } from '../src/agent/transcript.js';
 import { isDirty, hasCommits, snapshot, restore } from '../src/util/git.js';
+import { PreflightError } from '../src/util/preflight.js';
 import { tempFixtureRepo } from './helpers.js';
 import { execa } from 'execa';
 
@@ -18,8 +20,8 @@ describe('path sandbox (AC-4.2)', () => {
   });
 
   it('accepts repo-relative paths including the root itself', () => {
-    expect(resolveInRepo('/repo', 'docs/BOM.md')).toBe('/repo/docs/BOM.md');
-    expect(resolveInRepo('/repo', '.')).toBe('/repo');
+    expect(resolveInRepo('/repo', 'docs/BOM.md')).toBe(path.resolve('/repo', 'docs/BOM.md'));
+    expect(resolveInRepo('/repo', '.')).toBe(path.resolve('/repo'));
   });
 
   it('does not treat sibling dirs with a shared prefix as inside', () => {
@@ -207,6 +209,148 @@ describe('git guard (AC-3.8, AC-3.6)', () => {
     const { repo, cleanup } = await tempFixtureRepo();
     try {
       expect(await hasCommits(repo)).toBe(true);
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it('a rollback gives back untracked work instead of deleting it', async () => {
+    // Regression: `git stash create` only ever captures tracked changes, so
+    // restore()'s `git clean -fd` used to wipe every file the user had not
+    // added yet, with nothing to recover them from. The dirty-tree preflight
+    // promises the opposite ("copperhead preserve them via git stash create").
+    const { repo, cleanup } = await tempFixtureRepo();
+    try {
+      const sch = path.join(repo, 'hardware', 'open-key.kicad_sch');
+      const tracked = await readFile(sch, 'utf8');
+      await writeFile(sch, tracked.replace('KEY_DAH', 'KEY_EDITED'), 'utf8');
+      await writeFile(path.join(repo, 'hand-written-notes.md'), 'do not lose me\n', 'utf8');
+      await mkdir(path.join(repo, 'docs'), { recursive: true });
+      await writeFile(path.join(repo, 'docs', 'new-doc.md'), 'nested and untracked\n', 'utf8');
+
+      // The snapshot is taken with the tree already dirty, exactly as a run
+      // started with --allow-dirty does.
+      const snap = await snapshot(repo);
+      await writeFile(sch, tracked.replace('KEY_DAH', 'KEY_RUINED_BY_THE_AGENT'), 'utf8');
+      await writeFile(path.join(repo, 'agent-scratch.txt'), 'created by the failed run\n', 'utf8');
+
+      await restore(repo, snap);
+
+      // The user's uncommitted edit and both untracked files come back...
+      expect(await readFile(sch, 'utf8')).toBe(tracked.replace('KEY_DAH', 'KEY_EDITED'));
+      expect(await readFile(path.join(repo, 'hand-written-notes.md'), 'utf8')).toBe('do not lose me\n');
+      expect(await readFile(path.join(repo, 'docs', 'new-doc.md'), 'utf8')).toBe('nested and untracked\n');
+      // ...and the failed run's own scratch file does not.
+      expect(existsSync(path.join(repo, 'agent-scratch.txt'))).toBe(false);
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it('a failed untracked restore still rolls back the tracked state', async () => {
+    // The untracked replay is best-effort: it runs after `stash apply`, so if
+    // it throws, the tracked rollback is already done and must be kept. A
+    // corrupt snapshot (tree sha that no longer resolves) is the real-world
+    // shape of that failure — an unreachable object pruned before rollback.
+    const { repo, cleanup } = await tempFixtureRepo();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const sch = path.join(repo, 'hardware', 'open-key.kicad_sch');
+      const tracked = await readFile(sch, 'utf8');
+      await writeFile(sch, tracked.replace('KEY_DAH', 'KEY_EDITED'), 'utf8');
+      await writeFile(path.join(repo, 'hand-written-notes.md'), 'do not lose me\n', 'utf8');
+
+      const snap = await snapshot(repo);
+      expect(snap.untracked).not.toBeNull();
+      await writeFile(sch, tracked.replace('KEY_DAH', 'KEY_RUINED_BY_THE_AGENT'), 'utf8');
+
+      // A tree sha that does not resolve: read-tree fails, restoreUntracked throws.
+      await expect(restore(repo, { ...snap, untracked: '0'.repeat(40) })).resolves.toBeUndefined();
+
+      expect(warn.mock.calls.map((c) => String(c[0]))).toContainEqual(
+        expect.stringContaining('could not restore untracked files after rollback'),
+      );
+      // The tracked rollback survived the failure, up to and including the
+      // user's uncommitted edit replayed from the stash object.
+      expect(await readFile(sch, 'utf8')).toBe(tracked.replace('KEY_DAH', 'KEY_EDITED'));
+      // The untracked file is the part that is genuinely lost: pinned so a
+      // future partial replay cannot pass this test by half-restoring.
+      expect(existsSync(path.join(repo, 'hand-written-notes.md'))).toBe(false);
+    } finally {
+      warn.mockRestore();
+      await cleanup();
+    }
+  });
+
+  it('refuses the run, naming the file, when an untracked path cannot be read', async () => {
+    // Regression: every untracked path went straight into `git update-index`,
+    // which aborts the whole batch on the first it cannot open. snapshot() runs
+    // before the first turn, so one stray root-owned or mode-000 file refused
+    // the run with a bare "fatal: Unable to process path ..." and no hint that
+    // copperhead was taking a snapshot.
+    const { repo, cleanup } = await tempFixtureRepo();
+    try {
+      await writeFile(path.join(repo, 'tracked-change.txt'), 'x', 'utf8');
+      const locked = path.join(repo, 'unreadable.bin');
+      await writeFile(locked, 'secret\n', 'utf8');
+      await chmod(locked, 0o000);
+
+      await expect(snapshot(repo)).rejects.toThrow(PreflightError);
+      await expect(snapshot(repo)).rejects.toThrow(/unreadable\.bin/);
+      // The refusal has to be actionable, not just a git error surfaced raw.
+      await expect(snapshot(repo)).rejects.toThrow(/--allow-dirty/);
+
+      // Readable again: the snapshot goes through and captures it.
+      await chmod(locked, 0o644);
+      const snap = await snapshot(repo);
+      const tree = await execa('git', ['ls-tree', '-r', '--name-only', snap.untracked!], { cwd: repo });
+      expect(tree.stdout.split('\n')).toContain('unreadable.bin');
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it('ignores an untracked file that vanishes between listing and snapshot', async () => {
+    // The benign half of the same race: a watcher or build step deleting its
+    // own temp file must not refuse the run, because a file that no longer
+    // exists cannot be lost to the rollback.
+    const { repo, cleanup } = await tempFixtureRepo();
+    try {
+      await writeFile(path.join(repo, 'keep-me.txt'), 'keep\n', 'utf8');
+      const doomed = path.join(repo, 'vanishes.tmp');
+      await writeFile(doomed, 'transient\n', 'utf8');
+      // Deleted after git listed it, which is what the race amounts to.
+      const listed = await execa('git', ['ls-files', '--others', '--exclude-standard'], { cwd: repo });
+      expect(listed.stdout.split('\n')).toContain('vanishes.tmp');
+      await rm(doomed, { force: true });
+
+      const snap = await snapshot(repo);
+      const tree = await execa('git', ['ls-tree', '-r', '--name-only', snap.untracked!], { cwd: repo });
+      expect(tree.stdout.split('\n')).toContain('keep-me.txt');
+      expect(tree.stdout).not.toContain('vanishes.tmp');
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it('does not resurrect gitignored files, which the rollback never deletes', async () => {
+    // Symmetry check: `ls-files --exclude-standard` skips ignored paths and
+    // plain `clean -fd` (no -x) leaves them alone, so neither side touches
+    // them and .env cannot be swept into a snapshot object.
+    const { repo, cleanup } = await tempFixtureRepo();
+    try {
+      await writeFile(path.join(repo, '.env'), 'OPENAI_API_KEY=sk-should-never-be-captured\n', 'utf8');
+      await writeFile(path.join(repo, 'tracked-change.txt'), 'x', 'utf8');
+      const snap = await snapshot(repo);
+      expect(snap.untracked).not.toBeNull();
+
+      await restore(repo, snap);
+
+      // Untouched on disk, and absent from the captured tree.
+      expect(await readFile(path.join(repo, '.env'), 'utf8')).toContain('sk-should-never-be-captured');
+      const tree = await execa('git', ['ls-tree', '-r', '--name-only', snap.untracked!], { cwd: repo });
+      expect(tree.stdout.split('\n')).toContain('tracked-change.txt');
+      expect(tree.stdout).not.toContain('.env');
     } finally {
       await cleanup();
     }

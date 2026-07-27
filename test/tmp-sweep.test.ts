@@ -8,14 +8,22 @@ import { sweepStaleTempDirs, pruneHistoryDir, TEMP_PREFIX } from '../src/util/tm
 // These exercise the I8 startup sweep. They create real `copperhead-*` dirs in
 // the OS temp dir (the exact place the leak lives) and age them via utimes, so
 // the age gate is tested against the same clock the sweep reads.
+//
+// Fixture mtimes are anchored to the *real* clock, never to the synthetic `now`
+// injected into the sweep. The OS temp dir is shared, and `create` runs its own
+// sweep at `Date.now()` on startup (src/commands/create.ts): a fixture aged
+// against a synthetic epoch looks decades stale to that real-clock sweep, so a
+// create test in a parallel worker deletes it mid-test and this file fails with
+// an empty `removed`. Keeping fixtures real-clock-fresh and moving the injected
+// `now` forward instead makes them stale only to the call under test.
 describe('sweepStaleTempDirs (I8: reclaim leaked scratch dirs)', () => {
   const made: string[] = [];
 
-  async function makeAged(suffix: string, ageMs: number, now: number): Promise<string> {
+  async function makeAged(suffix: string, ageMs: number, base: number): Promise<string> {
     const dir = path.join(tmpdir(), `${TEMP_PREFIX}${suffix}-${process.pid}-${made.length}`);
     await mkdir(dir, { recursive: true });
     await writeFile(path.join(dir, 'erc.json'), '{}'); // non-empty, like a real leak
-    const when = new Date(now - ageMs);
+    const when = new Date(base - ageMs);
     await utimes(dir, when, when);
     made.push(dir);
     return dir;
@@ -26,9 +34,13 @@ describe('sweepStaleTempDirs (I8: reclaim leaked scratch dirs)', () => {
   });
 
   it('removes a stale dir but keeps a fresh one', async () => {
-    const now = 1_000_000_000_000;
-    const stale = await makeAged('erc-stale', 3 * 60 * 60 * 1000, now); // 3h old
-    const fresh = await makeAged('cc-fresh', 5 * 60 * 1000, now); // 5m old
+    // Both dirs are minutes old by the real clock, so a concurrent real-clock
+    // sweep leaves them alone; the injected `now` is 100m ahead, which pushes
+    // only the older one past the 2h cutoff.
+    const base = Date.now();
+    const stale = await makeAged('erc-stale', 30 * 60 * 1000, base); // 130m to the sweep
+    const fresh = await makeAged('cc-fresh', 60 * 1000, base); // 101m to the sweep
+    const now = base + 100 * 60 * 1000;
 
     const removed = await sweepStaleTempDirs(now); // default 2h cutoff
 
@@ -52,7 +64,7 @@ describe('sweepStaleTempDirs (I8: reclaim leaked scratch dirs)', () => {
   });
 
   it('honours a custom maxAge and returns [] when nothing is stale', async () => {
-    const now = 1_000_000_000_000;
+    const now = Date.now(); // real clock: 90s old is fresh to the default 2h sweep
     const recent = await makeAged('validate-recent', 90 * 1000, now); // 90s old
 
     // 60s cutoff: the 90s-old dir is stale and swept.

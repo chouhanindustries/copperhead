@@ -2,7 +2,7 @@
 
 ## Why
 
-Currently, `copperhead export bom` produces supplier-format CSVs, but nothing verifies that the Manufacturer Part Numbers (MPNs) actually exist or are orderable. The current check is purely a self-attestation that the part does not have the token `UNVERIFIED` and has a non-placeholder MPN in `BOM.md`. Typo'd or fake parts can pass this check, only to fail or be silently dropped at the supplier side. 
+Currently, `copperhead export bom` produces supplier-format CSVs, but nothing verifies that the Manufacturer Part Numbers (MPNs) actually exist or are orderable. The current check is purely a self-attestation that the part does not have the token `UNVERIFIED` and has a non-placeholder MPN in `BOM.md`. Typo'd or fake parts can pass this check, only to fail or be silently dropped at the supplier side.
 
 Because of the network-free invariant, `check` and `export bom` cannot hit the network to verify parts. Therefore, we need an opt-in, explicitly networked verification command (`copperhead verify-parts`) to query distributor/catalog APIs, validate MPNs, report their real status (e.g., RESOLVED, NOT FOUND, NO STOCK), and optionally write back resolved LCSC part numbers to `BOM.md`.
 
