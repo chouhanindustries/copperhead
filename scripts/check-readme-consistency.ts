@@ -1,6 +1,14 @@
 import { readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
+/**
+ * Generates the Markdown maturity section including the acceptance criteria matrix
+ * based on current version and status.json data.
+ *
+ * @param version - The current package version string (e.g. "0.8.1")
+ * @param statusData - Parsed contents of status.json containing acceptance criteria statuses
+ * @returns The formatted Markdown maturity text section
+ */
 function generateMaturitySection(version: string, statusData: any): string {
   const acs = statusData.acceptanceCriteria;
   const namesMap: Record<string, string> = {
@@ -30,6 +38,10 @@ function generateMaturitySection(version: string, statusData: any): string {
   ].join('\n');
 }
 
+/**
+ * Main execution routine for verifying and updating README consistency.
+ * Validates version claims against package.json and regenerates the maturity section.
+ */
 async function main() {
   const root = process.cwd();
   const pkgPath = path.join(root, 'package.json');
