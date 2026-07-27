@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { Command } from 'commander';
 import path from 'node:path';
+import { existsSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { createInterface } from 'node:readline/promises';
 import { loadConfig, resolveModel } from './config.js';
@@ -223,6 +224,24 @@ program
         meta: { command: 'create', modelSource: source, version, kicadCliVersion: kicadVer },
       });
       process.exit(res.ok ? 0 : 1);
+    } catch (err) {
+      console.error((err as Error).message);
+      process.exit(1);
+    }
+  });
+
+program
+  .command('mcp')
+  .description('start a stdio MCP server exposing the gated pipeline (check/do/sync/init) to MCP hosts')
+  .action(async () => {
+    const repo = repoOf(program.opts());
+    if (!existsSync(repo)) {
+      console.error(`repo not found: ${repo}`);
+      process.exit(1);
+    }
+    try {
+      const { startMcpServer } = await import('./mcp/server.js');
+      await startMcpServer(repo);
     } catch (err) {
       console.error((err as Error).message);
       process.exit(1);

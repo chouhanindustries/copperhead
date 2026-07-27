@@ -58,6 +58,7 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.113.0",
+    "@modelcontextprotocol/sdk": "^1.29.0",
     "commander": "^12.1.0",
     "execa": "^9.5.2",
     "openai": "^4.87.3"
