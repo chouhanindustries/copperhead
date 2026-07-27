@@ -23,6 +23,7 @@ import { CodexProvider } from './providers/codex.js';
 import { ClaudeCodeProvider } from './providers/claude-code.js';
 import { CursorProvider } from './providers/cursor.js';
 import { openSynapMemory, type RunRecord, type SynapMemory } from '../memory/synap.js';
+import { describeSelection, kicadReloadNote, type KicadBridge } from '../kicad/ipc.js';
 
 /** What the user sees at the moment they decide whether to keep going. */
 export interface BudgetExhaustedStats {
@@ -58,6 +59,12 @@ export interface RunOptions {
   renderer?: ProgressRenderer;
   /** Caller-known run identity for the metadata block (design D2). */
   meta?: RunMetaInput;
+  /**
+   * Live KiCad IPC bridge (AC-114). Only the REPL and `do` commands pass one;
+   * check/sync/create never do, so those paths cannot touch the socket
+   * (AC-114.6). The loop reads context through it and never mutates KiCad.
+   */
+  kicad?: KicadBridge | null;
 }
 
 export interface RunResult {
@@ -213,6 +220,7 @@ async function runWithMemory(
     lastDrc: null,
     repairCycles: 0,
     finishRequest: null,
+    kicad: opts.kicad ?? null,
   };
 
   // Session resume for claude-code / cursor is only correct when the response
@@ -280,9 +288,35 @@ async function runWithMemory(
     log('recalled prior context from Synap memory');
   }
   const system = recalled ? `${basePrompt}\n\n${recalled}` : basePrompt;
+  // Selection snapshot at turn start (D4, AC-114.3): what the user has selected
+  // in the connected KiCad, captured once so the prompt is stable within the
+  // run; the get_kicad_selection tool exists for live re-query. Labeled as
+  // possibly irrelevant, like an IDE selection. Empty selection injects nothing,
+  // and any bridge failure is soft (D6): the run proceeds without the block.
+  let selectionBlock = '';
+  if (ctx.kicad?.isConnected) {
+    try {
+      const selection = await ctx.kicad.getSelection();
+      if (selection.length) {
+        selectionBlock = [
+          '',
+          '',
+          '## KiCad selection',
+          '',
+          'The user currently has these items selected in the running KiCad board editor',
+          '(snapshot from the start of this run; it may or may not be relevant to the request):',
+          ...describeSelection(selection).map((line) => `- ${line}`),
+        ].join('\n');
+        await transcript.event('kicad-selection', { items: selection });
+      }
+    } catch (err) {
+      await transcript.event('kicad-selection-failed', { error: (err as Error).message });
+    }
+  }
+  const requestContent = opts.stagePrompt ? `${opts.stagePrompt}\n\nRequest: ${opts.request}` : opts.request;
   const messages: Msg[] = [
     { role: 'system', content: system },
-    { role: 'user', content: opts.stagePrompt ? `${opts.stagePrompt}\n\nRequest: ${opts.request}` : opts.request },
+    { role: 'user', content: requestContent + selectionBlock },
   ];
   await transcript.event('run-start', meta);
 
@@ -712,6 +746,11 @@ async function runWithMemory(
         }
       }
       await transcript.event('run-committed', { commit, files });
+      const reloadNote = await kicadReloadNote(ctx.kicad, files);
+      if (reloadNote) {
+        log(reloadNote);
+        await transcript.event('kicad-reload-prompt', { note: reloadNote });
+      }
       const runStats = stats('done');
       await transcript.event('run-end', runStats);
       await transcript.writeSummary({

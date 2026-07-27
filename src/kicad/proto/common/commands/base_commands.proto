@@ -1,0 +1,103 @@
+/*
+ * This program source code file is part of KiCad, a free EDA CAD application.
+ *
+ * Copyright (C) 2024 KiCad Developers, see AUTHORS.txt for contributors.
+ *
+ * This program is free software: you can redistribute it and/or modify it
+ * under the terms of the GNU General Public License as published by the
+ * Free Software Foundation, either version 3 of the License, or (at your
+ * option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful, but
+ * WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ * General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program.  If not, see <http://www.gnu.org/licenses/>.
+ */
+
+syntax = "proto3";
+
+package kiapi.common.commands;
+
+import "common/types/base_types.proto";
+
+message GetVersion
+{
+}
+
+message GetVersionResponse
+{
+  kiapi.common.types.KiCadVersion version = 1;
+}
+
+// A command to check if the connection to KiCad is OK
+message Ping
+{
+}
+
+// Returns the full path to the given KiCad binary
+message GetKiCadBinaryPath
+{
+  // The short name of the binary, such as `kicad-cli` or `kicad-cli.exe`.  If on Windows, an `.exe`
+  // extension will be assumed if not present.
+  string binary_name = 1;
+}
+
+message PathResponse
+{
+  string path = 1;
+}
+
+// returns kiapi.common.types.Box2
+message GetTextExtents
+{
+  // A temporary text item to calculate the bounding box for
+  kiapi.common.types.Text text = 1;
+}
+
+message TextOrTextBox
+{
+  oneof inner {
+    kiapi.common.types.Text text = 1;
+    kiapi.common.types.TextBox textbox = 2;
+  }
+}
+
+// Render the given text object(s) as shapes.  Depending on whether the text is using
+// the KiCad stroke font or a custom font, the response will be a compound shape containing
+// a set of polygons or a set of segments.
+message GetTextAsShapes
+{
+  repeated TextOrTextBox text = 1;
+}
+
+message TextWithShapes
+{
+  TextOrTextBox text = 1;
+
+  kiapi.common.types.CompoundShape shapes = 2;
+}
+
+message GetTextAsShapesResponse
+{
+  repeated TextWithShapes text_with_shapes = 1;
+}
+
+// Return a writeable path that a plugin can use for storing persistent data such as configuration
+// files, etc.  This path may not yet exist; actual creation of the directory for a given plugin is
+// up to the plugin itself.  Files in this path will not be modified if the plugin is uninstalled or
+// upgraded.
+//
+// Returns StringResponse
+message GetPluginSettingsPath
+{
+  // The identifier of the plugin
+  string identifier = 1;
+}
+
+message StringResponse
+{
+  string response = 1;
+}

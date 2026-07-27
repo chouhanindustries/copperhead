@@ -26,7 +26,11 @@ describe('sweepStaleTempDirs (I8: reclaim leaked scratch dirs)', () => {
   });
 
   it('removes a stale dir but keeps a fresh one', async () => {
-    const now = 1_000_000_000_000;
+    // Real clock, not a fixed epoch: the create-pipeline tests run their own
+    // real-clock sweep of the same tmpdir in parallel workers, and a fixture
+    // aged against a fake "now" is ancient on the real clock — the concurrent
+    // sweep would delete the "fresh" dir out from under this test.
+    const now = Date.now();
     const stale = await makeAged('erc-stale', 3 * 60 * 60 * 1000, now); // 3h old
     const fresh = await makeAged('cc-fresh', 5 * 60 * 1000, now); // 5m old
 
@@ -39,7 +43,7 @@ describe('sweepStaleTempDirs (I8: reclaim leaked scratch dirs)', () => {
   });
 
   it('never touches non-copperhead temp dirs', async () => {
-    const now = 1_000_000_000_000;
+    const now = Date.now();
     const foreign = await mkdtemp(path.join(tmpdir(), 'someone-else-'));
     made.push(foreign);
     const when = new Date(now - 24 * 60 * 60 * 1000); // a day old
@@ -52,7 +56,7 @@ describe('sweepStaleTempDirs (I8: reclaim leaked scratch dirs)', () => {
   });
 
   it('honours a custom maxAge and returns [] when nothing is stale', async () => {
-    const now = 1_000_000_000_000;
+    const now = Date.now();
     const recent = await makeAged('validate-recent', 90 * 1000, now); // 90s old
 
     // 60s cutoff: the 90s-old dir is stale and swept.

@@ -98,6 +98,14 @@ Two invariants make this trustworthy:
 
 Spec-gated in, verification-gated out: the design can't drift from its requirements, because drift is a build failure.
 
+### Linked to a running KiCad (optional)
+
+If KiCad 9+ is open with its API server enabled (preferences: Plugins, "Enable KiCad API"), the REPL and `do` link to it automatically, read-only. The agent sees which documents you have open and what you have selected on the board, so "move this decoupling cap closer" has a referent, and after a committed change touches a board you have open you get a reminder to reload it in KiCad. Edits never go through the KiCad API: files plus ERC/DRC verification remain the only mutation path. No KiCad running, no change in behavior.
+
+### Side panel inside pcbnew (KiCad 9/10)
+
+Prefer not to leave the board at all? `node scripts/build-pcm-addon.mjs` builds a KiCad addon zip; install it via KiCad's Plugin and Content Manager ("Install from File"). It docks a copperhead pane into pcbnew: type a change request, watch the run stream, get the verified commit, with the live-KiCad link above active underneath. The pane drives `copperhead serve` (install the CLI first), and targets KiCad 9/10; KiCad 11 removes the plugin system it needs, tracked in [#114](https://github.com/chouhanindustries/copperhead/issues/114).
+
 ## CLI
 
 ```text
@@ -108,6 +116,7 @@ copperhead doctor                    # env preflight: kicad-cli, git, node, prov
 copperhead sync [--dry-run]          # verify the whole design state, resolve drift
 copperhead create --brief brief.md   # brief → full output package
 copperhead export bom --supplier jlcpcb   # supplier-ready ordering file from docs/BOM.md
+copperhead serve                     # headless NDJSON-over-stdio surface for embedders (KiCad side panel)
 ```
 
 Global flags: `--repo <path>` (default: cwd) and `--json` for machine-readable output. `--model` is available on `do`, `sync`, `create`, and `doctor`; `--interactive` only on `do` and `create`; `do` also takes `--dry-run`, `--max-turns`, and `--allow-dirty`.

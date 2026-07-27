@@ -9,7 +9,7 @@ import type { CopperheadConfig, ModelSource } from '../config.js';
 
 /** Caller-supplied run identity: facts the loop cannot probe for itself. */
 export interface RunMetaInput {
-  command?: 'do' | 'create' | 'sync' | 'repl';
+  command?: 'do' | 'create' | 'sync' | 'repl' | 'serve';
   modelSource?: ModelSource;
   version?: string;
   kicadCliVersion?: string;
@@ -29,7 +29,7 @@ export interface RunMeta {
   modelSource: ModelSource | null;
   runId: string;
   startedAt: string;
-  command: 'do' | 'create' | 'sync' | 'repl' | null;
+  command: 'do' | 'create' | 'sync' | 'repl' | 'serve' | null;
   interactive: boolean;
   stage: { name: string; index: number; total: number } | null;
   brief: { path: string; sha256: string } | null;

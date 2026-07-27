@@ -1,0 +1,4 @@
+kicad-10.0.5
+source: https://gitlab.com/kicad/code/kicad/-/tree/10.0.5/api/proto
+Vendored verbatim (GPLv3+ upstream headers retained). Re-record test/fixtures/kicad-ipc
+frames when bumping this tag.

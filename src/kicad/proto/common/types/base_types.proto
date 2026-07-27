@@ -1,0 +1,482 @@
+/*
+ * This program source code file is part of KiCad, a free EDA CAD application.
+ *
+ * Copyright (C) 2024 KiCad Developers, see AUTHORS.txt for contributors.
+ *
+ * This program is free software: you can redistribute it and/or modify it
+ * under the terms of the GNU General Public License as published by the
+ * Free Software Foundation, either version 3 of the License, or (at your
+ * option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful, but
+ * WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ * General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program.  If not, see <http://www.gnu.org/licenses/>.
+ */
+
+/*
+ * base_types.proto
+ * Includes types used in many parts of the API
+ */
+
+syntax = "proto3";
+
+package kiapi.common.types;
+
+import "google/protobuf/field_mask.proto";
+import "common/types/enums.proto";
+
+enum CommandStatus
+{
+  CS_UNKNOWN      = 0;
+  CS_OK           = 1;   // Command succeeded
+  CS_FAILED       = 2;   // Command failed
+}
+
+message CommandStatusResponse
+{
+  CommandStatus status = 1;
+}
+
+/**
+ * Describes a particular version of KiCad
+ */
+message KiCadVersion
+{
+  uint32 major = 1;
+  uint32 minor = 2;
+  uint32 patch = 3;
+
+  // Full identifier string, potentially containing git hashes, packager-added info, etc.
+  string full_version = 4;
+}
+
+/**
+ * Some commands are specific to a KiCad window (frame).  This list contains all addressable frames.
+ */
+enum FrameType
+{
+  FT_UNKNOWN              = 0;
+  FT_PROJECT_MANAGER      = 1;
+  FT_SCHEMATIC_EDITOR     = 2;
+  FT_PCB_EDITOR           = 3;
+  FT_SPICE_SIMULATOR      = 4;
+  FT_SYMBOL_EDITOR        = 5;
+  FT_FOOTPRINT_EDITOR     = 6;
+  FT_DRAWING_SHEET_EDITOR = 7;
+}
+
+/**
+ * Describes a KIID, or UUID of an object in a KiCad editor model.
+ */
+message KIID
+{
+  // The KIID's value in standard UUID format, stored as a string for easy portability
+  string value = 1;
+}
+
+/**
+ * Identifier for the type of document being targeted by a request
+ */
+enum DocumentType
+{
+  DOCTYPE_UNKNOWN       = 0;
+  DOCTYPE_SCHEMATIC     = 1;
+  DOCTYPE_SYMBOL        = 2;
+  DOCTYPE_PCB           = 3;
+  DOCTYPE_FOOTPRINT     = 4;
+  DOCTYPE_DRAWING_SHEET = 5;
+  DOCTYPE_PROJECT       = 6;
+}
+
+/**
+ * Describes a KiCad LIB_ID; a unique identifier for a loaded symbol or footprint
+ */
+message LibraryIdentifier
+{
+  // The library portion of the LIB_ID
+  string library_nickname = 1;
+
+  // The symbol or footprint name
+  string entry_name = 2;
+}
+
+/**
+ * Describes a unique sheet in a schematic
+ */
+message SheetPath
+{
+  // The canonical path to the sheet.  The first KIID will be the root sheet, etc.
+  repeated KIID path = 1;
+
+  // The path converted to a human readable form such as "/", "/child", or "/child/grandchild"
+  string path_human_readable = 2;
+}
+
+/**
+ * Describes a KiCad project
+ */
+message ProjectSpecifier
+{
+  // The name of the project (without the kicad_pro extension)
+  string name = 1;
+
+  // The path to the project directory
+  string path = 2;
+}
+
+/**
+ * Describes a document that will be the target of a request
+ */
+message DocumentSpecifier
+{
+  DocumentType type = 1;
+
+  oneof identifier
+  {
+    // If type == DT_SYMBOL or DT_FOOTPRINT, identifies a certain library entry
+    LibraryIdentifier lib_id = 2;
+
+    // If type == DT_SCHEMATIC, identifies a sheet with a given path
+    SheetPath sheet_path = 3;
+
+    // If type == DT_PCB, identifies a PCB with a given filename, e.g. "board.kicad_pcb"
+    string board_filename = 4;
+  }
+
+  ProjectSpecifier project = 5;
+}
+
+/**
+ * This header is included in requests and responses about item(s) in a document
+ */
+message ItemHeader
+{
+  // Which document is this request targeting?
+  DocumentSpecifier document = 1;
+
+  // Which container within the document is this request targeting?
+  // If container is omitted or empty, the document is used as the container.
+  KIID container = 2;
+
+  // Which fields on the item(s) are included with this request or response
+  google.protobuf.FieldMask field_mask = 3;
+}
+
+/**
+ * Status of a request that included an ItemHeader
+ */
+enum ItemRequestStatus
+{
+  IRS_UNKNOWN            = 0;
+  IRS_OK                 = 1;
+  IRS_DOCUMENT_NOT_FOUND = 2;   // The given document is not open in KiCad
+  IRS_FIELD_MASK_INVALID = 3;   // The given field_mask contains invalid specifiers
+}
+
+// Describes a point or distance in 2D space.  All coordinates are in nanometers.
+message Vector2
+{
+  int64 x_nm = 1;
+  int64 y_nm = 2;
+}
+
+// Describes a point or distance in 3D space.  All coordinates are in nanometers.
+message Vector3
+{
+  int64 x_nm = 1;
+  int64 y_nm = 2;
+  int64 z_nm = 3;
+}
+
+message Vector3D
+{
+  double x_nm = 1;
+  double y_nm = 2;
+  double z_nm = 3;
+}
+
+message Box2
+{
+  kiapi.common.types.Vector2 position = 1;
+  kiapi.common.types.Vector2 size = 2;
+}
+
+// Describes a quantity of distance (size, length, etc).  All coordinates are in nanometers.
+message Distance
+{
+  int64 value_nm = 1;
+}
+
+// Corresponds to EDA_ANGLE, where the underlying storage is degrees
+message Angle
+{
+  double value_degrees = 1;
+}
+
+// Represents a value from 0.0 to 1.0
+message Ratio
+{
+  double value = 1;
+}
+
+// Represents a time delay in attoseconds. Since 10.0.0.
+message Time
+{
+  int64 value_as = 1;
+}
+
+// Corresponds to COLOR4D.  Each color channel is a double from 0.0 to 1.0.
+message Color
+{
+  double r = 1;
+  double g = 2;
+  double b = 3;
+  double a = 4;
+}
+
+// The formulation of arc that is used in KiCad core geometry code.
+// Start, midpoint (on the arc) and end are stored.  Angle, center point, etc are calculated.
+message ArcStartMidEnd
+{
+  Vector2 start = 1;
+  Vector2 mid   = 2;
+  Vector2 end   = 3;
+}
+
+message PolyLineNode
+{
+  oneof geometry {
+    Vector2        point = 1;
+    ArcStartMidEnd arc   = 2;
+  }
+}
+
+// Corresponds to class SHAPE_LINE_CHAIN: A closed or open polyline that can include arcs.
+// For non-arc cases, each node is a point along the line.  An implicit line segment exists
+// between the last and first node if closed is true.  When arcs are present, the arc start and
+// end points are not duplicated by point nodes (meaning, for example, a rectangle with rounded
+// corners could be represented with four arc nodes and no point nodes).
+message PolyLine
+{
+  repeated PolyLineNode nodes  = 1;
+  bool                  closed = 2;
+}
+
+message PolygonWithHoles
+{
+  PolyLine          outline = 1;
+  repeated PolyLine holes   = 2;
+}
+
+// Corresponds to SHAPE_POLY_SET: a set of polygons or polylines
+message PolySet
+{
+  repeated PolygonWithHoles polygons = 1;
+}
+
+// Describes whether or not an item is locked for editing or movement
+enum LockedState
+{
+  LS_UNKNOWN  = 0;
+  LS_UNLOCKED = 1;
+  LS_LOCKED   = 2;
+}
+
+message TextAttributes
+{
+  string                      font_name            = 1;
+  HorizontalAlignment         horizontal_alignment = 2;
+  VerticalAlignment           vertical_alignment   = 3;
+  kiapi.common.types.Angle    angle                = 4;
+  double                      line_spacing         = 5;
+  kiapi.common.types.Distance stroke_width         = 6;
+  bool                        italic               = 7;
+  bool                        bold                 = 8;
+  bool                        underlined           = 9;
+
+  // Deprecated since 9.0.1 (text items are now always visible, only Fields can be hidden)
+  bool                        visible              = 10;
+
+  bool                        mirrored             = 11;
+  bool                        multiline            = 12;
+  bool                        keep_upright         = 13;
+  kiapi.common.types.Vector2  size                 = 14;
+}
+
+message Text
+{
+  // Reserved for future use; base text objects don't have IDs right now
+  // kiapi.common.types.KIID           id         = 1;
+  kiapi.common.types.Vector2        position   = 2;
+  kiapi.common.types.TextAttributes attributes = 3;
+
+  // Reserved for future use; base objects don't support locking right now
+  //kiapi.common.types.LockedState    locked     = 4;
+
+  string                            text       = 5;
+  string                            hyperlink  = 6;
+}
+
+message TextBox
+{
+  kiapi.common.types.Vector2        top_left     = 2;
+  kiapi.common.types.Vector2        bottom_right = 3;
+  kiapi.common.types.TextAttributes attributes   = 4;
+
+  // Reserved for future use; base objects don't support locking right now
+  //kiapi.common.types.LockedState    locked       = 5;
+
+  string                            text         = 6;
+}
+
+message StrokeAttributes
+{
+  Distance width = 1;
+  StrokeLineStyle style = 2;
+  Color color = 3;
+}
+
+enum GraphicFillType
+{
+  GFT_UNKNOWN  = 0;
+  GFT_UNFILLED = 1;
+  GFT_FILLED   = 2;
+}
+
+message GraphicFillAttributes
+{
+  GraphicFillType fill_type = 1;
+
+  // Color of the fill (not used in board and footprints)
+  Color color = 2;
+}
+
+message GraphicAttributes
+{
+  StrokeAttributes stroke = 1;
+  GraphicFillAttributes fill = 2;
+}
+
+message GraphicSegmentAttributes
+{
+  kiapi.common.types.Vector2  start = 1;
+  kiapi.common.types.Vector2  end   = 2;
+}
+
+message GraphicRectangleAttributes
+{
+  kiapi.common.types.Vector2  top_left     = 1;
+  kiapi.common.types.Vector2  bottom_right = 2;
+  kiapi.common.types.Distance corner_radius = 3;
+}
+
+message GraphicArcAttributes
+{
+  kiapi.common.types.Vector2  start = 1;
+  kiapi.common.types.Vector2  mid   = 2;
+  kiapi.common.types.Vector2  end   = 3;
+}
+
+message GraphicCircleAttributes
+{
+  kiapi.common.types.Vector2  center = 1;
+
+  // A point on the radius of the circle.  This is stored instead of just a radius so that the point
+  // by which the user can adjust the circle radius is persisted.
+  kiapi.common.types.Vector2  radius_point = 2;
+}
+
+message GraphicBezierAttributes
+{
+  kiapi.common.types.Vector2  start    = 1;
+  kiapi.common.types.Vector2  control1 = 2;
+  kiapi.common.types.Vector2  control2 = 3;
+  kiapi.common.types.Vector2  end      = 4;
+}
+
+message GraphicShape
+{
+  // Reserved for future use; base EDA_SHAPE doesn't have an ID or locked state right now
+  // KIID              id         = 1;
+  // LockedState       locked     = 2;
+  GraphicAttributes attributes = 3;
+
+  oneof geometry {
+    GraphicSegmentAttributes     segment    = 4;
+    GraphicRectangleAttributes   rectangle  = 5;
+    GraphicArcAttributes         arc        = 6;
+    GraphicCircleAttributes      circle     = 7;
+    PolySet                      polygon    = 8;
+    GraphicBezierAttributes      bezier     = 9;
+  }
+}
+
+// A SHAPE_COMPOUND in KiCad
+message CompoundShape
+{
+  repeated GraphicShape shapes = 1;
+}
+
+// The text strings that can be set in a drawing sheet for the title block
+message TitleBlockInfo
+{
+  string title = 1;
+  string date = 2;
+  string revision = 3;
+  string company = 4;
+
+  // Note: not a repeated string; there can be gaps and the UI limits the count to 9
+
+  string comment1 = 5;
+  string comment2 = 6;
+  string comment3 = 7;
+  string comment4 = 8;
+  string comment5 = 9;
+  string comment6 = 10;
+  string comment7 = 11;
+  string comment8 = 12;
+  string comment9 = 13;
+}
+
+enum AxisAlignment
+{
+  AA_UNKNOWN = 0;
+  AA_X_AXIS = 1;
+  AA_Y_AXIS = 2;
+}
+
+enum MapMergeMode
+{
+  MMM_UNKNOWN = 0;
+  // The existing map will be merged with the incoming map; keys that are not present in the
+  // incoming map will be preserved with their original values
+  MMM_MERGE = 1;
+  // The existing map will be cleared and replaced with the incoming map
+  MMM_REPLACE = 2;
+}
+
+enum ElectricalPinType
+{
+  EPT_UNKNOWN = 0;
+  EPT_INPUT = 1;
+  EPT_OUTPUT = 2;
+  EPT_BIDIRECTIONAL = 3;
+  EPT_TRISTATE = 4;
+  EPT_PASSIVE = 5;
+
+  // A free pin is not internally connected and may connect to any net (route-through)
+  EPT_FREE = 6;
+
+  EPT_UNSPECIFIED = 7;
+  EPT_POWER_INPUT = 8;
+  EPT_POWER_OUTPUT = 9;
+  EPT_OPEN_COLLECTOR = 10;
+  EPT_OPEN_EMITTER = 11;
+
+  // A no-connect pin should not be connected to any net
+  EPT_NO_CONNECT = 12;
+}

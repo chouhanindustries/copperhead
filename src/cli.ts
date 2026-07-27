@@ -12,6 +12,7 @@ import { syncVerify, syncResolve, formatSyncReport } from './commands/sync.js';
 import { runCreate } from './commands/create.js';
 import { runDemo, demoTourText } from './commands/demo.js';
 import { runRepl } from './commands/repl.js';
+import { runServe } from './commands/serve.js';
 import {
   runExportBom,
   parseSupplier,
@@ -23,6 +24,7 @@ import { DEFAULT_BOARDS, DEFAULT_SPARES } from './kicad/bom-export.js';
 import { runAgentLoop, type BudgetExhaustedStats } from './agent/loop.js';
 import { makeRenderer } from './agent/render.js';
 import { kicadCliVersion } from './kicad/cli.js';
+import { KicadBridge } from './kicad/ipc.js';
 import { loadEnvFile } from './util/env.js';
 
 // Read .env from the working directory before any command resolves a model or a
@@ -228,6 +230,10 @@ program
       opts: { model?: string; maxTurns?: string; allowDirty?: boolean; dryRun?: boolean; interactive?: boolean },
     ) => {
       const repo = repoOf(program.opts());
+      // KiCad IPC bridge (AC-114): `do` and the REPL are the only commands
+      // that construct one; check/sync/create never touch the socket.
+      const kicad = new KicadBridge({ reprobeMs: 0 });
+      kicad.start();
       try {
         const kicadVer = await kicadCliVersion();
         const config = await loadConfig(repo);
@@ -237,6 +243,7 @@ program
           repoRoot: repo,
           request,
           model,
+          kicad,
           ...(opts.maxTurns ? { maxTurns: parseMaxTurns(opts.maxTurns) } : {}),
           allowDirty: opts.allowDirty ?? false,
           dryRun: opts.dryRun ?? false,
@@ -254,6 +261,44 @@ program
       }
     },
   );
+
+program
+  .command('serve')
+  .description('headless run surface: NDJSON over stdio for embedders (KiCad side panel)')
+  .option('--model <model>', 'codex | cursor | gpt-5 | claude | claude-code (or a provider-specific model id)')
+  .option('--max-turns <n>', 'turn budget per run')
+  .action(async (opts: { model?: string; maxTurns?: string }) => {
+    const repo = repoOf(program.opts());
+    try {
+      const kicadVer = await kicadCliVersion();
+      const config = await loadConfig(repo);
+      // No model is not fatal for serve: the handshake and `check` work
+      // without one, and each `run` gets a no-model error with guidance.
+      // Exiting here instead put embedders into a respawn loop (AC-114B.1).
+      let model: string | null = null;
+      let source: ModelSource | null = null;
+      let modelError: string | undefined;
+      try {
+        ({ model, source } = resolveModel(opts.model, config));
+      } catch (err) {
+        modelError = (err as Error).message;
+      }
+      await runServe({
+        repoRoot: repo,
+        model,
+        modelSource: source,
+        ...(modelError !== undefined ? { modelError } : {}),
+        version,
+        kicadCliVersion: kicadVer,
+        ...(opts.maxTurns ? { maxTurns: parseMaxTurns(opts.maxTurns) } : {}),
+      });
+      process.exit(0);
+    } catch (err) {
+      // stdout is the protocol channel; human-facing failures go to stderr.
+      console.error((err as Error).message);
+      process.exit(1);
+    }
+  });
 
 program
   .command('sync')

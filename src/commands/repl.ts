@@ -22,6 +22,7 @@ import { DockRenderer } from '../agent/dock-renderer.js';
 import { callout } from '../agent/box.js';
 import { runCheck } from './check.js';
 import { demoTourText } from './demo.js';
+import { KicadBridge } from '../kicad/ipc.js';
 import {
   formatBomInspect,
   formatConfigInspect,
@@ -64,6 +65,12 @@ export interface ReplOptions {
   ) => Promise<Pick<RunResult, 'outcome'>>;
   /** Injected /check (tests). */
   runCheckCmd?: (log?: (line: string) => void) => Promise<void>;
+  /**
+   * KiCad IPC bridge (AC-114): undefined creates and owns a real one for the
+   * session; null disables the bridge entirely; an instance is used as-is
+   * (tests point one at the fake server).
+   */
+  kicad?: KicadBridge | null;
 }
 
 const QUIT = new Set(['/quit', '/exit', '/q']);
@@ -228,7 +235,7 @@ function isTtyStream(input: NodeJS.ReadableStream, output: NodeJS.WritableStream
   return Boolean((input as NodeJS.ReadStream).isTTY) && Boolean((output as NodeJS.WriteStream).isTTY);
 }
 
-async function statusText(opts: ReplOptions): Promise<string> {
+async function statusText(opts: ReplOptions, bridge: KicadBridge | null = null): Promise<string> {
   const repo = path.resolve(opts.repoRoot);
   const lines = [
     '',
@@ -237,6 +244,14 @@ async function statusText(opts: ReplOptions): Promise<string> {
     metaRow('repo', shortPath(repo)),
     metaRow('model', `${opts.model}  ${dim(`via ${opts.modelSource}`)}`),
     metaRow('kicad-cli', opts.kicadCliVersion),
+    metaRow(
+      'kicad',
+      bridge
+        ? bridge.isConnected
+          ? ok(`connected (${bridge.version ?? 'unknown version'})`)
+          : dim('not connected (enable the API server in KiCad preferences to link the editor)')
+        : dim('bridge disabled'),
+    ),
     metaRow('node', process.version),
   ];
 
@@ -273,12 +288,13 @@ async function statusText(opts: ReplOptions): Promise<string> {
   return lines.join('\n');
 }
 
-function defaultRunner(opts: ReplOptions, log: (l: string) => void) {
+function defaultRunner(opts: ReplOptions, log: (l: string) => void, kicad: KicadBridge | null) {
   return (request: string) =>
     runAgentLoop({
       repoRoot: opts.repoRoot,
       request,
       model: opts.model,
+      kicad,
       ...(opts.maxTurns !== undefined ? { maxTurns: opts.maxTurns } : {}),
       allowDirty: true,
       interactive: opts.interactive ?? false,
@@ -336,7 +352,20 @@ export async function runRepl(opts: ReplOptions): Promise<{ ok: boolean; turns: 
   const seed = opts.seed?.trim() || undefined;
   const tty = isTtyStream(input, output);
 
-  const runOne = opts.runRequest ?? defaultRunner(opts, log);
+  // KiCad IPC bridge (AC-114): owned by the session unless injected (tests) or
+  // disabled (null). Startup never blocks on it; state transitions land in the
+  // history as muted lines and refresh the idle prompt's meta row.
+  let promptRender: (() => void) | null = null;
+  const ownBridge = opts.kicad === undefined;
+  const bridge: KicadBridge | null = ownBridge
+    ? new KicadBridge({
+        log: (l) => log(dim(`  ${l}`)),
+        onStateChange: () => promptRender?.(),
+      })
+    : (opts.kicad ?? null);
+  bridge?.start();
+
+  const runOne = opts.runRequest ?? defaultRunner(opts, log, bridge);
   const checkCmd =
     opts.runCheckCmd ??
     (async () => {
@@ -345,20 +374,22 @@ export async function runRepl(opts: ReplOptions): Promise<{ ok: boolean; turns: 
     });
 
   if (!tty) {
-    if (!seed) {
-      log(
-        err(
-          'copperhead: interactive shell requires a TTY. Use `copperhead do "<request>"` for one-shot runs.',
-        ),
-      );
-      return { ok: false, turns: 0 };
-    }
     try {
+      if (!seed) {
+        log(
+          err(
+            'copperhead: interactive shell requires a TTY. Use `copperhead do "<request>"` for one-shot runs.',
+          ),
+        );
+        return { ok: false, turns: 0 };
+      }
       const res = await runOne(seed, log, opts.renderer);
       return { ok: res.outcome !== 'failure', turns: 1 };
     } catch (e) {
       log(err((e as Error).message));
       return { ok: false, turns: 0 };
+    } finally {
+      if (ownBridge) bridge?.stop();
     }
   }
 
@@ -433,7 +464,7 @@ export async function runRepl(opts: ReplOptions): Promise<{ ok: boolean; turns: 
       return 'continue';
     }
     if (cmd === '/status') {
-      log(await statusText(opts));
+      log(await statusText(opts, bridge));
       return 'continue';
     }
     if (cmd === '/version') {
@@ -583,8 +614,12 @@ export async function runRepl(opts: ReplOptions): Promise<{ ok: boolean; turns: 
   };
   await refreshGit();
 
+  // The kicad segment is always present when the bridge exists, so the row
+  // shows the disconnected state too (AC-114.1), not just the happy path.
+  const kicadSeg = (): string | null =>
+    bridge ? (bridge.isConnected ? `kicad ${bridge.version ?? 'on'}` : 'kicad off') : null;
   const metaLine = (): string =>
-    `${copper('●')} ${dim([opts.model, gitSeg].filter(Boolean).join(' · '))}`;
+    `${copper('●')} ${dim([opts.model, gitSeg, kicadSeg()].filter(Boolean).join(' · '))}`;
 
   let asked = 0;
   const ask = (): Promise<string | null> => {
@@ -604,6 +639,10 @@ export async function runRepl(opts: ReplOptions): Promise<{ ok: boolean; turns: 
       history: () => history,
       readKey: () => keys.next(),
       drainPrintable: () => keys.drainPrintable(),
+      // Lets a bridge state change repaint the idle prompt's meta row live.
+      refresh: (render) => {
+        promptRender = render;
+      },
     });
   };
 
@@ -628,6 +667,9 @@ export async function runRepl(opts: ReplOptions): Promise<{ ok: boolean; turns: 
         );
       }
       const raw = await pending;
+      // The registration died with the prompt; a repaint now would fight the
+      // run renderer (or the passive dock) for the same rows.
+      promptRender = null;
       if (raw === null) break;
       const line = raw.trim();
       if (!line) continue;
@@ -656,6 +698,7 @@ export async function runRepl(opts: ReplOptions): Promise<{ ok: boolean; turns: 
       log('');
     }
   } finally {
+    if (ownBridge) bridge?.stop();
     keys.close();
     dock.release();
     process.removeListener('SIGINT', onSigint);
