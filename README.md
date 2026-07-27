@@ -98,6 +98,10 @@ Two invariants make this trustworthy:
 
 Spec-gated in, verification-gated out: the design can't drift from its requirements, because drift is a build failure.
 
+### Linked to a running KiCad (optional)
+
+If KiCad 9+ is open with its API server enabled (preferences: Plugins, "Enable KiCad API"), the REPL and `do` link to it automatically, read-only. The agent sees which documents you have open and what you have selected on the board, so "move this decoupling cap closer" has a referent, and after a committed change touches a board you have open you get a reminder to reload it in KiCad. Edits never go through the KiCad API: files plus ERC/DRC verification remain the only mutation path. No KiCad running, no change in behavior.
+
 ## CLI
 
 ```text

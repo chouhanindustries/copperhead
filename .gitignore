@@ -12,3 +12,6 @@ demo-runs/
 manual-tests/runs/
 *.tgz
 .npmrc
+# KiCad session artifacts (opening a project in the GUI creates these)
+~*.lck
+.history/

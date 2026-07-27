@@ -1,0 +1,94 @@
+/*
+ * This program source code file is part of KiCad, a free EDA CAD application.
+ *
+ * Copyright (C) 2024 KiCad Developers, see AUTHORS.txt for contributors.
+ *
+ * This program is free software: you can redistribute it and/or modify it
+ * under the terms of the GNU General Public License as published by the
+ * Free Software Foundation, either version 3 of the License, or (at your
+ * option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful, but
+ * WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ * General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program.  If not, see <http://www.gnu.org/licenses/>.
+ */
+
+/*
+ * project_settings.proto
+ * Messages that describes project settings shared between schematics and boards
+ */
+
+syntax = "proto3";
+
+package kiapi.common.project;
+
+import "common/types/base_types.proto";
+import "common/types/enums.proto";
+import "board/board_types.proto";
+
+message NetClassBoardSettings
+{
+  optional kiapi.common.types.Distance clearance = 1;
+  optional kiapi.common.types.Distance track_width = 2;
+  optional kiapi.common.types.Distance diff_pair_track_width = 3;
+  optional kiapi.common.types.Distance diff_pair_gap = 4;
+  optional kiapi.common.types.Distance diff_pair_via_gap = 5;
+
+  // The default padstack to use for vias belonging to this netclass
+  // Currently KiCad only supports specifying the drill diameter and annular size on all layers for
+  // netclass via stacks.  Complex padstacks and other via features cannot be specified here.
+  optional kiapi.board.types.PadStack via_stack = 6;
+
+  // The default padstack to use for microvias belonging to this netclass
+  // Currently KiCad only supports specifying the drill diameter and annular size on all layers for
+  // netclass via stacks.  Complex padstacks and other via features cannot be specified here.
+  optional kiapi.board.types.PadStack microvia_stack = 7;
+
+  optional kiapi.common.types.Color color = 8;
+
+  // Since 10.0.0
+  optional string tuning_profile = 9;
+}
+
+message NetClassSchematicSettings
+{
+  optional kiapi.common.types.Distance wire_width = 1;
+  optional kiapi.common.types.Distance bus_width = 2;
+  optional kiapi.common.types.Color color = 3;
+  optional kiapi.common.types.StrokeLineStyle line_style = 4;
+}
+
+enum NetClassType
+{
+  NCT_UNKNOWN = 0;
+  // An explicitly-defined netclass, created by the user and saved in the project file
+  NCT_EXPLICIT = 1;
+  // An implicit (effective) netclass, made up of multiple explicit netclasses
+  NCT_IMPLICIT = 2;
+}
+
+message NetClass
+{
+  // The name of the netclass (the literal string "Default" for the default netclass)
+  // May be empty for composite netclasses
+  string name = 1;
+
+  optional int32 priority = 2;
+
+  optional NetClassBoardSettings board = 3;
+  optional NetClassSchematicSettings schematic = 4;
+
+  NetClassType type = 5;
+
+  // If this is a composite netclass, a list of the names of the "real" netclasses that make it up
+  repeated string constituents = 6;
+}
+
+message TextVariables
+{
+  map<string, string> variables = 1;
+}

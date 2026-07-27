@@ -34,6 +34,12 @@ export interface LivePromptOptions {
   echo?: (line: string) => void;
   /** Session log lines for PgUp/PgDn history scrolling. */
   history?: () => string[];
+  /**
+   * Called once with the prompt's render function, so external state changes
+   * (e.g. the KiCad bridge connecting while idle) can refresh the meta row.
+   * The registration is only valid until this prompt resolves.
+   */
+  refresh?: (render: () => void) => void;
 }
 
 /** Visible width ignoring SGR; kept for existing callers/tests. */
@@ -381,6 +387,7 @@ export async function promptWithSlashHints(opts: LivePromptOptions): Promise<str
   };
 
   renderDock();
+  opts.refresh?.(renderDock);
 
   for (;;) {
     const raw = await opts.readKey();

@@ -23,6 +23,7 @@ import { DEFAULT_BOARDS, DEFAULT_SPARES } from './kicad/bom-export.js';
 import { runAgentLoop, type BudgetExhaustedStats } from './agent/loop.js';
 import { makeRenderer } from './agent/render.js';
 import { kicadCliVersion } from './kicad/cli.js';
+import { KicadBridge } from './kicad/ipc.js';
 import { loadEnvFile } from './util/env.js';
 
 // Read .env from the working directory before any command resolves a model or a
@@ -228,6 +229,10 @@ program
       opts: { model?: string; maxTurns?: string; allowDirty?: boolean; dryRun?: boolean; interactive?: boolean },
     ) => {
       const repo = repoOf(program.opts());
+      // KiCad IPC bridge (AC-114): `do` and the REPL are the only commands
+      // that construct one; check/sync/create never touch the socket.
+      const kicad = new KicadBridge({ reprobeMs: 0 });
+      kicad.start();
       try {
         const kicadVer = await kicadCliVersion();
         const config = await loadConfig(repo);
@@ -237,6 +242,7 @@ program
           repoRoot: repo,
           request,
           model,
+          kicad,
           ...(opts.maxTurns ? { maxTurns: parseMaxTurns(opts.maxTurns) } : {}),
           allowDirty: opts.allowDirty ?? false,
           dryRun: opts.dryRun ?? false,

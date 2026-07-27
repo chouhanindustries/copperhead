@@ -1,0 +1,12 @@
+{
+  "kicad": "10.0.4-10.0.4~ubuntu22.04.1",
+  "docs": [
+    {
+      "type": "pcb",
+      "name": "open-key.kicad_pcb",
+      "projectName": "open-key",
+      "projectPath": "/home/animesh/Github/chouhan-industries/copperhead/test/fixtures/open-key/hardware"
+    }
+  ],
+  "selection": []
+}

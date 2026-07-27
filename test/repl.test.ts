@@ -56,6 +56,9 @@ function baseOpts(extra: Partial<Parameters<typeof runRepl>[0]> = {}) {
       runCheckCmd: vi.fn(async () => {
         lines.push('check ok');
       }),
+      // Deterministic: never probe a real KiCad from these tests; the bridge
+      // has its own suite (kicad-agent.test.ts injects one).
+      kicad: null,
       ...extra,
     },
   };
@@ -345,6 +348,7 @@ describe('session log file', () => {
           log?.('leaked sk-SECRET_KEY_123 in output');
           return { outcome: 'success' as const };
         }),
+        kicad: null,
       });
       await new Promise((r) => setTimeout(r, 30));
       input.write('do the thing\n');
@@ -398,6 +402,7 @@ describe('runRepl', () => {
       log: (l) => lines.push(l),
       input,
       output,
+      kicad: null,
     });
     expect(res.ok).toBe(false);
     expect(lines.join('\n')).toContain('requires a TTY');
@@ -419,6 +424,7 @@ describe('runRepl', () => {
       input: new PassThrough(),
       output: new PassThrough(),
       runRequest,
+      kicad: null,
     });
     expect(res).toEqual({ ok: true, turns: 1 });
     expect(runRequest).toHaveBeenCalledWith('add ESD diodes', expect.any(Function), expect.anything());

@@ -1,0 +1,445 @@
+/*
+ * This program source code file is part of KiCad, a free EDA CAD application.
+ *
+ * Copyright (C) 2024 Jon Evans <jon@craftyjon.com>
+ * Copyright (C) 2024 KiCad Developers, see AUTHORS.txt for contributors.
+ *
+ * This program is free software: you can redistribute it and/or modify it
+ * under the terms of the GNU General Public License as published by the
+ * Free Software Foundation, either version 3 of the License, or (at your
+ * option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful, but
+ * WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ * General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program.  If not, see <http://www.gnu.org/licenses/>.
+ */
+
+syntax = "proto3";
+
+package kiapi.board.commands;
+
+import "common/types/base_types.proto";
+import "common/types/enums.proto";
+import "common/types/project_settings.proto";
+import "board/board.proto";
+import "board/board_types.proto";
+
+/*
+ * Board stackup and properties
+ */
+
+message GetBoardStackup
+{
+  kiapi.common.types.DocumentSpecifier board = 1;
+}
+
+message BoardStackupResponse
+{
+  kiapi.board.BoardStackup stackup = 1;
+}
+
+// Changes the stackup for the given board according to the contents of the message (**not yet implemented**)
+// WARNING: any existing content on layers that are removed by this call is deleted.  This operation cannot be undone.
+// Returns BoardStackupResponse with the updated stackup, in normalized form
+message UpdateBoardStackup
+{
+  kiapi.common.types.DocumentSpecifier board = 1;
+  kiapi.board.BoardStackup stackup = 2;
+}
+
+message GetBoardEnabledLayers
+{
+  kiapi.common.types.DocumentSpecifier board = 1;
+}
+
+message BoardEnabledLayersResponse
+{
+  // The number of copper layers enabled in this board.
+  uint32 copper_layer_count = 1;
+
+  // A list of all layers enabled in this board, including copper layers and ones which cannot be disabled.
+  repeated kiapi.board.types.BoardLayer layers = 2;
+}
+
+// Changes which layers are enabled in the board stackup
+// WARNING: any existing content on layers that are removed by this call is deleted.  This operation cannot be undone.
+// Returns BoardEnabledLayersResponse with the updated layer set.
+message SetBoardEnabledLayers
+{
+  kiapi.common.types.DocumentSpecifier board = 1;
+
+  // The number of copper layers to enable in the board.  Currently, this must be an even number >= 2.
+  uint32 copper_layer_count = 2;
+
+  // The non-copper layers to enable.  Note that any copper layers in this list are ignored; copper layers are enabled
+  // by setting copper_layer_count.  Note that the F/B.Courtyard, Edge.Cuts, and Margin layers cannot be disabled and
+  // will be present in the board even if they are omitted from this list.
+  repeated kiapi.board.types.BoardLayer layers = 3;
+}
+
+message GetGraphicsDefaults
+{
+  kiapi.common.types.DocumentSpecifier board = 1;
+}
+
+message GraphicsDefaultsResponse
+{
+  kiapi.board.GraphicsDefaults defaults = 1;
+}
+
+enum BoardOriginType
+{
+  BOT_UNKNOWN = 0;
+  BOT_GRID = 1;
+  BOT_DRILL = 2;
+}
+
+// Returns a Vector2 with the specified origin point
+message GetBoardOrigin
+{
+  kiapi.common.types.DocumentSpecifier board = 1;
+
+  BoardOriginType type = 2;
+}
+
+message SetBoardOrigin
+{
+  kiapi.common.types.DocumentSpecifier board = 1;
+
+  BoardOriginType type = 2;
+
+  kiapi.common.types.Vector2 origin = 3;
+}
+
+message GetBoardLayerName
+{
+  kiapi.common.types.DocumentSpecifier board = 1;
+
+  kiapi.board.types.BoardLayer layer = 2;
+}
+
+message BoardLayerNameResponse
+{
+  // The name of the layer shown in the KiCad GUI, which may be a default value like "F.Cu" or may
+  // have been customized by the user.
+  string name = 1;
+}
+
+/*
+ * Net management
+ */
+
+message GetNets
+{
+  kiapi.common.types.DocumentSpecifier board = 1;
+
+  // If provided, will only return nets that belong to the given netclass.
+  // If more than one netclass_filter is given, nets belonging to any of the given classes will
+  // be returned.
+  repeated string netclass_filter = 2;
+}
+
+message NetsResponse
+{
+  repeated kiapi.board.types.Net nets = 1;
+}
+
+// Retrieve all the copper items belonging to a certain net or set of nets
+// returns kiapi.common.commands.GetItemsResponse
+message GetItemsByNet
+{
+  // Specifies which document to query, which fields to return, etc.
+  kiapi.common.types.ItemHeader header = 1;
+
+  // Optional list of item types to filter by.  If not provided, will return pads, vias,
+  // tracks, and zones.
+  repeated kiapi.common.types.KiCadObjectType types = 2;
+
+  // Removed; NetCode was deprecated before a handler for this was written
+  // repeated kiapi.board.types.NetCode net_codes = 3;
+
+  // A list of nets to filter items by
+  repeated kiapi.board.types.Net nets = 4;
+}
+
+// Retrieve all the copper items belonging to a certain net class or set of net classes
+// returns kiapi.common.commands.GetItemsResponse
+message GetItemsByNetClass
+{
+  // Specifies which document to query, which fields to return, etc.
+  kiapi.common.types.ItemHeader header = 1;
+
+  // Optional list of item types to filter by.  If not provided, will return pads, vias,
+  // tracks, and zones.
+  repeated kiapi.common.types.KiCadObjectType types = 2;
+
+  // A list of net class names to filter items by
+  repeated string net_classes = 3;
+}
+
+// Retrieve all copper-connected items connected to one or more source items
+// returns kiapi.common.commands.GetItemsResponse
+message GetConnectedItems
+{
+  // Specifies which document to query, which fields to return, etc.
+  kiapi.common.types.ItemHeader header = 1;
+
+  // One or more item IDs used as the source set for connectivity queries
+  repeated kiapi.common.types.KIID items = 2;
+
+  // Optional list of item types to return. If empty, all connected item types are returned.
+  repeated kiapi.common.types.KiCadObjectType types = 3;
+}
+
+// A net may be part of multiple classes that have a priority ordering, which will result in a
+// composite "effective" netclass containing the merged/overridden properties of all the constituent
+// netclasses it contains.  This message retrieves this effective netclass for a net or list of
+// nets.
+// Returns NetClassForNetsResponse
+message GetNetClassForNets
+{
+  repeated kiapi.board.types.Net net = 1;
+}
+
+message NetClassForNetsResponse
+{
+  // Map of net name to netclass info
+  map<string, kiapi.common.project.NetClass> classes = 1;
+}
+
+/*
+ * Blocking operations
+ */
+
+// Refills some or all zones on the board.
+// This is a blocking operation; it will return Empty immediately, but KiCad will return
+// ApiStatusCode.AS_BUSY to all future API requests until the zone fill has completed.
+message RefillZones
+{
+  kiapi.common.types.DocumentSpecifier board = 1;
+
+  // A list of zones to refill.  If empty, all zones are refilled.
+  repeated kiapi.common.types.KIID zones = 2;
+}
+
+/*
+ * Utilities
+ */
+
+// Computes the polygon representation of a pad, merging any custom shapes together.
+// This representation will approximate curves as a series of segments.
+message GetPadShapeAsPolygon
+{
+  // The board to process
+  kiapi.common.types.DocumentSpecifier board = 1;
+
+  // A list of one or more pads to process
+  repeated kiapi.common.types.KIID pads = 2;
+
+  // The layer to process
+  kiapi.board.types.BoardLayer layer = 3;
+}
+
+// Returned from GetPadShapeAsPolygon.  The pads and polygons repeated fields will have the same length
+// and can be treated as a list of tuples.
+message PadShapeAsPolygonResponse
+{
+  // The pads that were processed
+  repeated kiapi.common.types.KIID pads = 1;
+
+  // The polygon representation of each pad
+  repeated kiapi.common.types.PolygonWithHoles polygons = 2;
+}
+
+// Tests if the given set of items with padstacks (pads or vias) has content on the given set of layers.
+// This is a dynamic call rather than a property of the padstack because pads and vias can be set to only include
+// shapes on connected copper layers, and whether or not the pad is connected can't be determined in isolation.
+// To optimize API call performance, multiple items and multiple layers to test may be passed in with this
+// command message.  The return will include the results for each valid item on each valid layer.
+// Note that not all layers make sense for a given item (for example, testing against BL_UNDEFINED never makes
+// sense).  In general, the internal KiCad APIs will not return an error when testing non-sensical layers for a given
+// item, and instead will return a default of "true" for any such layers.
+message CheckPadstackPresenceOnLayers
+{
+  kiapi.common.types.DocumentSpecifier board = 1;
+
+  repeated kiapi.common.types.KIID items = 2;
+
+  repeated kiapi.board.types.BoardLayer layers = 3;
+}
+
+enum PadstackPresence
+{
+  PSP_UNKNOWN = 0;
+  PSP_PRESENT = 1;      // The padstack has a shape on a given layer (is flashed)
+  PSP_NOT_PRESENT = 2;  // The padstack has no shape on a given layer (is not flashed)
+}
+
+message PadstackPresenceEntry
+{
+  kiapi.common.types.KIID item = 1;
+  kiapi.board.types.BoardLayer layer = 2;
+  PadstackPresence presence = 3;
+}
+
+message PadstackPresenceResponse
+{
+  repeated PadstackPresenceEntry entries = 1;
+}
+
+// DRC markers
+
+enum DrcSeverity // Since 10.0
+{
+  DRS_UNKNOWN = 0;
+  DRS_WARNING = 1;
+  DRS_ERROR = 2;
+  DRS_EXCLUSION = 3;
+  DRS_IGNORE = 4;
+  DRS_INFO = 5;
+  DRS_ACTION = 6;
+  DRS_DEBUG = 7;
+  DRS_UNDEFINED = 8;
+}
+
+// Returns InjectDrcErrorResponse
+message InjectDrcError
+{
+  kiapi.common.types.DocumentSpecifier board = 1;
+
+  DrcSeverity severity = 2;
+
+  string message = 3;
+
+  kiapi.common.types.Vector2 position = 4;
+
+  repeated kiapi.common.types.KIID items = 5;
+}
+
+message InjectDrcErrorResponse
+{
+  kiapi.common.types.KIID marker = 1;
+}
+
+// PCB editor commands
+
+// returns BoardLayers
+message GetVisibleLayers
+{
+  kiapi.common.types.DocumentSpecifier board = 1;
+}
+
+message BoardLayerResponse
+{
+  kiapi.board.types.BoardLayer layer = 1;
+}
+
+message BoardLayers
+{
+  repeated kiapi.board.types.BoardLayer layers = 1;
+}
+
+message SetVisibleLayers
+{
+  kiapi.common.types.DocumentSpecifier board = 1;
+
+  repeated kiapi.board.types.BoardLayer layers = 2;
+}
+
+// returns BoardLayerResponse
+message GetActiveLayer
+{
+  kiapi.common.types.DocumentSpecifier board = 1;
+}
+
+message SetActiveLayer
+{
+  kiapi.common.types.DocumentSpecifier board = 1;
+
+  kiapi.board.types.BoardLayer layer = 2;
+}
+
+enum InactiveLayerDisplayMode
+{
+  ILDM_UNKNOWN = 0;
+  // Inactive layers are shown
+  ILDM_NORMAL = 1;
+  // Inactive layers are shown with dimmed colors
+  ILDM_DIMMED = 2;
+  // Inactive layers are hidden
+  ILDM_HIDDEN = 3;
+}
+
+enum NetColorDisplayMode
+{
+  NCDM_UNKNOWN = 0;
+  // Net and netclass colors are shown in the ratsnest and on all copper items
+  NCDM_ALL = 1;
+  // Net and netclass colors are shown in the ratsnest only
+  NCDM_RATSNEST = 2;
+  // Net and netclass colors are not shown
+  NCDM_OFF = 3;
+}
+
+enum BoardFlipMode
+{
+  BFM_UNKNOWN = 0;
+  // Normal ("non-flipped") mode
+  BFM_NORMAL = 1;
+  // "Flipped" mode, viewed from the back and mirrored around the X axis
+  BFM_FLIPPED_X = 2;
+}
+
+enum RatsnestDisplayMode
+{
+  RDM_UNKNOWN = 0;
+  // Ratsnest lines are drawn to objects even if they are on hidden layers
+  RDM_ALL_LAYERS = 1;
+  // Ratsnest lines are hidden when at least one endpoint is an item on a hidden layer
+  RDM_VISIBLE_LAYERS = 2;
+}
+
+message BoardEditorAppearanceSettings
+{
+  InactiveLayerDisplayMode inactive_layer_display = 1;
+
+  NetColorDisplayMode net_color_display = 2;
+
+  BoardFlipMode board_flip = 3;
+
+  RatsnestDisplayMode ratsnest_display = 4;
+}
+
+// Returns BoardEditorAppearanceSettings
+message GetBoardEditorAppearanceSettings
+{
+}
+
+message SetBoardEditorAppearanceSettings
+{
+  BoardEditorAppearanceSettings settings = 1;
+}
+
+//// Interactive commands ////
+// These commands begin an interactive operation in the editor.
+// They return a response immediately, but the editor will become busy
+// and will not reply to further API commands until the user has finished
+// the operation.
+// These commands will return an error if received in a non-interactive context.
+
+// Selects and begins an interactive move of the given item(s).
+// NOTE: Takes ownership of the active commit, if one exists:
+//       the move tool will push the commit when the user confirms the move,
+//       or roll back the commit if the user cancels the move.  Keep this in
+//       mind if using this command in combination with commands that create
+//       or modify items using an explicit commit.
+message InteractiveMoveItems
+{
+  kiapi.common.types.DocumentSpecifier board = 1;
+
+  repeated kiapi.common.types.KIID items = 2;
+}

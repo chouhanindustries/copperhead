@@ -1,0 +1,1098 @@
+/*
+ * This program source code file is part of KiCad, a free EDA CAD application.
+ *
+ * Copyright (C) 2024 KiCad Developers, see AUTHORS.txt for contributors.
+ *
+ * This program is free software: you can redistribute it and/or modify it
+ * under the terms of the GNU General Public License as published by the
+ * Free Software Foundation, either version 3 of the License, or (at your
+ * option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful, but
+ * WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ * General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program.  If not, see <http://www.gnu.org/licenses/>.
+ */
+
+syntax = "proto3";
+
+package kiapi.board.types;
+
+import "google/protobuf/any.proto";
+import "common/types/base_types.proto";
+
+enum BoardLayer
+{
+  BL_UNKNOWN = 0;
+  BL_UNDEFINED = 1;
+  BL_UNSELECTED = 2;
+  BL_F_Cu = 3;
+  BL_In1_Cu = 4;
+  BL_In2_Cu = 5;
+  BL_In3_Cu = 6;
+  BL_In4_Cu = 7;
+  BL_In5_Cu = 8;
+  BL_In6_Cu = 9;
+  BL_In7_Cu = 10;
+  BL_In8_Cu = 11;
+  BL_In9_Cu = 12;
+  BL_In10_Cu = 13;
+  BL_In11_Cu = 14;
+  BL_In12_Cu = 15;
+  BL_In13_Cu = 16;
+  BL_In14_Cu = 17;
+  BL_In15_Cu = 18;
+  BL_In16_Cu = 19;
+  BL_In17_Cu = 20;
+  BL_In18_Cu = 21;
+  BL_In19_Cu = 22;
+  BL_In20_Cu = 23;
+  BL_In21_Cu = 24;
+  BL_In22_Cu = 25;
+  BL_In23_Cu = 26;
+  BL_In24_Cu = 27;
+  BL_In25_Cu = 28;
+  BL_In26_Cu = 29;
+  BL_In27_Cu = 30;
+  BL_In28_Cu = 31;
+  BL_In29_Cu = 32;
+  BL_In30_Cu = 33;
+  BL_B_Cu = 34;
+  BL_B_Adhes = 35;
+  BL_F_Adhes = 36;
+  BL_B_Paste = 37;
+  BL_F_Paste = 38;
+  BL_B_SilkS = 39;
+  BL_F_SilkS = 40;
+  BL_B_Mask = 41;
+  BL_F_Mask = 42;
+  BL_Dwgs_User = 43;
+  BL_Cmts_User = 44;
+  BL_Eco1_User = 45;
+  BL_Eco2_User = 46;
+  BL_Edge_Cuts = 47;
+  BL_Margin = 48;
+  BL_B_CrtYd = 49;
+  BL_F_CrtYd = 50;
+  BL_B_Fab = 51;
+  BL_F_Fab = 52;
+  BL_User_1 = 53;
+  BL_User_2 = 54;
+  BL_User_3 = 55;
+  BL_User_4 = 56;
+  BL_User_5 = 57;
+  BL_User_6 = 58;
+  BL_User_7 = 59;
+  BL_User_8 = 60;
+  BL_User_9 = 61;
+  BL_Rescue = 62;
+  BL_User_10 = 63;
+  BL_User_11 = 64;
+  BL_User_12 = 65;
+  BL_User_13 = 66;
+  BL_User_14 = 67;
+  BL_User_15 = 68;
+  BL_User_16 = 69;
+  BL_User_17 = 70;
+  BL_User_18 = 71;
+  BL_User_19 = 72;
+  BL_User_20 = 73;
+  BL_User_21 = 74;
+  BL_User_22 = 75;
+  BL_User_23 = 76;
+  BL_User_24 = 77;
+  BL_User_25 = 78;
+  BL_User_26 = 79;
+  BL_User_27 = 80;
+  BL_User_28 = 81;
+  BL_User_29 = 82;
+  BL_User_30 = 83;
+  BL_User_31 = 84;
+  BL_User_32 = 85;
+  BL_User_33 = 86;
+  BL_User_34 = 87;
+  BL_User_35 = 88;
+  BL_User_36 = 89;
+  BL_User_37 = 90;
+  BL_User_38 = 91;
+  BL_User_39 = 92;
+  BL_User_40 = 93;
+  BL_User_41 = 94;
+  BL_User_42 = 95;
+  BL_User_43 = 96;
+  BL_User_44 = 97;
+  BL_User_45 = 98;
+}
+
+// Deprecated: Use Net with the name property only
+message NetCode
+{
+  int32 value = 1;
+}
+
+// Describes a copper item's net
+message Net
+{
+  // Deprecated: net codes are no longer used in KiCad
+  NetCode code = 1;
+
+  // Human-readable net name
+  string name = 2;
+}
+
+// Represents a track segment on a board
+message Track
+{
+  kiapi.common.types.KIID        id     = 1;
+  kiapi.common.types.Vector2     start  = 2;
+  kiapi.common.types.Vector2     end    = 3;
+  kiapi.common.types.Distance    width  = 4;
+  kiapi.common.types.LockedState locked = 5;
+  BoardLayer                     layer  = 6;
+  Net                            net    = 7;
+}
+
+// Represents an arc track (not a PCB_SHAPE in arc shape)
+// Arc tracks in KiCad store start, midpoint, and end.
+// All other values (center point, angles, etc) are inferred.
+message Arc
+{
+  kiapi.common.types.KIID        id     = 1;
+  kiapi.common.types.Vector2     start  = 2;
+  kiapi.common.types.Vector2     mid    = 3;  // Arc midpoint
+  kiapi.common.types.Vector2     end    = 4;
+  kiapi.common.types.Distance    width  = 5;
+  kiapi.common.types.LockedState locked = 6;
+  BoardLayer                     layer  = 7;
+  Net                            net    = 8;
+}
+
+// What copper layer shape mode the padstack uses
+enum PadStackType
+{
+  PST_UNKNOWN = 0;
+
+  // The same shape is used on all copper layers
+  PST_NORMAL = 1;
+
+  // The padstack uses up to three different shapes (F_Cu, inner layers, B_Cu)
+  PST_FRONT_INNER_BACK = 2;
+
+  // The padstack's shape may differ on arbitrary copper layers
+  PST_CUSTOM = 3;
+}
+
+enum UnconnectedLayerRemoval
+{
+  ULR_UNKNOWN = 0;
+
+  // Keep annular rings on all layers
+  ULR_KEEP = 1;
+
+  // Remove annular rings on unconnected layers, including start and end layers.
+  ULR_REMOVE = 2;
+
+  // Remove annular rings on unconnected layers, but preserve start and end layers even if unconnected.
+  ULR_REMOVE_EXCEPT_START_AND_END = 3;
+
+  // Keep annular rings only on the start and end layers regardless of connections.
+  // Since: 10.0.0
+  ULR_START_END_ONLY = 4;
+}
+
+// The shape of a pad on a given layer
+enum PadStackShape
+{
+  PSS_UNKNOWN = 0;
+  PSS_CIRCLE = 1;
+  PSS_RECTANGLE = 2;
+  PSS_OVAL = 3;
+  PSS_TRAPEZOID = 4;
+  PSS_ROUNDRECT = 5;
+  PSS_CHAMFEREDRECT = 6;
+  PSS_CUSTOM = 7;
+}
+
+// Which corners are chamfered in a PSS_CHAMFEREDRECT
+message ChamferedRectCorners
+{
+  bool top_left = 1;
+  bool top_right = 2;
+  bool bottom_left = 3;
+  bool bottom_right = 4;
+}
+
+// enum class ZONE_CONNECTION
+enum ZoneConnectionStyle
+{
+  ZCS_UNKNOWN     = 0;
+  ZCS_INHERITED   = 1;
+  ZCS_NONE        = 2;
+  ZCS_THERMAL     = 3;
+  ZCS_FULL        = 4;
+  ZCS_PTH_THERMAL = 5;  // Thermal reliefs for plated through holes, solid for SMD pads
+}
+
+// Controls for how copper zones connect to a pad
+message ZoneConnectionSettings
+{
+  ZoneConnectionStyle zone_connection = 1;
+
+  ThermalSpokeSettings thermal_spokes = 2;
+}
+
+message SolderMaskOverrides
+{
+  // Solder mask expansion/contraction
+  kiapi.common.types.Distance solder_mask_margin = 1;
+}
+
+message SolderPasteOverrides
+{
+  // Solder paste expansion/contraction
+  kiapi.common.types.Distance solder_paste_margin = 1;
+
+  // Solder paste expansion/contraction ratio
+  kiapi.common.types.Ratio solder_paste_margin_ratio = 2;
+}
+
+// The defintion of a padstack on a single layer
+message PadStackLayer
+{
+  // The board layer of this padstack entry.  For Front/Inner/Back padstacks, In1_Cu is used to represent inner layers.
+  BoardLayer layer = 1;
+
+  // The shape of the pad on this layer
+  PadStackShape shape = 2;
+
+  // The size (x and y) of the shape on this layer
+  kiapi.common.types.Vector2 size = 3;
+
+  // How much to round the corners of the shape by, as a fraction of min(size.x, size.y)
+  // Only used for PSS_ROUNDRECT or PSS_CHAMFEREDRECT
+  double corner_rounding_ratio = 4;
+
+  // How much to round the corners of the shape by, as a fraction of min(size.x, size.y)
+  // Only used for PSS_CHAMFEREDRECT
+  double chamfer_ratio = 5;
+
+  ChamferedRectCorners chamfered_corners = 6;
+
+  repeated BoardGraphicShape custom_shapes = 7;
+
+  // If shape == PSS_CUSTOM, defines the shape of the anchor (only PSS_CIRCLE and PSS_RECTANGLE supported at present)
+  PadStackShape custom_anchor_shape = 8;
+
+  // Reserved for future use -- at the moment, zone connection settings are not per-layer
+  ZoneConnectionSettings zone_settings = 9;
+
+  // The difference in side length between the short and long pads in a trapezoid.  Only one of x or y may be nonzero.
+  // Only used for PSS_TRAPEZOID
+  kiapi.common.types.Vector2 trapezoid_delta = 10;
+
+  // The offset of the center of this shape from the center of the pad (which is defined as the hole center)
+  kiapi.common.types.Vector2 offset = 11;
+}
+
+enum SolderMaskMode
+{
+  SMM_UNKNOWN = 0;
+  SMM_MASKED = 1;
+  SMM_UNMASKED = 2;
+  SMM_FROM_DESIGN_RULES = 3;
+}
+
+enum ViaCoveringMode
+{
+  VCM_UNKNOWN = 0;
+  VCM_COVERED = 1;
+  VCM_UNCOVERED = 2;
+  VCM_FROM_DESIGN_RULES = 3;
+}
+
+enum ViaPluggingMode
+{
+  VPM_UNKNOWN = 0;
+  VPM_PLUGGED = 1;
+  VPM_UNPLUGGED = 2;
+  VPM_FROM_DESIGN_RULES = 3;
+}
+
+enum SolderPasteMode
+{
+  SPM_UNKNOWN = 0;
+  SPM_PASTE = 1;
+  SPM_NO_PASTE = 2;
+  SPM_FROM_DESIGN_RULES = 3;
+}
+
+// Properties for the outer technical layers of a padstack on the top or bottom of the stack
+message PadStackOuterLayer
+{
+  SolderMaskMode solder_mask_mode = 1;
+  SolderPasteMode solder_paste_mode = 2;
+
+  // NOTE: At present, KiCad does not support different solder mask expansion settings for the top and bottom layers
+  SolderMaskOverrides solder_mask_settings = 3;
+
+  // NOTE: At present, KiCad does not support different solder paste expansion settings for the top and bottom layers
+  SolderPasteOverrides solder_paste_settings = 4;
+
+  ViaPluggingMode plugging_mode = 5;
+  ViaCoveringMode covering_mode = 6;
+}
+
+enum DrillShape
+{
+  DS_UNKNOWN = 0;
+  DS_CIRCLE = 1;
+  DS_OBLONG = 2;
+  DS_UNDEFINED = 3;
+}
+
+enum ViaDrillCappingMode
+{
+  VDCM_UNKNOWN = 0;
+  VDCM_CAPPED = 1;
+  VDCM_UNCAPPED = 2;
+  VDCM_FROM_DESIGN_RULES = 3;
+}
+
+enum ViaDrillFillingMode
+{
+  VDFM_UNKNOWN = 0;
+  VDFM_FILLED = 1;
+  VDFM_UNFILLED = 2;
+  VDFM_FROM_DESIGN_RULES = 3;
+}
+
+enum ViaDrillPostMachiningMode
+{
+  VDPM_UNKNOWN = 0;
+  VDPM_NOT_POST_MACHINED = 1;
+  VDPM_COUNTERBORE = 2;
+  VDPM_COUNTERSINK = 3;
+}
+
+message DrillProperties
+{
+  // Lowest (closest to F_Cu) layer this drill exists on.
+  BoardLayer start_layer = 1;
+
+  // Highest (closest to B_Cu) layer this drill exists on.
+  BoardLayer end_layer   = 2;
+
+  // The diameter, in x and y, of the pad's drilled hole, if this pad has a hole.
+  // x and y will be the same value if the hole is round.
+  kiapi.common.types.Vector2 diameter = 3;
+
+  DrillShape shape = 4;
+
+  ViaDrillCappingMode capped = 5;
+
+  ViaDrillFillingMode filled = 6;
+
+}
+
+message PostMachiningProperties
+{
+  ViaDrillPostMachiningMode mode = 1;
+  int32 size = 2;
+  int32 depth = 3;
+  int32 angle = 4;
+}
+
+// A pad stack definition for a multilayer pad or via.
+message PadStack
+{
+  // What type of pad stack this represents.
+  PadStackType type = 1;
+
+  // The set of board layers this padstack has a definition for
+  repeated BoardLayer layers = 2;
+
+  // Properties of the drilled hole in this padstack, if it has one
+  DrillProperties drill = 3;
+
+  // How to treat pad shapes on unconnected layers.
+  UnconnectedLayerRemoval unconnected_layer_removal = 4;
+
+  repeated PadStackLayer copper_layers = 5;
+
+  // The overall rotation of this padstack (affects all layers)
+  kiapi.common.types.Angle angle = 6;
+
+  // Solder mask and paste settings for the front
+  PadStackOuterLayer front_outer_layers = 7;
+
+  // Solder mask and paste settings for the back
+  PadStackOuterLayer back_outer_layers = 8;
+
+  // Controls for how copper zones connect to the padstack
+  ZoneConnectionSettings zone_settings = 9;
+
+  // Optional secondary drill hit for backdrilling
+  DrillProperties secondary_drill = 10;
+
+  // Optional tertiary drill hit for backdrilling
+  DrillProperties tertiary_drill = 11;
+
+  PostMachiningProperties front_post_machining = 12;
+  PostMachiningProperties back_post_machining = 13;
+}
+
+enum ViaType
+{
+  VT_UNKNOWN = 0;
+
+  // Through vias always start on F_Cu and end on B_Cu
+  VT_THROUGH = 1;
+
+  // Blind/buried vias can have arbitrary start and end layers
+  VT_BLIND_BURIED = 2;
+
+  // Microvias, blind/buried vias, can have arbitrary start and end layers, but also have different
+  // size defaults and design rules
+  VT_MICRO = 3;
+
+  // Blind vias start on an outer layer and end in the middle
+  VT_BLIND = 4;  // Since V10
+
+  // Buried vias start and end on inner layers
+  VT_BURIED = 5;  // Since V10
+}
+
+// Represents a via
+message Via
+{
+  // The unique identifier of the via
+  kiapi.common.types.KIID id = 1;
+
+  // The location of the via's center point
+  kiapi.common.types.Vector2  position = 2;
+
+  // The pad stack definition for this via.
+  PadStack pad_stack = 3;
+
+  kiapi.common.types.LockedState locked = 4;
+
+  Net net = 5;
+
+  ViaType type = 6;
+}
+
+message BoardGraphicShape
+{
+  kiapi.common.types.GraphicShape shape = 1;
+  BoardLayer layer = 2;
+  Net net = 3;
+  kiapi.common.types.KIID  id = 4;
+  kiapi.common.types.LockedState locked = 5;
+}
+
+enum BarcodeKind
+{
+  BK_UNKNOWN = 0;
+  BK_CODE_39 = 1;
+  BK_CODE_128 = 2;
+  BK_DATA_MATRIX = 3;
+  BK_QR_CODE = 4;
+  BK_MICRO_QR_CODE = 5;
+}
+
+enum BarcodeErrorCorrection
+{
+  BEC_UNKNOWN = 0;
+  BEC_L = 1;
+  BEC_M = 2;
+  BEC_Q = 3;
+  BEC_H = 4;
+}
+
+message Barcode
+{
+  kiapi.common.types.KIID id = 1;
+
+  string text = 2;
+  BarcodeKind kind = 3;
+  BarcodeErrorCorrection error_correction = 4;
+
+  kiapi.common.types.Vector2 position = 5;
+  kiapi.common.types.Angle orientation = 6;
+  BoardLayer layer = 7;
+
+  kiapi.common.types.Distance width = 8;
+  kiapi.common.types.Distance height = 9;
+
+  bool show_text = 10;
+  kiapi.common.types.Distance text_height = 11;
+
+  bool knockout = 12;
+  kiapi.common.types.Vector2 knockout_margin = 13;
+  kiapi.common.types.LockedState locked = 14;
+}
+
+// A board-specific text object, existing on a board layer
+message BoardText
+{
+  kiapi.common.types.KIID id = 1;
+  kiapi.common.types.Text text = 2;
+  BoardLayer layer = 3;
+  bool knockout = 4;
+  kiapi.common.types.LockedState locked = 5;
+}
+
+// A board-specific textbox, existing on a board layer
+message BoardTextBox
+{
+  kiapi.common.types.KIID id = 1;
+  kiapi.common.types.TextBox textbox = 2;
+  BoardLayer layer = 3;
+  kiapi.common.types.LockedState locked = 4;
+}
+
+// NOTE: There has been some discussion about what to do with pad attributes and properties.
+// This may be considered somewhat unstable until we decide what to do with the KiCad side.
+// It is not clear what the set of mutually-exclusive pad types will be at the end of the day,
+// versus what will be non-exclusive attributes/properties.
+// For now, this maps to PAD_ATTRIB in KiCad.
+enum PadType
+{
+  PT_UNKNOWN = 0;
+  PT_PTH = 1;
+  PT_SMD = 2;
+  PT_EDGE_CONNECTOR = 3;
+  PT_NPTH = 4;
+}
+
+enum CustomPadShapeZoneFillStrategy
+{
+  CPSZ_UNKNOWN = 0;
+  CPSZ_OUTLINE = 1;
+  CPSZ_CONVEXHULL = 2;
+}
+
+message ThermalSpokeSettings
+{
+  kiapi.common.types.Distance width = 1;
+  kiapi.common.types.Angle angle = 2;
+  kiapi.common.types.Distance gap = 3;
+}
+
+message SymbolPinInfo
+{
+  // The pin name for the associated symbol pin, if one exists
+  string name = 1;
+
+  // The electrical type of the associated symbol pin, if one exists (EPT_UNKNOWN if not)
+  kiapi.common.types.ElectricalPinType type = 2;
+
+  // True if the pin is attached to a no-connect marker in the schematic
+  bool no_connect = 3;
+}
+
+message Pad
+{
+  kiapi.common.types.KIID id = 1;
+  kiapi.common.types.LockedState locked = 2;
+  string number = 3;
+  Net net = 4;
+  PadType type = 5;
+  PadStack pad_stack = 6;
+
+  // A pad's position is always relative to the parent footprint's origin
+  kiapi.common.types.Vector2 position = 7;
+
+  // Copper-to-copper clearance override
+  kiapi.common.types.Distance copper_clearance_override = 8;
+
+  // Since: 9.0.4
+  kiapi.common.types.Distance pad_to_die_length = 9;
+
+  // Information about the associated symbol pin, if one exists
+  // Since: 9.0.7
+  SymbolPinInfo symbol_pin = 10;
+
+  // Since: 10.0.0
+  kiapi.common.types.Time pad_to_die_delay = 11;
+}
+
+enum ZoneType
+{
+  ZT_UNKNOWN = 0;
+  ZT_COPPER = 1;
+  ZT_GRAPHICAL = 2;
+  ZT_RULE_AREA = 3;
+  ZT_TEARDROP = 4;
+}
+
+enum TeardropType
+{
+  TDT_UNKNOWN = 0;
+  TDT_NONE = 1;
+  TDT_UNSPECIFIED = 2;
+  TDT_VIA_PAD = 3;
+  TDT_TRACK_END = 4;
+}
+
+enum IslandRemovalMode
+{
+  IRM_UNKNOWN = 0;
+  IRM_ALWAYS = 1;
+  IRM_NEVER = 2;
+  IRM_AREA = 3;
+}
+
+enum ZoneFillMode
+{
+  ZFM_UNKNOWN = 0;
+  ZFM_SOLID = 1;
+  ZFM_HATCHED = 2;
+}
+
+enum ZoneHatchSmoothing
+{
+  ZHS_UNKNOWN = 0;
+  ZHS_NONE = 1;
+  ZHS_FILLET = 2;
+  ZHS_ARC_LOW_DEF = 3;
+  ZHS_ARC_HIGH_DEF = 4;
+}
+
+enum ZoneHatchFillBorderMode
+{
+  ZHFBM_UNKNOWN = 0;
+  ZHFBM_USE_MIN_ZONE_THICKNESS = 1;
+  ZHFBM_USE_HATCH_THICKNESS = 2;
+}
+
+message HatchFillSettings
+{
+  kiapi.common.types.Distance thickness = 1;
+  kiapi.common.types.Distance gap = 2;
+  kiapi.common.types.Angle orientation = 3;
+  double hatch_smoothing_ratio = 4;
+  double hatch_hole_min_area_ratio = 5;
+  ZoneHatchFillBorderMode border_mode = 6;
+}
+
+message TeardropSettings
+{
+  TeardropType type = 1;
+}
+
+message CopperZoneSettings
+{
+  ZoneConnectionSettings connection = 1;
+
+  kiapi.common.types.Distance clearance = 2;
+
+  kiapi.common.types.Distance min_thickness = 3;
+
+  IslandRemovalMode island_mode = 4;
+
+  uint64 min_island_area = 5;
+
+  ZoneFillMode fill_mode = 6;
+
+  HatchFillSettings hatch_settings = 7;
+
+  Net net = 8;
+
+  TeardropSettings teardrop = 9;
+}
+
+enum PlacementRuleSourceType
+{
+  PRST_UNKNOWN = 0;
+  PRST_SHEET_NAME = 1;
+  PRST_COMPONENT_CLASS = 2;
+  PRST_GROUP = 3;
+  PRST_DESIGN_BLOCK = 4;
+}
+
+message RuleAreaSettings
+{
+  bool keepout_copper = 1;
+  bool keepout_vias = 2;
+  bool keepout_tracks = 3;
+  bool keepout_pads = 4;
+  bool keepout_footprints = 5;
+
+  bool placement_enabled = 6;
+  PlacementRuleSourceType placement_source_type = 7;
+  string placement_source = 8;
+}
+
+enum ZoneBorderStyle
+{
+  ZBS_UNKNOWN = 0;
+  ZBS_SOLID = 1;
+  ZBS_DIAGONAL_FULL = 2;
+  ZBS_DIAGONAL_EDGE = 3;
+  ZBS_INVISIBLE = 4;
+}
+
+message ZoneBorderSettings
+{
+  ZoneBorderStyle style = 1;
+  kiapi.common.types.Distance pitch = 2;
+}
+
+// The set of filled polygons of a zone on a single board layer
+message ZoneFilledPolygons
+{
+  BoardLayer layer = 1;
+
+  kiapi.common.types.PolySet shapes = 2;
+}
+
+message ZoneLayerProperties
+{
+  BoardLayer layer = 1;
+
+  kiapi.common.types.Vector2 hatching_offset = 2;
+}
+
+
+message Zone
+{
+  kiapi.common.types.KIID id = 1;
+
+  ZoneType type = 2;
+
+  repeated BoardLayer layers = 3;
+
+  kiapi.common.types.PolySet outline = 4;
+
+  string name = 5;
+
+  oneof settings {
+    CopperZoneSettings copper_settings = 6;
+    RuleAreaSettings rule_area_settings = 7;
+  }
+
+  uint32 priority = 8;
+
+  bool filled = 9;
+
+  repeated ZoneFilledPolygons filled_polygons = 10;
+
+  ZoneBorderSettings border = 11;
+
+  kiapi.common.types.LockedState locked = 12;
+
+  repeated ZoneLayerProperties layer_properties = 13;
+}
+
+// An aligned dimension is drawn parallel to the line segment between the start and end points
+message AlignedDimensionAttributes
+{
+  kiapi.common.types.Vector2 start = 1;
+  kiapi.common.types.Vector2 end = 2;
+
+  // Perpendicular distance from dimension endpoints to crossbar
+  kiapi.common.types.Distance height = 3;
+
+  // Length of extension lines past the crossbar
+  kiapi.common.types.Distance extension_height = 4;
+}
+
+// An orthogonal dimension is drawn parallel to the X or Y axis of the coordinate system
+message OrthogonalDimensionAttributes
+{
+  kiapi.common.types.Vector2 start = 1;
+  kiapi.common.types.Vector2 end = 2;
+
+  // Perpendicular distance from dimension endpoints to crossbar
+  kiapi.common.types.Distance height = 3;
+
+  // Length of extension lines past the crossbar
+  kiapi.common.types.Distance extension_height = 4;
+
+  // Which axis the dimension is parallel to
+  kiapi.common.types.AxisAlignment alignment = 5;
+}
+
+message RadialDimensionAttributes
+{
+  // The center of the dimensioned circle or arc
+  kiapi.common.types.Vector2 center = 1;
+
+  // A point on the radius of the circle or arc
+  kiapi.common.types.Vector2 radius_point = 2;
+
+  // The distance from radius_point to draw the first segment of the leader line.
+  // The second segment is drawn from the end of the first segment to the text position.
+  kiapi.common.types.Distance leader_length = 3;
+}
+
+// The style of the optional frame applied to dimension text
+enum DimensionTextBorderStyle
+{
+  DTBS_UNKNOWN = 0;
+  DTBS_NONE = 1;
+  DTBS_RECTANGLE = 2;
+  DTBS_CIRCLE = 3;
+  DTBS_ROUNDRECT = 4;
+}
+
+message LeaderDimensionAttributes
+{
+  kiapi.common.types.Vector2 start = 1;
+  kiapi.common.types.Vector2 end = 2;
+  DimensionTextBorderStyle border_style = 3;
+}
+
+message CenterDimensionAttributes
+{
+  kiapi.common.types.Vector2 center = 1;
+
+  // A point on the end of one of the four radial spokes drawn from the center point
+  kiapi.common.types.Vector2 end = 2;
+}
+
+enum DimensionUnitFormat
+{
+  DUF_UNKNOWN = 0;
+  DUF_NO_SUFFIX = 1;
+  DUF_BARE_SUFFIX = 2;
+  DUF_PAREN_SUFFIX = 3;
+}
+
+enum DimensionArrowDirection
+{
+  DAD_UNKNOWN = 0;
+  DAD_INWARD = 1;
+  DAD_OUTWARD = 2;
+}
+
+enum DimensionPrecision
+{
+  DP_UNKNOWN = 0;
+  DP_FIXED_0 = 1;       // No digits after decimal point
+  DP_FIXED_1 = 2;       // 1 digit after decimal point
+  DP_FIXED_2 = 3;       // 2 digits after decimal point
+  DP_FIXED_3 = 4;       // 3 digits after decimal point
+  DP_FIXED_4 = 5;       // 4 digits after decimal point
+  DP_FIXED_5 = 6;       // 5 digits after decimal point
+  DP_SCALED_IN_2 = 7;   // Precision depends on unit selection; 2 digits for inches, 0 for mils, 1 for mm
+  DP_SCALED_IN_3 = 8;   // Precision depends on unit selection; 3 digits for inches, 0 for mils, 2 for mm
+  DP_SCALED_IN_4 = 9;   // Precision depends on unit selection; 4 digits for inches, 1 for mils, 3 for mm
+  DP_SCALED_IN_5 = 10;  // Precision depends on unit selection; 5 digits for inches, 2 for mils, 4 for mm
+}
+
+enum DimensionTextPosition
+{
+  DTP_UNKNOWN = 0;
+  DTP_OUTSIDE = 1;
+  DTP_INLINE = 2;
+  DTP_MANUAL = 3;
+}
+
+enum DimensionUnit
+{
+  DU_UNKNOWN = 0;
+  DU_INCHES = 1;
+  DU_MILS = 2;
+  DU_MILLIMETERS = 3;
+  DU_AUTOMATIC = 4;
+}
+
+// A dimension in KiCad is a special type of text object.
+// To know the visual appearance of the dimension as rendered by KiCad, use GetTextAsShapes
+message Dimension
+{
+  kiapi.common.types.KIID id = 1;
+  kiapi.common.types.LockedState locked = 2;
+  BoardLayer layer = 3;
+  kiapi.common.types.Text text = 4;
+
+  oneof dimension_style {
+    AlignedDimensionAttributes aligned = 5;
+    OrthogonalDimensionAttributes orthogonal = 6;
+    RadialDimensionAttributes radial = 7;
+    LeaderDimensionAttributes leader = 8;
+    CenterDimensionAttributes center = 9;
+  }
+
+  bool override_text_enabled = 10;
+  string override_text = 11;
+  string prefix = 12;
+  string suffix = 13;
+  DimensionUnit unit = 14;
+  DimensionUnitFormat unit_format = 15;
+  DimensionArrowDirection arrow_direction = 16;
+  DimensionPrecision precision = 17;
+  bool suppress_trailing_zeroes = 18;
+
+  kiapi.common.types.Distance line_thickness = 19;
+  kiapi.common.types.Distance arrow_length = 20;
+  kiapi.common.types.Distance extension_offset = 21;
+  DimensionTextPosition text_position = 22;
+  bool keep_text_aligned = 23;
+}
+
+message ReferenceImage
+{
+  kiapi.common.types.KIID id = 1;
+  BoardLayer layer = 2;
+
+  kiapi.common.types.Vector2 position = 3;
+  kiapi.common.types.Vector2 transform_origin_offset = 4;
+  kiapi.common.types.Ratio image_scale = 5;
+
+  bytes image_data = 6;
+
+  kiapi.common.types.LockedState locked = 7;
+}
+
+message Group
+{
+  kiapi.common.types.KIID id = 1;
+  string name = 2;
+  repeated kiapi.common.types.KIID items = 3;
+}
+
+message FieldId
+{
+  int32 id = 1;
+}
+
+message Field
+{
+  FieldId id = 1;
+  string name = 2;
+  BoardText text = 3;
+
+  // Since 9.0.1
+  bool visible = 4;
+}
+
+enum FootprintMountingStyle
+{
+  FMS_UNKNOWN = 0;
+  FMS_THROUGH_HOLE = 1;
+  FMS_SMD = 2;
+  FMS_UNSPECIFIED = 3;
+}
+
+message FootprintAttributes
+{
+  string description = 1;
+  string keywords = 2;
+  bool not_in_schematic = 3;
+  bool exclude_from_position_files = 4;
+  bool exclude_from_bill_of_materials = 5;
+  bool exempt_from_courtyard_requirement = 6;
+  bool do_not_populate = 7;
+  FootprintMountingStyle mounting_style = 8;
+
+  // Since: 9.0.7
+  bool allow_soldermask_bridges = 9;
+}
+
+message NetTieDefinition
+{
+  repeated string pad_number = 1;
+}
+
+message FootprintDesignRuleOverrides
+{
+  SolderMaskOverrides solder_mask = 1;
+  SolderPasteOverrides solder_paste = 2;
+  kiapi.common.types.Distance copper_clearance = 3;
+  ZoneConnectionStyle zone_connection = 4;
+}
+
+message Footprint3DModel
+{
+  string filename = 1;
+
+  // Scaling factor along each axis
+  kiapi.common.types.Vector3D scale = 2;
+
+  // Rotation around each axis, in degrees
+  kiapi.common.types.Vector3D rotation = 3;
+
+  // Offset from footprint center
+  kiapi.common.types.Vector3D offset = 4;
+
+  bool visible = 5;
+
+  double opacity = 6;
+}
+
+message JumperGroup
+{
+  repeated string pad_names = 1;
+}
+
+message JumperSettings
+{
+  /// If true, duplicate pad names in this footprint are jumpered together
+  bool duplicate_names_are_jumpered = 1;
+
+  repeated JumperGroup groups = 2;
+}
+
+// A footprint definition (i.e. what would be in a library)
+message Footprint
+{
+  kiapi.common.types.LibraryIdentifier id         = 1;
+  kiapi.common.types.Vector2           anchor     = 2;
+  FootprintAttributes                  attributes = 3;
+  FootprintDesignRuleOverrides         overrides  = 4;
+  repeated NetTieDefinition            net_ties   = 5;
+  repeated BoardLayer                  private_layers = 6;
+
+  Field reference_field = 7;
+  Field value_field = 8;
+  Field datasheet_field = 9;
+  Field description_field = 10;
+
+  // All footprint items except for mandatory fields
+  repeated google.protobuf.Any items = 11;
+
+  JumperSettings jumpers = 12;
+}
+
+// An instance of a footprint on a board
+message FootprintInstance
+{
+  kiapi.common.types.KIID id = 1;
+  kiapi.common.types.Vector2  position = 2;
+  kiapi.common.types.Angle orientation = 3;
+  BoardLayer layer = 4;
+  kiapi.common.types.LockedState locked = 5;
+  Footprint definition = 6;
+
+  Field reference_field = 7;
+  Field value_field = 8;
+  Field datasheet_field = 9;
+  Field description_field = 10;
+
+  FootprintAttributes attributes = 11;
+  FootprintDesignRuleOverrides overrides  = 12;
+
+  // The sheet path to the associated symbol for this footprint instance, if one exists
+  kiapi.common.types.SheetPath symbol_path = 13;
+
+  // The name of the hierarchical sheet the associated symbol for this footprint exists on,
+  // or the empty string if there is no associated symbol
+  // Since: 9.0.7
+  string symbol_sheet_name = 14;
+
+  // The filename of the hierarchical sheet the associated symbol for this footprint exists on,
+  // or the empty string if there is no associated symbol
+  // Since: 9.0.7
+  string symbol_sheet_filename = 15;
+
+  // The the footprint filters given by the symbol this footprint is associated with,
+  // or the empty string if there is no associated symbol
+  // Since: 9.0.7
+  string symbol_footprint_filters = 16;
+}

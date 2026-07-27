@@ -1,0 +1,447 @@
+/*
+ * This program source code file is part of KiCad, a free EDA CAD application.
+ *
+ * Copyright (C) 2024 KiCad Developers, see AUTHORS.txt for contributors.
+ *
+ * This program is free software: you can redistribute it and/or modify it
+ * under the terms of the GNU General Public License as published by the
+ * Free Software Foundation, either version 3 of the License, or (at your
+ * option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful, but
+ * WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ * General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program.  If not, see <http://www.gnu.org/licenses/>.
+ */
+
+/*
+ * Commands and responses related to manipulating editor windows
+ */
+
+syntax = "proto3";
+
+package kiapi.common.commands;
+
+import "google/protobuf/any.proto";
+import "common/types/base_types.proto";
+import "common/types/enums.proto";
+
+// Refreshes the given frame, if that frame is open
+message RefreshEditor
+{
+  kiapi.common.types.FrameType frame = 1;
+}
+
+// Retrieves a list of open documents of the given type
+message GetOpenDocuments
+{
+  // Which type of documents to query
+  kiapi.common.types.DocumentType type = 1;
+}
+
+message GetOpenDocumentsResponse
+{
+  repeated kiapi.common.types.DocumentSpecifier documents = 1;
+}
+
+message SaveDocument
+{
+  kiapi.common.types.DocumentSpecifier document = 1;
+}
+
+// Saves the given document to a new location and opens the new copy
+// Note, this is not going to be implemented anytime soon as we don't currently
+// want to allow API access to changing which project is open
+//message SaveDocumentAs
+//{
+//  kiapi.common.types.DocumentSpecifier document = 1;
+//
+//  string path = 2;
+//}
+
+message SaveOptions
+{
+  // Overwrite destination file(s) if they exist
+  bool overwrite = 1;
+
+  // If the file being saved normally requires a project (for example, a board or schematic),
+  // this flag will cause a new project to be saved alongside the new file
+  bool include_project = 2;
+}
+
+// Saves the given document to a new location and does not open the new copy
+message SaveCopyOfDocument
+{
+  kiapi.common.types.DocumentSpecifier document = 1;
+
+  string path = 2;
+
+  SaveOptions options = 3;
+}
+
+message RevertDocument
+{
+  kiapi.common.types.DocumentSpecifier document = 1;
+}
+
+/*
+ * Runs a TOOL_ACTION using the TOOL_MANAGER of a given frame.
+ * WARNING: The TOOL_ACTIONs are specifically *not* an API.
+ * Command names may change as code is refactored, and commands may disappear.
+ * This API method is provided for low-level prototyping purposes only.
+ */
+message RunAction
+{
+  string action = 1;  // Action name, like "eeschema.InteractiveSelection.ClearSelection"
+}
+
+enum RunActionStatus
+{
+  RAS_UNKNOWN        = 0;
+  RAS_OK             = 1;  // The action was submitted successfully.
+  RAS_INVALID        = 2;  // The action was unknown for the targeted frame.
+  RAS_FRAME_NOT_OPEN = 3;  // The targeted frame was not open when the call was submitted.
+}
+
+/*
+ * NOTE: At the moment, RAS_FRAME_NOT_OPEN won't be returned as the handler is inside the frame.
+ */
+message RunActionResponse
+{
+  RunActionStatus status = 1;
+}
+
+
+/*
+ * Begins a staged set of changes.  Any modifications made to a document through the API after this
+ * call will be saved to a pending commit, and will not appear in KiCad until a matching call to
+ * END_COMMIT.
+ */
+message BeginCommit
+{
+}
+
+
+message BeginCommitResponse
+{
+  // Opaque identifier tracking a commit
+  kiapi.common.types.KIID id = 1;
+}
+
+
+enum CommitAction
+{
+  CMA_UNKNOWN = 0;
+  CMA_COMMIT  = 1; // Commit the changes to the design
+  CMA_DROP    = 2; // Cancel this commit
+}
+
+
+message EndCommit
+{
+  // The ID that was given by BeginCommit
+  kiapi.common.types.KIID id = 1;
+
+  // What to do with this commit
+  CommitAction action = 2;
+
+  // Optional message describing this changeset
+  string message = 3;
+}
+
+
+message EndCommitResponse
+{
+}
+
+// Creates new items on a given document
+message CreateItems
+{
+  // Specifies which document to create on, which fields are included, etc.
+  kiapi.common.types.ItemHeader header = 1;
+
+  // List of items to create
+  repeated google.protobuf.Any items = 2;
+
+  // Items may be created on a top-level document (sheet, board, etc) or inside a container
+  // (symbol, footprint).  If this field is not empty, it holds the ID of a symbol or footprint
+  // that the items should be added to.  This ID must be an existing symbol (for schematic
+  // documents) or footprint (for board documents).  If the given container does not exist or is
+  // not the correct item type, the CreateItems call will fail.
+  kiapi.common.types.KIID container = 3;
+}
+
+enum ItemStatusCode
+{
+  ISC_UNKNOWN      = 0;
+  ISC_OK           = 1; // The item was created or updated
+  ISC_INVALID_TYPE = 2; // The item's type is not valid for the given document
+  ISC_EXISTING     = 3; // The item to be created had a specified KIID and that KIID was already in use
+  ISC_NONEXISTENT  = 4; // The item to be updated did not exist in the given document
+  ISC_IMMUTABLE    = 5; // The item to be updated is not allowed to be modified by the API
+  ISC_INVALID_DATA = 7; // The item to be created does not have valid data for the given document
+}
+
+// Per-item status feedback for creation and update calls
+message ItemStatus
+{
+  ItemStatusCode code = 1;
+
+  string error_message = 2;
+}
+
+message ItemCreationResult
+{
+  ItemStatus status = 1;
+
+  // The created version of the item, including an updated KIID as applicable
+  google.protobuf.Any item = 2;
+}
+
+message CreateItemsResponse
+{
+  // Specifies which document was modified, which fields are included in created_items, etc.
+  kiapi.common.types.ItemHeader header = 1;
+
+  // Status of the overall request; may return IRS_OK even if no items were created
+  kiapi.common.types.ItemRequestStatus status = 2;
+
+  // Status of each item to be created
+  repeated ItemCreationResult created_items = 3;
+}
+
+message GetItems
+{
+  // Specifies which document to query, which fields to return, etc.
+  kiapi.common.types.ItemHeader header = 1;
+
+  // List of one or more types of items to retreive
+  repeated kiapi.common.types.KiCadObjectType types = 2;
+}
+
+message GetItemsById
+{
+  // Specifies which document to query, which fields to return, etc.
+  kiapi.common.types.ItemHeader header = 1;
+
+  repeated kiapi.common.types.KIID items = 2;
+}
+
+message GetItemsResponse
+{
+  // Specifies which document was modified, which fields are included in items, etc.
+  kiapi.common.types.ItemHeader header = 1;
+
+  // Status of the overall request; may return IRS_OK even if no items were retrieved
+  kiapi.common.types.ItemRequestStatus status = 2;
+
+  repeated google.protobuf.Any items = 3;
+}
+
+// Updates items in a given document
+message UpdateItems
+{
+  // Specifies which document to modify, which fields are included, etc.
+  kiapi.common.types.ItemHeader header = 1;
+
+  // List of items to modify
+  repeated google.protobuf.Any items = 2;
+}
+
+
+message ItemUpdateResult
+{
+  ItemStatus status = 1;
+
+  // The update version of the item
+  google.protobuf.Any item = 2;
+}
+
+message UpdateItemsResponse
+{
+  // Specifies which document was modified, which fields are included in updated_items, etc.
+  kiapi.common.types.ItemHeader header = 1;
+
+  // Status of the overall request; may return IRS_OK even if no items were modified
+  kiapi.common.types.ItemRequestStatus status = 2;
+
+  // Status of each item to be created
+  repeated ItemUpdateResult updated_items = 3;
+}
+
+// Deletes items in a given document
+message DeleteItems
+{
+  // Specifies which document to modify
+  kiapi.common.types.ItemHeader header = 1;
+
+  // List of item KIIDs to delete
+  repeated kiapi.common.types.KIID item_ids = 2;
+}
+
+enum ItemDeletionStatus
+{
+  IDS_UNKNOWN      = 0;
+  IDS_OK           = 1;
+  IDS_NONEXISTENT  = 2; // The item did not exist in the given document
+  IDS_IMMUTABLE    = 3; // The item is not allowed to be modified by the API
+}
+
+message ItemDeletionResult
+{
+  kiapi.common.types.KIID id = 1;
+
+  ItemDeletionStatus status = 2;
+}
+
+message DeleteItemsResponse
+{
+  // Specifies which document was modified, etc.
+  kiapi.common.types.ItemHeader header = 1;
+
+  // Status of the overall request; may return IRS_OK even if no items were deleted
+  kiapi.common.types.ItemRequestStatus status = 2;
+
+  // Status of each item requested to be deleted
+  repeated ItemDeletionResult deleted_items = 3;
+}
+
+enum BoundingBoxMode
+{
+  BBM_UNKNOWN = 0;
+  BBM_ITEM_ONLY = 1;
+  BBM_ITEM_AND_CHILD_TEXT = 2;
+}
+
+message GetBoundingBox
+{
+  kiapi.common.types.ItemHeader header = 1;
+
+  repeated kiapi.common.types.KIID items = 2;
+
+  // Some item types can have independently-movable text as children (e.g. footprints)
+  // This mode controls whether or not these are included in the box
+  BoundingBoxMode mode = 3;
+}
+
+message GetBoundingBoxResponse
+{
+  repeated kiapi.common.types.KIID items = 1;
+
+  repeated kiapi.common.types.Box2 boxes = 2;
+}
+
+// Retrieves a list of items.  Returns SelectionResponse
+message GetSelection
+{
+  // Specifies which document to query for selected items.
+  kiapi.common.types.ItemHeader header = 1;
+
+  // An optional list of types to filter on.
+  // If none are provided, all selected items will be returned.
+  repeated kiapi.common.types.KiCadObjectType types = 2;
+}
+
+// The set of currently selected items
+message SelectionResponse
+{
+  repeated google.protobuf.Any items = 1;
+}
+
+// Adds the given items to the selection.  Returns SelectionResponse
+message AddToSelection
+{
+  kiapi.common.types.ItemHeader header = 1;
+
+  // The items to select
+  repeated kiapi.common.types.KIID items = 2;
+}
+
+// Removes the given items to the selection.  Returns SelectionResponse
+message RemoveFromSelection
+{
+  kiapi.common.types.ItemHeader header = 1;
+
+  // The items to deselect
+  repeated kiapi.common.types.KIID items = 2;
+}
+
+// Removes all items from selection
+message ClearSelection
+{
+  kiapi.common.types.ItemHeader header = 1;
+}
+
+// Tests if a certain point falls within tolerance of an item's geometry
+message HitTest
+{
+  kiapi.common.types.ItemHeader header = 1;
+
+  kiapi.common.types.KIID id = 2;
+
+  kiapi.common.types.Vector2 position = 3;
+
+  int32 tolerance = 4;
+}
+
+enum HitTestResult
+{
+  HTR_UNKNOWN = 0;
+  HTR_NO_HIT  = 1;
+  HTR_HIT     = 2;
+}
+
+message HitTestResponse
+{
+  HitTestResult result = 1;
+}
+
+// returns common.types.TitleBlockInfo
+message GetTitleBlockInfo
+{
+  kiapi.common.types.DocumentSpecifier document = 1;
+}
+
+message SetTitleBlockInfo
+{
+  kiapi.common.types.DocumentSpecifier document = 1;
+
+  kiapi.common.types.TitleBlockInfo title_block = 2;
+}
+
+message SaveDocumentToString
+{
+  kiapi.common.types.DocumentSpecifier document = 1;
+}
+
+message SavedDocumentResponse
+{
+  kiapi.common.types.DocumentSpecifier document = 1;
+
+  string contents = 2;
+}
+
+message SaveSelectionToString
+{
+}
+
+message SavedSelectionResponse
+{
+  repeated kiapi.common.types.KIID ids = 1;
+
+  string contents = 2;
+}
+
+// Attempts to parse the given string as a s-expression formatted container with items,
+// similar to how the Paste action inside the KiCad editor works.  If the parse is successful,
+// the items will be created and inserted into the editor.
+// Returns CreateItemsResponse
+message ParseAndCreateItemsFromString
+{
+  kiapi.common.types.DocumentSpecifier document = 1;
+
+  string contents = 2;
+}

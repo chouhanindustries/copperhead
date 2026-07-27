@@ -14,6 +14,7 @@ import { existsSync } from 'node:fs';
 import type { CopperheadConfig } from '../config.js';
 import { ObligationsLedger } from './ledger.js';
 import type { Transcript } from './transcript.js';
+import { describeSelection, type KicadBridge } from '../kicad/ipc.js';
 
 export interface FinishRequest {
   outcome: 'done' | 'refuse';
@@ -38,12 +39,23 @@ export interface RunContext {
   lastDrc: CheckReport | null;
   repairCycles: number;
   finishRequest: FinishRequest | null;
+  /**
+   * Live KiCad IPC bridge, or null. Only the REPL and `do` paths ever wire
+   * one in (AC-114.6): check/sync/create must never open the socket.
+   */
+  kicad: KicadBridge | null;
 }
 
 export interface ToolDef {
   schema: ToolSchema;
   /** Edit-tier tools are absent from the tool list until the proposal validates. */
   requiresUnlock: boolean;
+  /**
+   * KiCad-context tools exist only while an IPC connection is live (AC-114.2).
+   * Same structural-absence pattern as the edit lock: a disconnected bridge
+   * means the tool is not offered, not offered-and-erroring.
+   */
+  requiresKicad?: boolean;
   handler: (ctx: RunContext, args: Record<string, unknown>) => Promise<string>;
 }
 
@@ -625,11 +637,57 @@ export const TOOLS: ToolDef[] = [
       return 'all gates satisfied; run will commit';
     },
   },
+  {
+    schema: {
+      name: 'get_kicad_selection',
+      description:
+        'Read-only: the items the user currently has selected in the running KiCad board editor (references, values, nets). Use when the request says "this"/"these" about board items.',
+      parameters: { type: 'object', properties: {} },
+    },
+    requiresUnlock: false,
+    requiresKicad: true,
+    handler: async (ctx) => {
+      // A mid-run disconnect returns a soft error string (AC-114.5); the tool
+      // disappears from the next turn's list via availableTools.
+      if (!ctx.kicad?.isConnected) return 'kicad: not connected (the editor may have closed)';
+      try {
+        const items = await ctx.kicad.getSelection();
+        if (!items.length) return 'nothing is selected in KiCad right now';
+        return describeSelection(items).join('\n');
+      } catch (err) {
+        return `kicad bridge error: ${(err as Error).message}`;
+      }
+    },
+  },
+  {
+    schema: {
+      name: 'get_open_documents',
+      description:
+        'Read-only: the documents open in the running KiCad instance (board filenames, project). Useful to know what the user is looking at.',
+      parameters: { type: 'object', properties: {} },
+    },
+    requiresUnlock: false,
+    requiresKicad: true,
+    handler: async (ctx) => {
+      if (!ctx.kicad?.isConnected) return 'kicad: not connected (the editor may have closed)';
+      try {
+        const docs = await ctx.kicad.getOpenDocuments();
+        if (!docs.length) return 'no documents are open in the connected KiCad';
+        return docs
+          .map((d) => `${d.type}: ${d.name}${d.projectName ? ` (project ${d.projectName})` : ''}`)
+          .join('\n');
+      } catch (err) {
+        return `kicad bridge error: ${(err as Error).message}`;
+      }
+    },
+  },
 ];
 
 /** Compose the tool list for the current state (design D2: the lock is structural). */
 export function availableTools(ctx: RunContext): ToolDef[] {
-  return TOOLS.filter((t) => !t.requiresUnlock || ctx.editsUnlocked);
+  return TOOLS.filter(
+    (t) => (!t.requiresUnlock || ctx.editsUnlocked) && (!t.requiresKicad || ctx.kicad?.isConnected === true),
+  );
 }
 
 export async function dispatchTool(ctx: RunContext, name: string, args: Record<string, unknown>): Promise<string> {

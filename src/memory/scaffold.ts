@@ -133,6 +133,16 @@ One directory per \`do\`/\`create\`/\`sync\` run: \`transcript.jsonl\` (full aud
 trail) and \`summary.md\` (human-readable: request, plan, files touched,
 verification results, decisions, open obligations). Both redact secrets at
 write time. This directory is gitignored.
+
+## KiCad connection (optional)
+
+The REPL and \`do\` connect read-only to a running KiCad 9+ instance when its
+API server is enabled (KiCad preferences: Plugins, "Enable KiCad API"). The
+agent then sees your open documents and current board selection, and you get a
+reload reminder when a committed change touches a board you have open. No KiCad
+running means no change in behavior. \`KICAD_API_SOCKET\`/\`KICAD_API_TOKEN\`
+override the socket discovery; edits still happen only through verified file
+changes, never through the KiCad API.
 `;
 }
 
