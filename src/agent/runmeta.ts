@@ -16,7 +16,7 @@ export interface StageMeta {
   total: number;
   /** Absent on runs predating stage re-runs; `initial` = first-time run. */
   trigger?: StageTrigger;
-  /** Upstream artifacts whose hash changed — set when trigger is `stale`. */
+  /** Upstream artifacts whose hash changed — set whenever the stage was stale, for any trigger. */
   changedInputs?: string[];
 }
 

@@ -9,7 +9,7 @@ sidebar:
 copperhead [global options] [<command>]
 ```
 
-With no subcommand, `copperhead` starts the interactive agent shell. Every command probes `kicad-cli` before doing anything and exits 1 if it cannot be found. Resolution order: `COPPERHEAD_KICAD_CLI` when set, then `kicad-cli` on your `PATH`, then the macOS KiCad.app bundle locations. Setting `COPPERHEAD_KICAD_CLI` to a path that does not exist is an error naming that path, not a silent fall back to `PATH`. A `.env` in the working directory is loaded before any command resolves a model or a provider; a real environment variable always beats the file.
+With no subcommand, `copperhead` starts the interactive agent shell. Every command probes `kicad-cli` before doing anything and exits 1 if it cannot be found (two exceptions: `doctor` reports a missing binary instead of failing, and `create --dry-run` is deterministic and needs neither `kicad-cli` nor a model). Resolution order: `COPPERHEAD_KICAD_CLI` when set, then `kicad-cli` on your `PATH`, then the macOS KiCad.app bundle locations. Setting `COPPERHEAD_KICAD_CLI` to a path that does not exist is an error naming that path, not a silent fall back to `PATH`. A `.env` in the working directory is loaded before any command resolves a model or a provider; a real environment variable always beats the file.
 
 ## Commands at a glance
 
@@ -181,12 +181,12 @@ copperhead create --brief brief.md --dry-run        # classify stages, write not
 | --- | --- |
 | `--brief <file>` | **Required.** The product brief, in markdown. |
 | `--model <model>` | `codex`, `cursor`, `gpt-5`, `claude`, or `claude-code` (saved-login; no model API key for those three). |
-| `--interactive` | Re-enable the human gates: spec approval, a pause before export, and confirmation before stale stages reconcile. |
+| `--interactive` | Re-enable the human gates: spec approval, a pause before export, and confirmation before newly invalidated stale stages reconcile (staleness known at plan time is simply part of the run). |
 | `--stage <name>` | Re-run exactly one stage against the existing artifacts (revise, not recreate), then reconcile every stage that consumes an output the re-run actually changed. Mutually exclusive with `--from`. |
 | `--from <name>` | Force-re-run the named stage and its graph descendants: the stages reachable through consumed artifacts, not simply every later stage. |
 | `--dry-run` | Print each stage's classification (`fresh`, `stale` with the changed artifacts, `incomplete`, `assumed-complete`) and what the invocation would run, then exit without writing. |
 
-Exits 1 if any stage fails to complete, 0 when the pipeline finishes. Unknown stage names exit 1 and list the valid ones.
+Exits 0 when the pipeline finishes and the final `check` is green; 1 if any stage fails to complete or the final `check` fails. Unknown stage names exit 1 and list the valid ones.
 
 ### Pipeline stages
 
@@ -201,7 +201,7 @@ Each stage is a full `do` loop with its own prompt and gate, and declares which 
 | 5 | `layout-draft` | schematic | The `.kicad_pcb` (DRC clean) plus a `## Draft quality` section in `LAYOUT.md` |
 | 6 | `outputs` | board, bom | `outputs/`: gerbers, drill, DXF, STEP, SVG, `BOM.csv` |
 | 7 | `firmware` | pinout | `firmware/` scaffold, `pins.h` generated from `PINOUT.md` |
-| 8 | `devplan` | schematic, firmware, layout intent | `docs/DEVPLAN.md` |
+| 8 | `devplan` | schematic, firmware, layout-intent | `docs/DEVPLAN.md` |
 
 Use these stage names with `--stage` and `--from`. Stages build on each other's uncommitted state, so `create` runs them as if `--allow-dirty` were set.
 

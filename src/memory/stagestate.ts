@@ -270,13 +270,28 @@ export async function classifyStages(opts: {
   stages: ClassifiableStage[];
 }): Promise<{ classifications: StageClassification[]; warning: string | null }> {
   const { state, warning } = await loadCreateState(opts.repoRoot);
+  const warnings: string[] = warning ? [warning] : [];
   const classifications: StageClassification[] = [];
   for (const stage of opts.stages) {
+    // A probe that throws (drift-aware probes shell out to kicad-cli, which a
+    // dry-run machine may not have) must degrade, not abort classification:
+    // treat the stage as incomplete — the conservative direction — and say so.
+    // This is what keeps `create --dry-run` LLM- and kicad-free (AC-9.5).
+    const probe = async (): Promise<boolean> => {
+      try {
+        return await stage.isComplete();
+      } catch (err) {
+        warnings.push(
+          `stage ${stage.name}: completion probe failed (${(err as Error).message}); classifying as incomplete`,
+        );
+        return false;
+      }
+    };
     const record = state.stages[stage.name];
     if (!record) {
       classifications.push({
         stage: stage.name,
-        status: (await stage.isComplete()) ? 'assumed-complete' : 'incomplete',
+        status: (await probe()) ? 'assumed-complete' : 'incomplete',
         changedInputs: [],
       });
       continue;
@@ -301,11 +316,11 @@ export async function classifyStages(opts: {
       classifications.push({ stage: stage.name, status: 'stale', changedInputs });
       continue;
     }
-    if (!(await stage.isComplete())) {
+    if (!(await probe())) {
       classifications.push({ stage: stage.name, status: 'incomplete', changedInputs: [] });
       continue;
     }
     classifications.push({ stage: stage.name, status: 'fresh', changedInputs: [] });
   }
-  return { classifications, warning };
+  return { classifications, warning: warnings.length ? warnings.join('; ') : null };
 }

@@ -8,11 +8,11 @@ The create pipeline is strictly forward-only — it resumes at the first incompl
 
 - **`copperhead create --stage <name>`**: re-run exactly one stage with its normal prompt and gates, against the *existing* artifacts (revise, don't recreate).
 - **`copperhead create --from <name>`**: re-run a stage and every stage downstream of it in dependency order.
-- **`copperhead create --dry-run`**: print stage status (complete / stale / incomplete, with which upstream artifact changed) and what a run would do; write nothing.
-- **The stage dependency graph becomes data**: each stage declares the named artifacts it `consumes` and `produces` (spec-budgets, subsystems, bom, schematic, pinout, board, layout-intent, outputs, firmware, devplan). Edges derive from the vocabulary, so invalidation is per-artifact, not "everything after".
+- **`copperhead create --dry-run`**: print each stage's classification (fresh / stale with the changed upstream artifacts / incomplete / assumed-complete) and what a run would do; write nothing.
+- **The stage dependency graph becomes data**: each stage declares the named artifacts it `consumes` and `produces` (brief, spec, subsystems, bom, schematic, pinout, board, layout-intent, outputs, firmware, devplan). Edges derive from the vocabulary, so invalidation is per-artifact, not "everything after".
 - **Stage completion records**: at each stage's completing commit, `.copperhead/create-state.json` records the stage, run id, and content hashes of its consumed and produced artifacts — the same spirit as `init`'s `generatedHashes`.
 - **Staleness + downstream propagation**: a stage is stale when a recorded input hash no longer matches the artifact's current hash. After a re-run whose outputs actually changed, consumer stages are marked stale and either auto-reconcile in dependency order with a scoped prompt naming exactly what changed (autonomous default), or are reported for the human to pick (`--dry-run` / `--interactive`). Unchanged outputs invalidate nothing.
-- **Completion inference becomes record-first**: the completion record is authoritative; stages without a record fall back to the stage table's existing completion probes. (Strengthening those probes into per-stage contracts is #23's territory, addressed separately by PR #29 — this change is agnostic to the fallback and composes with it.)
+- **Completion inference becomes record-first, probe-verified**: a record never outranks a failing probe, and stages without a record fall back to the stage table's existing completion probes. (Strengthening those probes into per-stage contracts is #23's territory, addressed separately by PR #29 — this change is agnostic to the fallback and composes with it.)
 - **Run metadata records re-runs**: which stage re-ran, why (which upstream artifact hash changed), and what it invalidated — extending the existing run-observability surfaces.
 
 ## Capabilities

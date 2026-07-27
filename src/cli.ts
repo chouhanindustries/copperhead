@@ -280,7 +280,7 @@ program
   .command('demo')
   .description('tour of what copperhead does, or run the USB-C breakout create pipeline')
   .option('--model <model>', 'codex | cursor | gpt-5 | claude | claude-code (or a provider-specific model id)')
-  .option('--interactive', 're-enable the human gates (spec approval, pre-export)')
+  .option('--interactive', 're-enable the human gates (spec approval, pre-export, stale-reconcile confirmation)')
   .option('--dir <path>', 'demo repo directory (default: demo-runs/usb-c-breakout)')
   .option('--tour', 'print the overview only; do not run the pipeline')
   .action(async (opts: { model?: string; interactive?: boolean; dir?: string; tour?: boolean }) => {
@@ -328,7 +328,7 @@ program
   .description('Mode A: full pipeline from a product brief to the output package')
   .requiredOption('--brief <file>', 'product brief (markdown)')
   .option('--model <model>', 'codex | cursor | gpt-5 | claude | claude-code (or a provider-specific model id)')
-  .option('--interactive', 're-enable the human gates (spec approval, pre-export)')
+  .option('--interactive', 're-enable the human gates (spec approval, pre-export, stale-reconcile confirmation)')
   .option('--stage <name>', 're-run one pipeline stage, then propagate to consumers of changed outputs')
   .option('--from <name>', 're-run a pipeline stage and every stage downstream of it')
   .option('--dry-run', 'print stage classification and what would run; write nothing')

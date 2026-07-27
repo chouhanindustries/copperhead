@@ -75,14 +75,14 @@ Eight stages, each one a full `do` loop with its own prompt and gate. A stage th
 
 | Stage | Produces |
 | --- | --- |
-| 1. Spec | `docs/SPEC.md`, every budget also recorded as a constraint |
-| 2. Architecture | `docs/SUBSYSTEMS.md`, one section per subsystem with reasoning |
-| 3. Parts | `docs/BOM.md`, MPNs flagged `UNVERIFIED` with justification |
-| 4. Schematic | The `.kicad_sch`, sheet by sheet, ERC clean after each |
-| 5. Layout | First-draft placement and critical routing, DRC clean |
-| 6. Outputs | `outputs/`: gerbers, drill, DXF, STEP, SVG, `BOM.csv` |
-| 7. Firmware | `firmware/` scaffold with `pins.h` generated from `PINOUT.md` |
-| 8. Dev plan | `docs/DEVPLAN.md`: bring-up order, test points, risks |
+| 1. Spec (`spec-seed`) | `docs/SPEC.md`, every budget also recorded as a constraint |
+| 2. Architecture (`architecture`) | `docs/SUBSYSTEMS.md`, one section per subsystem with reasoning |
+| 3. Parts (`part-selection`) | `docs/BOM.md`, MPNs flagged `UNVERIFIED` with justification |
+| 4. Schematic (`schematic`) | The `.kicad_sch`, sheet by sheet, ERC clean after each |
+| 5. Layout (`layout-draft`) | First-draft placement and critical routing, DRC clean |
+| 6. Outputs (`outputs`) | `outputs/`: gerbers, drill, DXF, STEP, SVG, `BOM.csv` |
+| 7. Firmware (`firmware`) | `firmware/` scaffold with `pins.h` generated from `PINOUT.md` |
+| 8. Dev plan (`devplan`) | `docs/DEVPLAN.md`: bring-up order, test points, risks |
 
 The pipeline is resumable. Each completed stage records content hashes of what it read and wrote in `.copperhead/create-state.json`, so if a stage fails, fix what it complained about and rerun the same command: it skips past what is already done and picks up at the first stage that is incomplete or *stale* (something a completed stage depends on has changed since it ran).
 

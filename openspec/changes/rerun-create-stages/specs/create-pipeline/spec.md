@@ -19,8 +19,8 @@ Pipeline state SHALL live in the repo: stage completion records with input/outpu
 `create --stage <name>` SHALL run exactly the named stage against the existing artifacts, then propagate: re-hash its produced artifacts and reconcile stale consumers per the pipeline-invalidation capability. `create --from <name>` SHALL force-re-run the named stage and its graph descendants (stages reachable via produces→consumes edges) in dependency order, leaving non-descendant stages untouched. A re-run of a previously completed stage SHALL carry a revise-not-recreate preamble in its stage prompt, and every normal gate applies unchanged.
 
 #### Scenario: Single-stage revision propagates only real changes
-- **WHEN** `create --stage part-selection` revises BOM.md (a value changes) but the schematic re-run then commits no footprint change
-- **THEN** `schematic` re-runs (consumes `bom`), `outputs` re-runs only if an artifact it consumes changed, and `firmware` never runs
+- **WHEN** `create --stage part-selection` revises BOM.md (a value changes) and the schematic re-run commits no change to the `.kicad_sch` or PINOUT.md
+- **THEN** `schematic` re-runs (consumes `bom`), `outputs` re-runs only if an artifact it consumes changed, and `firmware` never runs (its `pinout` input is unchanged)
 
 #### Scenario: --from re-runs descendants only
 - **WHEN** `create --from layout-draft` runs

@@ -89,7 +89,7 @@ A stale stage runs with its normal stage prompt plus a generated preamble: which
 
 ### D7 — Observability: the re-run story lands in the existing AC-8 surfaces
 
-`RunMetaInput.stage` gains `trigger: 'initial' | 'requested' | 'from' | 'stale'` and `changedInputs?: string[]`; both render in the CLI header and `summary.md ## Environment`. The create runner emits `stage-plan` (the full classification), `stage-stale`, and `stage-invalidated` transcript-level log lines, and the pipeline's final line reports what ran vs. skipped. Collection stays LLM-free and probe failures stay non-fatal (AC-8.3 discipline).
+`RunMetaInput.stage` gains `trigger: 'initial' | 'requested' | 'from' | 'stale'` and `changedInputs?: string[]`; both render in the CLI header and `summary.md ## Environment`. The create runner's visibility lines are: the full classification under `--dry-run` (`stage classification:`), the targeted-mode plan (`plan (<mode>): ...`) with its dirty-tree warning, per-stage skip lines (`fresh (skipping)` / `already complete (resuming past it)`), invalidation lines (`stale after <stage>: <consumer> (<artifact> edge)`), and the end-of-run per-stage cost table whose resumed rows mark what was skipped. Collection stays LLM-free and probe failures stay non-fatal (AC-8.3 discipline).
 
 ### D8 — Module placement
 

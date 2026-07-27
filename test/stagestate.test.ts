@@ -303,6 +303,32 @@ describe('staleness classification (design D4)', () => {
     }
   });
 
+  it('a probe that throws degrades to incomplete with a warning, never an abort (AC-9.5)', async () => {
+    const { repo, cleanup } = await tempFixtureRepo();
+    try {
+      // drift-aware probes shell out to kicad-cli; a dry-run machine without it
+      // must still classify (conservatively) instead of crashing classification
+      const res = await classifyStages({
+        repoRoot: repo,
+        config: CONFIG,
+        stages: [
+          {
+            name: 'schematic',
+            consumes: ['bom'] as ArtifactName[],
+            isComplete: () => {
+              throw new Error('kicad-cli not found on PATH');
+            },
+          },
+        ],
+      });
+      expect(res.classifications[0]!.status).toBe('incomplete');
+      expect(res.warning).toContain('schematic');
+      expect(res.warning).toContain('kicad-cli not found');
+    } finally {
+      await cleanup();
+    }
+  });
+
   it('a recorded stage with matching inputs and a failing probe is incomplete (AC-9.9)', async () => {
     const { repo, cleanup } = await tempFixtureRepo();
     try {

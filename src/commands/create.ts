@@ -892,8 +892,11 @@ export async function runCreate(opts: CreateOptions): Promise<{ ok: boolean; com
           // meeting a stricter completion contract); recording it would make
           // absent work permanently "fresh". Withhold the record — the commit
           // still lands, and the recovery loop treats the unmet contract as
-          // the stage's failure.
-          if (!(await stage.isComplete(opts.repoRoot, cfgNow.docs))) return;
+          // the stage's failure (AC-9.1: the withheld record says so).
+          if (!(await stage.isComplete(opts.repoRoot, cfgNow.docs))) {
+            opts.log(stageLine(name, 'completion record withheld: the stage contract is not met post-run', 'warn'));
+            return;
+          }
           const outputs: Partial<Record<ArtifactName, string>> = {};
           for (const a of stage.produces) outputs[a] = await hashArtifact(a, opts.repoRoot, cfgNow, opts.briefPath);
           await saveStageRecord(opts.repoRoot, name, {

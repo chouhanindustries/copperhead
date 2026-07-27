@@ -24,6 +24,7 @@ let kicadShimDir: string;
 let realPath: string;
 let privateTmpRoot: string;
 let realTmpdir: string | undefined;
+let realMinFree: string | undefined;
 
 beforeAll(async () => {
   // Every non-dry runCreate sweeps stale copperhead scratch dirs under
@@ -34,6 +35,12 @@ beforeAll(async () => {
   realTmpdir = process.env.TMPDIR;
   privateTmpRoot = await mkdtemp(path.join(tmpdir(), 'copperhead-stages-tmp-'));
   process.env.TMPDIR = privateTmpRoot;
+  // These tests exercise pipeline semantics, not host disk headroom: on a
+  // machine hovering near the 2 GiB default, runCreate's disk preflight would
+  // fail the whole file. Use the supported override; the preflight itself is
+  // covered by session-limit-disk.test.ts.
+  realMinFree = process.env.COPPERHEAD_MIN_FREE_MB;
+  process.env.COPPERHEAD_MIN_FREE_MB = '0';
 
   kicadShimDir = await mkdtemp(path.join(tmpdir(), 'copperhead-kicad-shim-'));
   const shim = [
@@ -60,6 +67,8 @@ afterAll(async () => {
   process.env.PATH = realPath;
   if (realTmpdir === undefined) delete process.env.TMPDIR;
   else process.env.TMPDIR = realTmpdir;
+  if (realMinFree === undefined) delete process.env.COPPERHEAD_MIN_FREE_MB;
+  else process.env.COPPERHEAD_MIN_FREE_MB = realMinFree;
   await rm(kicadShimDir, { recursive: true, force: true });
   await rm(privateTmpRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 });
@@ -759,6 +768,11 @@ describe('probe-gated records and demotion (adversarial-review fixes)', () => {
       // diagnosis aborts and the pipeline stops at that stage
       expect(res.ok).toBe(false);
       expect(ranStages(lines)).toEqual(['layout-draft']);
+      // the withheld record says so at commit time (AC-9.1)...
+      expect(lines.join('\n')).toContain(
+        'stage layout-draft: completion record withheld: the stage contract is not met post-run',
+      );
+      // ...and the recovery loop reports the unmet contract as the failure
       expect(lines.join('\n')).toContain(
         'the run finished but the stage completion contract is not met — no usable artifact was produced',
       );
