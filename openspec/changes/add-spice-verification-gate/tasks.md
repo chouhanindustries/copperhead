@@ -3,8 +3,8 @@
 ## 1. Wrapper and grammar
 
 - [ ] 1.1 Implement ngspice wrapper in `src/kicad/spice.ts` mirroring the kicad-cli wrapper: execa batch mode, version detection, install hint, per-run timeout from config
-- [ ] 1.2 Implement the `## Simulation` block parser (scope, analysis, sources, assertions) with parse errors naming lines; reject raw control blocks
-- [ ] 1.3 Implement the assertion grammar → `.meas` directive compiler with SI-suffix number parsing; unit tests for every measurable/comparator pair
+- [x] 1.2 Implement the `## Simulation` block parser (scope, analysis, sources, assertions) with parse errors naming lines; reject raw control blocks
+- [x] 1.3 Implement the assertion grammar → `.meas` directive compiler with SI-suffix number parsing; unit tests for every measurable/comparator pair
 
 ## 2. Netlist scoping and execution
 

@@ -57,7 +57,7 @@ copperhead do "<change request>" [options]
 
 | Option | Description |
 | --- | --- |
-| `--model <model>` | `codex`, `gpt-5`, `claude`, `claude-code`, or a provider-specific model id. `codex` uses the saved local Codex login; `claude-code` uses your logged-in Claude Code (no `ANTHROPIC_API_KEY`). See [Configuration](/reference/configuration/#saved-login-claude-code). |
+| `--model <model>` | `codex`, `cursor`, `gpt-5`, `claude`, `claude-code`, or a provider-specific model id. Saved-login providers: `codex` (Codex CLI), `cursor` (Cursor Agent CLI), `claude-code` (Claude Code). |
 | `--max-turns <n>` | Turn budget for this run. Overrides `maxTurns` from config. |
 | `--allow-dirty` | Permit a dirty working tree. The snapshot is taken with `git stash create`. |
 | `--dry-run` | Propose the diff and write nothing. |
@@ -83,6 +83,29 @@ ERC and DRC are skipped when no schematic or board is configured, rather than fa
 | `1` | At least one check failed, or `kicad-cli` is missing. |
 
 With `--json`, prints a result object with `ok` plus per-check detail for `erc`, `drc`, `drift`, `openspec`, and `constraints`.
+
+## `copperhead doctor`
+
+```bash
+copperhead doctor [--model <model>]
+```
+
+Environment preflight: checks whether this machine can actually run a copperhead command, **before** you start one. Unlike `check`, it looks at the model provider, the one thing `check` cannot, since `check` is contractually LLM-free. Makes **no LLM calls and no network requests**; the credential check is presence-only (it verifies a required API key is set, not that it authenticates).
+
+Checks, in order:
+
+- **node** — at least the version copperhead requires.
+- **kicad-cli** — present on PATH (a missing binary is reported, not thrown).
+- **git** — present on PATH (copperhead snapshots and commits its work).
+- **provider** — resolves the model the same way a run does (`--model` > `COPPERHEAD_MODEL` > config > available key) and checks its credential. Saved-login providers (`codex`, `cursor`, `claude-code`) need no key and report `info`.
+- **project** — informational: whether `.copperhead/config.json` exists and what it wires. Never blocks.
+
+| Exit code | Meaning |
+| --- | --- |
+| `0` | Ready — no critical check failed. |
+| `1` | Not ready — a `[FAIL]` item needs fixing. |
+
+With `--json`, prints `{ ok, checks: [{ name, status, detail, hint? }] }`.
 
 ## `copperhead sync`
 
@@ -119,7 +142,7 @@ copperhead create --brief brief.md --dry-run        # classify stages, write not
 | Option | Description |
 | --- | --- |
 | `--brief <file>` | **Required.** The product brief, in markdown. |
-| `--model <model>` | `codex`, `gpt-5`, `claude`, or `claude-code` (saved-login Claude Code, no `ANTHROPIC_API_KEY`). |
+| `--model <model>` | `codex`, `cursor`, `gpt-5`, `claude`, or `claude-code` (saved-login; no model API key for those three). |
 | `--interactive` | Re-enable the human gates: spec approval, a pause before export, and confirmation before stale stages reconcile. |
 | `--stage <name>` | Re-run exactly one stage against the existing artifacts (revise, not recreate), then reconcile every stage that consumes an output the re-run actually changed. Mutually exclusive with `--from`. |
 | `--from <name>` | Force-re-run the named stage and its graph descendants: the stages reachable through consumed artifacts, not simply every later stage. |

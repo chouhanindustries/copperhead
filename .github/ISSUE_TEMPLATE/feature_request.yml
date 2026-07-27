@@ -1,0 +1,54 @@
+name: Feature request
+description: Propose new behavior or a change to the CLI surface.
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        copperhead is spec-driven. Behavior lives in
+        [openspec/specs/SPEC.md](https://github.com/chouhanindustries/copperhead/blob/main/openspec/specs/SPEC.md),
+        and the near-term plan lives in [ROADMAP.md](https://github.com/chouhanindustries/copperhead/blob/main/ROADMAP.md).
+        Please skim both before filing: your idea may already be scoped for a later phase.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What are you trying to do today, and where does copperhead get in the way?
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behavior
+      description: What should happen instead. If it touches the CLI, show the command and the output you would expect.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives you considered
+      description: Workarounds you tried, or other designs you weighed and why you set them aside.
+    validations:
+      required: false
+
+  - type: textarea
+    id: invariants
+    attributes:
+      label: Effect on the invariants
+      description: |
+        Two invariants shape the whole tool: edits are spec-gated in (write tools are absent until an OpenSpec
+        proposal validates), and mutations are verification-gated out (nothing is done until ERC, and DRC when the
+        board changed, passes). Say whether your proposal touches either. "No effect" is a fine answer.
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before submitting
+      options:
+        - label: I searched existing issues and the roadmap, and this is not already tracked.
+          required: true

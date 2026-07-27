@@ -22,8 +22,19 @@ import { tempFixtureRepo } from './helpers.js';
  */
 let kicadShimDir: string;
 let realPath: string;
+let privateTmpRoot: string;
+let realTmpdir: string | undefined;
 
 beforeAll(async () => {
+  // Every non-dry runCreate sweeps stale copperhead scratch dirs under
+  // os.tmpdir(); run concurrently with tmp-sweep.test.ts (which plants aged
+  // fixture dirs under the same prefix) that sweep eats the other file's
+  // fixtures. os.tmpdir() honors TMPDIR, so give this worker a private tmp
+  // root: its sweeps can then never see another test file's dirs.
+  realTmpdir = process.env.TMPDIR;
+  privateTmpRoot = await mkdtemp(path.join(tmpdir(), 'copperhead-stages-tmp-'));
+  process.env.TMPDIR = privateTmpRoot;
+
   kicadShimDir = await mkdtemp(path.join(tmpdir(), 'copperhead-kicad-shim-'));
   const shim = [
     '#!/bin/sh',
@@ -47,7 +58,10 @@ beforeAll(async () => {
 
 afterAll(async () => {
   process.env.PATH = realPath;
+  if (realTmpdir === undefined) delete process.env.TMPDIR;
+  else process.env.TMPDIR = realTmpdir;
   await rm(kicadShimDir, { recursive: true, force: true });
+  await rm(privateTmpRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 });
 
 /** Replays a fixed script of turns; the last turn repeats forever. */
@@ -418,11 +432,13 @@ describe('create pipeline: records, staleness, targeted re-runs', () => {
       expect(ranStages(lines)).toEqual(['part-selection', 'schematic', 'outputs']);
       expect(await readFile(path.join(repo, 'docs', 'BOM.md'), 'utf8')).toContain('revised by test');
 
-      // triggers land in the run-start events (AC-8 surfaces)
+      // triggers land in the run-start events (AC-8 surfaces). runs/ also holds
+      // REPORT.md/report.json now, so scan directories only.
       const runsDir = path.join(repo, '.copperhead', 'runs');
       const starts: { name?: string; trigger?: string; changedInputs?: string[] }[] = [];
-      for (const dir of await readdir(runsDir)) {
-        const jsonl = await readFile(path.join(runsDir, dir, 'transcript.jsonl'), 'utf8');
+      for (const entry of await readdir(runsDir, { withFileTypes: true })) {
+        if (!entry.isDirectory()) continue;
+        const jsonl = await readFile(path.join(runsDir, entry.name, 'transcript.jsonl'), 'utf8');
         for (const line of jsonl.split('\n').filter(Boolean)) {
           const ev = JSON.parse(line) as { type: string; data: { stage?: { name: string; trigger?: string; changedInputs?: string[] } } };
           if (ev.type === 'run-start' && ev.data.stage) starts.push(ev.data.stage);
@@ -575,7 +591,10 @@ describe('create pipeline: records, staleness, targeted re-runs', () => {
       expect(res.ok).toBe(false);
       // layout-draft is the first planned stage of the new fixture
       expect(res.completed).not.toContain('layout-draft');
-      expect(lines.join('\n')).toContain('stage layout-draft did not complete (refused)');
+      // refusals now route through the recovery supervisor: with no API key the
+      // diagnosis fails safe to abort and the pipeline stops with a resume point
+      expect(lines.join('\n')).toContain('stage layout-draft: the run ended as "refused" (refused)');
+      expect(lines.join('\n')).toContain('stopped at stage 5/8 (layout-draft)');
       // the record rides the stage commit; a refusal never commits, so no record exists
       const { state } = await loadCreateState(repo);
       expect(state.stages['layout-draft']).toBeUndefined();
@@ -664,7 +683,7 @@ describe('create pipeline: records, staleness, targeted re-runs', () => {
       );
       expect(res.ok).toBe(false);
       expect(res.completed).toEqual(['part-selection']);
-      expect(lines.join('\n')).toContain('stage schematic did not complete (refused)');
+      expect(lines.join('\n')).toContain('stage schematic: the run ended as "refused" (refused)');
 
       // staleness is re-derived from records + working tree, not from the failed run
       const lines2: string[] = [];
@@ -689,9 +708,9 @@ describe('create pipeline: records, staleness, targeted re-runs', () => {
       );
       expect(res.ok).toBe(false);
       expect(res.completed).toEqual(['layout-draft']);
-      expect(lines.join('\n')).toContain(
-        'stage outputs did not complete (refused); a plain copperhead create resumes from here',
-      );
+      expect(lines.join('\n')).toContain('stage outputs: the run ended as "refused" (refused)');
+      // the stop prints a copy-pasteable resume command instead of prose
+      expect(lines.join('\n')).toContain('To resume from here, run:');
     } finally {
       await cleanup();
     }
@@ -735,12 +754,13 @@ describe('probe-gated records and demotion (adversarial-review fixes)', () => {
     try {
       const lines: string[] = [];
       const res = await runCreate(createOpts(repo, brief, lines, { provider: finishOnlyProvider() }));
-      // upstream halt semantics: the run committed but the contract is unmet,
-      // so the pipeline stops at that stage instead of advancing past it
+      // halt semantics: the run committed but the contract is unmet, so the
+      // recovery loop treats it as the stage's failure; with no API key the
+      // diagnosis aborts and the pipeline stops at that stage
       expect(res.ok).toBe(false);
       expect(ranStages(lines)).toEqual(['layout-draft']);
       expect(lines.join('\n')).toContain(
-        'stage layout-draft: run succeeded but the stage contract is not met yet (partial work committed); re-run copperhead create to continue this stage',
+        'the run finished but the stage completion contract is not met — no usable artifact was produced',
       );
       const { state } = await loadCreateState(repo);
       expect(Object.keys(state.stages)).toEqual([]);

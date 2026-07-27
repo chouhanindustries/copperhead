@@ -6,6 +6,7 @@ import { createInterface } from 'node:readline/promises';
 import { loadConfig, resolveModel } from './config.js';
 import { runInit, InitError } from './memory/scaffold.js';
 import { runCheck } from './commands/check.js';
+import { runDoctor, formatDoctor } from './commands/doctor.js';
 import { syncVerify, syncResolve, formatSyncReport } from './commands/sync.js';
 import { runCreate, validateStageFlags } from './commands/create.js';
 import {
@@ -122,10 +123,29 @@ program
   .action(checkAction);
 
 program
+  .command('doctor')
+  .description('env preflight: kicad-cli, git, node, and the model provider credential; no LLM, no network')
+  .option('--model <model>', 'model to check the provider credential for (default: resolved like a run)')
+  .action(async (opts: { model?: string }) => {
+    const repo = repoOf(program.opts());
+    // Unlike other commands, doctor never gates on kicad-cli being present:
+    // runDoctor probes it and reports a failure instead of throwing, so a user
+    // with a missing tool still gets the full report.
+    const report = await runDoctor({ repoRoot: repo, model: opts.model });
+    if (program.opts().json) console.log(JSON.stringify(report, null, 2));
+    else {
+      const color = process.stdout.isTTY === true && !process.env.NO_COLOR;
+      // || not ??: some non-interactive ptys report columns as 0.
+      for (const line of formatDoctor(report, process.stdout.columns || 80, color)) console.log(line);
+    }
+    process.exit(report.ok ? 0 : 1);
+  });
+
+program
   .command('do')
   .description('the core loop: propose, edit, verify, propagate, commit')
   .argument('<request>', 'the change request in natural language')
-  .option('--model <model>', 'codex | gpt-5 | claude | claude-code (or a provider-specific model id)')
+  .option('--model <model>', 'codex | cursor | gpt-5 | claude | claude-code (or a provider-specific model id)')
   .option('--max-turns <n>', 'turn budget for this run')
   .option('--allow-dirty', 'allow a dirty tree (snapshot via git stash create)')
   .option('--dry-run', 'propose the diff, write nothing')
@@ -203,7 +223,7 @@ program
   .command('create')
   .description('Mode A: full pipeline from a product brief to the output package')
   .requiredOption('--brief <file>', 'product brief (markdown)')
-  .option('--model <model>', 'codex | gpt-5 | claude | claude-code (or a provider-specific model id)')
+  .option('--model <model>', 'codex | cursor | gpt-5 | claude | claude-code (or a provider-specific model id)')
   .option('--interactive', 're-enable the human gates (spec approval, pre-export)')
   .option('--stage <name>', 're-run one pipeline stage, then propagate to consumers of changed outputs')
   .option('--from <name>', 're-run a pipeline stage and every stage downstream of it')
