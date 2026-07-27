@@ -57,6 +57,10 @@ class ServeClient:
         self.proc = None
         self._reader = None
         self._next_id = 0
+        # Last few stderr lines: when serve dies at startup (no model
+        # configured, broken install) this is the only diagnosis there is,
+        # so the panel surfaces it with the exit notice.
+        self.last_stderr = []
 
     def start(self):
         # Forward the whole environment: KiCad sets KICAD_API_SOCKET and
@@ -67,13 +71,23 @@ class ServeClient:
             cwd=self.project_dir,
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
             text=True,
             encoding="utf-8",
             env=dict(os.environ),
         )
+        threading.Thread(target=self._stderr_loop, args=(self.proc,), daemon=True).start()
         self._reader = threading.Thread(target=self._read_loop, daemon=True)
         self._reader.start()
+
+    def _stderr_loop(self, proc):
+        try:
+            for line in proc.stderr:
+                line = line.strip()
+                if line:
+                    self.last_stderr = (self.last_stderr + [line])[-5:]
+        except Exception:
+            pass
 
     def _read_loop(self):
         proc = self.proc

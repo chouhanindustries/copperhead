@@ -34,6 +34,10 @@ class CopperheadPanel(wx.Panel):
         super().__init__(parent)
         self.client = None
         self.active_id = None
+        # Consecutive unexpected exits before the panel stops respawning: a
+        # serve that dies at startup (no model configured) must become a
+        # readable error, not an infinite restart loop.
+        self.restarts = 0
 
         sizer = wx.BoxSizer(wx.VERTICAL)
         self.status = wx.StaticText(self, label="starting…")
@@ -108,6 +112,7 @@ class CopperheadPanel(wx.Panel):
     def _on_message(self, obj):
         event = obj.get("event")
         if event == "hello":
+            self.restarts = 0  # a working serve resets the respawn budget
             data = obj.get("data", {})
             self.status.SetLabel(
                 "%s · %s" % (data.get("model", "?"), data.get("repoRoot", "?"))
@@ -137,9 +142,26 @@ class CopperheadPanel(wx.Panel):
                 self.input.Enable()
 
     def _on_serve_exit(self, code):
+        if self.client is None:
+            return  # deliberate shutdown
+        stderr = list(self.client.last_stderr)
+        self.restarts += 1
+        if self.restarts > 3:
+            self.status.SetLabel("serve keeps exiting (%s)" % code)
+            self.status.SetForegroundColour(ERR)
+            for line in stderr:
+                self._append(line + "\n", ERR)
+            self._append("fix the cause (see above), then close and reopen this panel.\n", DIM)
+            self.input.Disable()
+            self.stop_btn.Disable()
+            self.client = None
+            self.active_id = None
+            return
+        if stderr:
+            self._append(stderr[-1] + "\n", ERR)
         if self.active_id is not None:
             self._restart("run interrupted (serve exited %s); restarting…" % code)
-        elif self.client is not None:
+        else:
             self._restart("serve exited (%s); restarting…" % code)
 
     # -- user events -------------------------------------------------------
