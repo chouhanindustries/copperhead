@@ -125,6 +125,49 @@ for (const { model, key } of providers) {
         }
       },
       600_000,
+    it(
+      'AC-3.2: RTC-capable pin move consults strapping table and synchronizes schematic and PINOUT.md',
+      async () => {
+        const { repo, cleanup } = await setupRepo();
+        try {
+          const res = await runAgentLoop({
+            repoRoot: repo,
+            request: 'move KEY_DAH to a free RTC-capable pin that is not a strapping pin',
+            model,
+            log: () => {},
+          });
+          expect(res.outcome).toBe('success');
+
+          const pinout = await readFile(path.join(repo, 'docs', 'PINOUT.md'), 'utf8');
+          expect(pinout).toContain('KEY_DAH');
+          expect(pinout).not.toContain('GPIO12');
+        } finally {
+          await cleanup();
+        }
+      },
+      600_000,
+    );
+
+    it(
+      'AC-3.3: adding an RGB LED creates unique refdes, valid footprint, and UNVERIFIED BOM row with rationale',
+      async () => {
+        const { repo, cleanup } = await setupRepo();
+        try {
+          const res = await runAgentLoop({
+            repoRoot: repo,
+            request: 'add an RGB LED status indicator connected to GPIO4',
+            model,
+            log: () => {},
+          });
+          expect(res.outcome).toBe('success');
+
+          const bom = await readFile(path.join(repo, 'docs', 'BOM.md'), 'utf8');
+          expect(bom).toContain('UNVERIFIED');
+        } finally {
+          await cleanup();
+        }
+      },
+      600_000,
     );
 
     it(
