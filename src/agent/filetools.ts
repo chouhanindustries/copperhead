@@ -1,4 +1,4 @@
-import { readFile, writeFile, mkdir, readdir, stat } from 'node:fs/promises';
+import { readFile, writeFile, mkdir, readdir, lstat, realpath, stat } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { resolveInRepo, isKicadFile } from '../util/paths.js';
@@ -106,15 +106,49 @@ export async function toolSearch(
   const re = new RegExp(pattern);
   const globRe = glob ? globToRegex(glob) : null;
   const matches: SearchMatch[] = [];
+  // The walk follows symlinks (stat does), so it needs the same containment rule
+  // the other file tools get from resolveInRepo, plus loop protection: a link
+  // pointing at an ancestor is otherwise descended until the OS throws ELOOP,
+  // which takes down search for the whole run.
+  const realRoot = await realpath(repoRoot).catch(() => path.resolve(repoRoot));
+  // Loop protection is scoped to the *current path*, not the whole walk. A cycle
+  // always means revisiting an ancestor, so an ancestor set terminates the walk
+  // while still visiting siblings: a global set would also drop non-cyclic
+  // aliases, hiding a real directory behind an in-repo symlink pointing at it.
+  const ancestors = new Set<string>([realRoot]);
+
+  /** The real path of `abs`, or null when it resolves outside the repo. */
+  async function insideRoot(abs: string): Promise<string | null> {
+    const real = await realpath(abs).catch(() => null);
+    if (real === null) return null;
+    if (real !== realRoot && !real.startsWith(realRoot + path.sep)) return null;
+    return real;
+  }
+
   async function walk(dir: string): Promise<void> {
     if (matches.length >= maxMatches) return;
     for (const entry of await readdir(dir)) {
       if (SKIP_DIRS.has(entry)) continue;
       const abs = path.join(dir, entry);
       const rel = path.relative(repoRoot, abs);
-      const st = await stat(abs);
+      // lstat describes the entry itself; stat would describe the link target
+      // and hide that this is a link at all.
+      const link = await lstat(abs).catch(() => null);
+      if (link === null) continue; // vanished mid-walk
+      // Resolved once and reused below: containment and loop detection are the
+      // same question about the same entry, and realpath is a syscall.
+      const real = link.isSymbolicLink() ? await insideRoot(abs) : null;
+      if (link.isSymbolicLink() && real === null) continue; // escapes the repo
+
+      const st = await stat(abs).catch(() => null);
+      if (st === null) continue; // broken link or race
       if (st.isDirectory()) {
+        const realDir = real ?? (await insideRoot(abs));
+        if (realDir === null) continue;
+        if (ancestors.has(realDir)) continue; // on the current path already: a loop
+        ancestors.add(realDir);
         await walk(abs);
+        ancestors.delete(realDir);
       } else if (st.size < 5_000_000 && (!globRe || globRe.test(rel))) {
         let text: string;
         try {

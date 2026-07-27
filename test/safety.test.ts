@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { resolveInRepo, SandboxError, isKicadFile } from '../src/util/paths.js';
@@ -125,6 +125,106 @@ describe('file tools', () => {
     const mdOnly = await toolSearch(dir, 'KEY_DAH', '**/*.md');
     expect(mdOnly).toHaveLength(1);
     expect(mdOnly[0]!.file).toBe('a.md');
+  });
+
+  it('search does not read through a symlink that leaves the repo', async () => {
+    const base = await mkdtemp(path.join(tmpdir(), 'ch-search-esc-'));
+    const repo = path.join(base, 'repo');
+    const outside = path.join(base, 'outside');
+    await mkdir(path.join(repo, 'sub'), { recursive: true });
+    await mkdir(outside, { recursive: true });
+    await writeFile(path.join(repo, 'b.txt'), 'needle two\n', 'utf8');
+    await writeFile(path.join(repo, 'sub', 'a.txt'), 'needle here\n', 'utf8');
+    await writeFile(path.join(outside, 'leak.txt'), 'needle SECRET outside\n', 'utf8');
+    await symlink(outside, path.join(repo, 'link'));
+
+    const matches = await toolSearch(repo, 'needle');
+
+    // The escaping match used to come back as "link/leak.txt", which reads as a
+    // repo-relative path and hides that the content was outside the sandbox.
+    expect(matches.map((m) => m.file).sort()).toEqual(['b.txt', path.join('sub', 'a.txt')]);
+    expect(matches.some((m) => m.text.includes('SECRET'))).toBe(false);
+  });
+
+  it('search survives a symlink loop instead of dying with ELOOP', async () => {
+    const base = await mkdtemp(path.join(tmpdir(), 'ch-search-loop-'));
+    const repo = path.join(base, 'repo');
+    await mkdir(path.join(repo, 'sub'), { recursive: true });
+    await writeFile(path.join(repo, 'sub', 'a.txt'), 'needle here\n', 'utf8');
+    await symlink(repo, path.join(repo, 'sub', 'loop'));
+
+    // Previously this walked loop/sub/loop/sub/... until the OS threw, taking
+    // the search tool down for the rest of the run.
+    const matches = await toolSearch(repo, 'needle');
+
+    expect(matches).toHaveLength(1);
+    expect(matches[0]!.file).toBe(path.join('sub', 'a.txt'));
+  });
+
+  it('search does not report a file twice through a link back to the repo root', async () => {
+    const base = await mkdtemp(path.join(tmpdir(), 'ch-search-dup-'));
+    const repo = path.join(base, 'repo');
+    await mkdir(path.join(repo, 'sub'), { recursive: true });
+    // A match at the ROOT is what exposes this: the loop test above only has a
+    // file under sub/, so re-walking the root produced nothing to duplicate.
+    await writeFile(path.join(repo, 'a.txt'), 'needle A\n', 'utf8');
+    await writeFile(path.join(repo, 'sub', 'b.txt'), 'needle B\n', 'utf8');
+    await symlink(repo, path.join(repo, 'sub', 'back'));
+
+    const matches = await toolSearch(repo, 'needle');
+
+    // Without seeding seenDirs with the root, this returns a third match at
+    // sub/back/a.txt — the same file reported under the link's path.
+    expect(matches.map((m) => m.file).sort()).toEqual(['a.txt', path.join('sub', 'b.txt')]);
+  });
+
+  it('search still follows a symlink that stays inside the repo', async () => {
+    const base = await mkdtemp(path.join(tmpdir(), 'ch-search-in-'));
+    const repo = path.join(base, 'repo');
+    await mkdir(path.join(repo, 'real'), { recursive: true });
+    await writeFile(path.join(repo, 'real', 'lib.txt'), 'needle inside\n', 'utf8');
+    // A symlinked *file*, not a directory: a directory alias is subject to
+    // readdir ordering, so only a file link pins "the link was followed"
+    // deterministically.
+    await symlink(path.join(repo, 'real', 'lib.txt'), path.join(repo, 'alias.txt'));
+
+    const matches = await toolSearch(repo, 'needle');
+
+    // Symlinked library paths are a normal KiCad layout: the file is reachable
+    // by both names, and neither traversal is an escape. Asserting the exact
+    // set is what makes this a guard rail — refusing to follow the link drops
+    // alias.txt and fails here.
+    expect(matches.map((m) => m.file).sort()).toEqual(['alias.txt', path.join('real', 'lib.txt')]);
+  });
+
+  it('search reports a directory reachable by both its real name and an alias', async () => {
+    const base = await mkdtemp(path.join(tmpdir(), 'ch-search-alias-'));
+    const repo = path.join(base, 'repo');
+    await mkdir(path.join(repo, 'zreal'), { recursive: true });
+    await writeFile(path.join(repo, 'zreal', 'lib.txt'), 'needle inside\n', 'utf8');
+    // Sorts before 'zreal', so readdir yields the alias first: with walk-global
+    // loop detection the real directory is pruned and a path-anchored glob
+    // finds nothing.
+    await symlink(path.join(repo, 'zreal'), path.join(repo, 'aalias'));
+
+    expect((await toolSearch(repo, 'needle')).map((m) => m.file).sort()).toEqual([
+      path.join('aalias', 'lib.txt'),
+      path.join('zreal', 'lib.txt'),
+    ]);
+    expect((await toolSearch(repo, 'needle', 'zreal/**')).map((m) => m.file)).toEqual([
+      path.join('zreal', 'lib.txt'),
+    ]);
+  });
+
+  it('search steps over a dangling symlink instead of failing the walk', async () => {
+    const repo = await mkdtemp(path.join(tmpdir(), 'ch-search-dangle-'));
+    await writeFile(path.join(repo, 'a.txt'), 'needle A\n', 'utf8');
+    await symlink(path.join(repo, 'gone'), path.join(repo, 'dangle'));
+
+    // A broken link is an ordinary thing to find in a checkout. The arm that
+    // actually saves the walk is realpath's in insideRoot: it fails first and
+    // drops the entry, so stat is never reached with a dangling target.
+    expect((await toolSearch(repo, 'needle')).map((m) => m.file)).toEqual(['a.txt']);
   });
 
   it('isKicadFile covers the design formats', () => {
