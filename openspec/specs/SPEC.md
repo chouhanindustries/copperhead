@@ -241,7 +241,16 @@ The REPL and `do` opportunistically connect, read-only, to a running KiCad 9+ in
 - The user's current board selection is snapshotted at run start and injected into the request as a labeled, possibly-irrelevant context block; empty selection injects nothing.
 - After a committed run that touched a board open in the connected KiCad, the run log prints a reload prompt naming the file. Nothing is ever reloaded automatically: the API exposes neither a reload-from-disk call nor a dirty-state query, so a forced action could discard unsaved editor work.
 - Every bridge failure is soft: absent socket, disabled API server, mid-run disconnect, or protocol mismatch all degrade to "disconnected" without failing a command or run. `check`/`sync`/`create` never construct a client (AC-114.6).
-- Phase B (in-KiCad side panel) and Phase C (IPC commits) are tracked in issue #114 and are out of scope here.
+- Phase C (IPC commits) is tracked in issue #114 and out of scope here; Phase B is §2.8.
+
+## 2.8 KiCad side panel (change: add-kicad-side-panel, issue #114 Phase B)
+
+A dockable copperhead pane inside pcbnew, for KiCad 9/10 only (the SWIG action-plugin system it needs is removed in KiCad 11; the IPC plugin system cannot embed UI, so there is no 11+ path yet, tracked in #114).
+
+- `plugins/kicad/copperhead_panel/`: a Python action plugin that docks a pane via wx AUI (floating fallback when the frame's manager is unreachable). Request input, streaming run log, status row, stop button. Serve I/O runs on a worker thread posting to the UI via wx.CallAfter.
+- The pane spawns `copperhead serve` in the open board's project directory, forwarding `KICAD_API_SOCKET`/`KICAD_API_TOKEN` so the Phase A bridge connects to the hosting KiCad. A missing copperhead CLI renders an install hint (config file or PATH discovery, no bundled Node).
+- Stop kills and restarts the serve child: the protocol has no cancel method because the agent loop cannot abort mid-turn, and the REPL's Ctrl+C has the same semantics.
+- Packaging: `scripts/build-pcm-addon.mjs` produces the Plugin and Content Manager zip (`metadata.json` versioned from package.json, kicad bounds 9.0 through 10.99). Pane behavior needing a live pcbnew is covered by the manual checklist in `plugins/kicad/TESTING.md`; everything else is vitest-covered offline (AC-114B).
 
 ## 3. CLI surface (Phase 1)
 
@@ -273,6 +282,14 @@ copperhead init [--path hardware/]
 
 copperhead do "<change request>" [--model codex|gpt-5|claude] [--max-turns N]
     The core loop. See §4.
+
+copperhead serve [--model …] [--max-turns N]
+    Headless run surface for embedders (the KiCad side panel, §2.8): NDJSON
+    over stdio. Emits a hello handshake, then accepts run/check requests,
+    streaming log events and one result per request. Single-flight; no
+    cancel method (run interruption = the embedder killing the process,
+    the REPL Ctrl+C semantics). Secrets are redacted on the wire (AC-4.1).
+    Attended surface: constructs the KiCad IPC bridge like repl/do.
 
 copperhead check          (alias: copperhead verify)
     Run ERC + DRC + doc-drift check; exit non-zero on violations.
@@ -514,6 +531,17 @@ Format: Given / When / Then. "Fixture" = the open-telegraph repo (or the tiny te
 - **AC-114.5 (soft failure)** KiCad dying mid-run turns an in-flight bridge tool call into a soft error string, the run continues to a normal verdict, and the tools are absent from subsequent turns.
 - **AC-114.6 (command isolation)** `check`, `sync`, and `create` never open the IPC socket: a fake IPC server listening on the discovered path records zero connection attempts across their runs. Only the REPL and `do` construct a bridge.
 - **AC-114.7 (offline testability)** The full bridge scenario suite passes with no KiCad installed, against a fake server speaking the same wire protocol; tests against a real KiCad run only under `COPPERHEAD_TEST_KICAD_IPC=1`.
+
+### AC-114B · KiCad side panel (change: add-kicad-side-panel, issue #114 Phase B)
+
+- **AC-114B.1 (serve handshake)** `copperhead serve` emits exactly one `hello` NDJSON object (protocol version, copperhead version, repo root, resolved model) and then waits; malformed input lines produce an `error` object, never a crash; stdin EOF exits the process.
+- **AC-114B.2 (streamed run)** A `run` request streams `log` events and ends with exactly one `result` object (outcome, summary, files touched); the run is the same gated loop `do` uses.
+- **AC-114B.3 (single flight)** A `run` sent while a run is active is rejected with a `busy` error without disturbing the active run. The protocol has no cancel method; interruption is the embedder terminating the process.
+- **AC-114B.4 (redaction)** Secret-pattern strings (AC-4.1) are redacted in every NDJSON object serve emits.
+- **AC-114B.5 (panel structure)** The plugin registers as a pcbnew action plugin, docks an AUI pane titled "copperhead" (floating fallback), toggles on repeated invocation, and never blocks the wx main thread on serve I/O.
+- **AC-114B.6 (degraded start)** With no copperhead CLI found, the pane shows an install hint and disables input; with one present, it spawns `copperhead serve` in the board's project directory forwarding `KICAD_API_SOCKET`/`KICAD_API_TOKEN`.
+- **AC-114B.7 (packaging)** The build script produces a PCM zip: `metadata.json` with the package.json version and kicad bounds 9.0–10.99, plugin sources under `plugins/`, icon under `resources/`.
+- **AC-114B.8 (offline testability)** Serve protocol and packaging are vitest-covered with no KiCad and no LLM; live-pcbnew pane behavior is covered by `plugins/kicad/TESTING.md`.
 
 ### AC-5 · Viewer (Phase 2 — only if built)
 

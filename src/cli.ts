@@ -12,6 +12,7 @@ import { syncVerify, syncResolve, formatSyncReport } from './commands/sync.js';
 import { runCreate } from './commands/create.js';
 import { runDemo, demoTourText } from './commands/demo.js';
 import { runRepl } from './commands/repl.js';
+import { runServe } from './commands/serve.js';
 import {
   runExportBom,
   parseSupplier,
@@ -260,6 +261,33 @@ program
       }
     },
   );
+
+program
+  .command('serve')
+  .description('headless run surface: NDJSON over stdio for embedders (KiCad side panel)')
+  .option('--model <model>', 'codex | cursor | gpt-5 | claude | claude-code (or a provider-specific model id)')
+  .option('--max-turns <n>', 'turn budget per run')
+  .action(async (opts: { model?: string; maxTurns?: string }) => {
+    const repo = repoOf(program.opts());
+    try {
+      const kicadVer = await kicadCliVersion();
+      const config = await loadConfig(repo);
+      const { model, source } = resolveModel(opts.model, config);
+      await runServe({
+        repoRoot: repo,
+        model,
+        modelSource: source,
+        version,
+        kicadCliVersion: kicadVer,
+        ...(opts.maxTurns ? { maxTurns: parseMaxTurns(opts.maxTurns) } : {}),
+      });
+      process.exit(0);
+    } catch (err) {
+      // stdout is the protocol channel; human-facing failures go to stderr.
+      console.error((err as Error).message);
+      process.exit(1);
+    }
+  });
 
 program
   .command('sync')
