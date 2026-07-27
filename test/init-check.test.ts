@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { readFile, writeFile, rm, mkdtemp, mkdir } from 'node:fs/promises';
+import { readFile, writeFile, mkdir, mkdtemp } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -82,14 +82,22 @@ describe('copperhead check (AC-2)', () => {
     try {
       await runInit({ repoRoot: repo });
       const res = await runCheck(repo, silent);
-      res.erc = { ok: true, violations: 0 };
-      res.drc = { ok: true, violations: 0 };
-      res.ok = true;
+      
+      // Normalize path separators in drift paths for cross-platform stability (Windows/POSIX)
+      if (res.drift && Array.isArray(res.drift.mismatches)) {
+        res.drift.mismatches = res.drift.mismatches.map((m: any) => ({
+          ...m,
+          doc: typeof m.doc === 'string' ? m.doc.replace(/\\/g, '/') : m.doc,
+        }));
+      }
+
+      console.log('CHECK RESULT:', JSON.stringify(res, null, 2));
+
+      expect(res.ok).toBe(true);
       expect(res.erc).toEqual({ ok: true, violations: 0 });
       expect(res.drc).toEqual({ ok: true, violations: 0 });
       expect(res.drift.ok).toBe(true);
       expect(Object.keys(res).sort()).toEqual(['constraints', 'drc', 'drift', 'erc', 'ok', 'openspec']);
-      expect(res.ok).toBe(true);
     } finally {
       await cleanup();
     }

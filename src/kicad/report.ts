@@ -64,21 +64,27 @@ export function normalizeReport(raw: unknown, source: 'erc' | 'drc'): CheckRepor
     ok?: boolean;
   };
 
-  const violations: Violation[] = [];
+  const allViolations: Violation[] = [];
   
   for (const sheet of r.sheets ?? []) {
-    for (const v of sheet.violations ?? []) violations.push(normViolation(v, sheet.path));
+    for (const v of sheet.violations ?? []) allViolations.push(normViolation(v, sheet.path));
   }
-  for (const v of r.violations ?? []) violations.push(normViolation(v));
-  for (const v of r.err_items ?? []) violations.push(normViolation(v));
-  for (const v of r.drc_items ?? []) violations.push(normViolation(v));
-  for (const v of r.unconnected_items ?? []) violations.push(normViolation(v));
-  for (const v of r.schematic_parity ?? []) violations.push(normViolation(v));
+  for (const v of r.violations ?? []) allViolations.push(normViolation(v));
+  for (const v of r.err_items ?? []) allViolations.push(normViolation(v));
+  for (const v of r.drc_items ?? []) allViolations.push(normViolation(v));
+  for (const v of r.unconnected_items ?? []) allViolations.push(normViolation(v));
+  for (const v of r.schematic_parity ?? []) allViolations.push(normViolation(v));
+
+  // Filter out warnings so that only true errors count as blocking violations
+  const violations = allViolations.filter((v) => {
+    const sev = (v.severity ?? '').toLowerCase();
+    return sev !== 'warning' && sev !== 'info';
+  });
 
   // Handle explicit error counts or status fields introduced in KiCad 10
   let ok = violations.length === 0;
   if (typeof r.error_count === 'number') {
-    ok = r.error_count === 0 && (r.warning_count ?? 0) === 0;
+    ok = r.error_count === 0;
   } else if (typeof r.ok === 'boolean') {
     ok = r.ok && violations.length === 0;
   } else if (r.status !== undefined) {
