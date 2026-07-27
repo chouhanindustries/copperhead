@@ -1,6 +1,6 @@
 {
   "name": "copperhead",
-  "version": "0.6.0",
+  "version": "0.8.1",
   "description": "Cursor for circuit boards: an AI agent that designs, documents, and validates real PCBs on KiCad repositories",
   "license": "Apache-2.0",
   "author": "Animesh Chouhan <animeshchouhan@outlook.com>",
@@ -48,7 +48,8 @@
     "prepublishOnly": "npm run typecheck && npm run build",
     "dev": "tsx src/cli.ts",
     "demo:simple": "bash scripts/demo-simple.sh",
-    "lint:md": "markdownlint-cli2 \"**/*.md\" \"#node_modules/**\" \"#**/node_modules/**\" \"#dist/**\" \"#**/dist/**\" \"#docs/.astro/**\" \"#demo-runs/**\" \"#.copperhead/runs/**\" \"#_site/**\"",
+    "demo:ui": "tsx scripts/ui-demo.ts",
+    "lint:md": "markdownlint-cli2 \"**/*.md\" \"#node_modules/**\" \"#**/node_modules/**\" \"#dist/**\" \"#**/dist/**\" \"#docs/.astro/**\" \"#demo-runs/**\" \"#.copperhead/runs/**\" \"#_site/**\" \"#graphify-out/**\"",
     "lint:readme": "tsx scripts/check-readme-consistency.ts",
     "test": "vitest run",
     "test:watch": "vitest",
@@ -61,19 +62,16 @@
     "@anthropic-ai/sdk": "^0.113.0",
     "commander": "^12.1.0",
     "execa": "^9.5.2",
-    "openai": "^4.87.3"
+    "openai": "^6.49.0"
   },
   "optionalDependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.3.217",
     "@maximem/synap-js-sdk": "^0.3.0"
   },
-  "overrides": {
-    "zod": "^4.0.0"
-  },
   "devDependencies": {
     "@openai/codex-sdk": "^0.144.6",
     "@types/node": "^22.13.10",
-    "markdownlint-cli2": "0.22.0",
+    "markdownlint-cli2": "0.23.2",
     "tsx": "^4.19.3",
     "typescript": "^5.8.2",
     "vitest": "^3.0.8"

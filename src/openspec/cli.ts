@@ -1,6 +1,7 @@
 import { execa } from 'execa';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
+import { isNotFoundError } from '../util/preflight.js';
 
 /**
  * OpenSpec is driven as a subprocess, same pattern as kicad-cli (SPEC §2.6).
@@ -12,20 +13,6 @@ export interface OpenSpecResult {
   output: string;
 }
 
-function isOpenSpecNotFoundError(err: any): boolean {
-  if (!err) return false;
-  if (err.code === 'ENOENT') return true;
-  if (process.platform === 'win32') {
-    const msg = String(err.stderr || err.message || '');
-    if (err.exitCode === 1 || err.exitCode === 9009) {
-      return (
-        msg.includes('is not recognized') ||
-        msg.includes('cannot find the path specified')
-      );
-    }
-  }
-  return false;
-}
 
 async function openspec(repo: string, args: string[]): Promise<OpenSpecResult> {
   try {
@@ -33,7 +20,7 @@ async function openspec(repo: string, args: string[]): Promise<OpenSpecResult> {
     return { ok: true, output: [stdout, stderr].filter(Boolean).join('\n') };
   } catch (err) {
     const e = err as { stdout?: string; stderr?: string; code?: string; message: string; exitCode?: number };
-    if (isOpenSpecNotFoundError(e)) {
+    if (isNotFoundError(e)) {
       return { ok: false, output: 'openspec CLI not found on PATH (npm i -g @fission-ai/openspec)' };
     }
     return { ok: false, output: [e.stdout, e.stderr].filter(Boolean).join('\n') || e.message };

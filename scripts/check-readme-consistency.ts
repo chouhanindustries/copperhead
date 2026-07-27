@@ -24,8 +24,8 @@ function generateMaturitySection(version: string, statusData: any): string {
     `Honest read of where v${version} stands, so you can calibrate before pointing this at a board you care about:\n`,
     `- **Solid.** \`init\` and \`check\`/\`verify\` are deterministic, LLM-free, and covered by the offline test suite against a real KiCad fixture: scaffolding, ERC/DRC, the s-expression reader, drift detection, and fab export all run green in CI.`,
     `- **Implemented, not yet proven.** The agent loop (\`do\`, \`sync --resolve\`, \`create\`) is complete and structurally gated.`,
-    `- **Acceptance Matrix (nightly runs):**`,
-    table.trim().split('\n').map(line => `  ${line}`).join('\n'),
+    `- **Acceptance Matrix (nightly runs):**\n`,
+    table.trim().split('\n').map(line => `  ${line}`).join('\n') + '\n',
     `- **Always.** Every mutation runs inside a git snapshot and rolls back if verification fails, so the worst case is a no-op commit, not a mangled schematic. Work on a branch anyway.`
   ].join('\n');
 }

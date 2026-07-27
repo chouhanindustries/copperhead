@@ -1,0 +1,42 @@
+/**
+ * Pure argument helpers for the CLI surface. They live here rather than in
+ * cli.ts because that module wires up commander and parses argv at import
+ * time, which makes it untestable in-process: importing it runs the program.
+ * Anything with a branch worth pinning belongs on this side of the line.
+ */
+
+import path from 'node:path';
+import type { BudgetExhaustedStats } from '../agent/loop.js';
+
+/** Resolve `--repo` against the working directory; absolute paths pass through. */
+export function repoOf(opts: { repo?: string }): string {
+  return path.resolve(opts.repo ?? process.cwd());
+}
+
+/** `--max-turns` accepts only a positive integer; "5oops" and "NaN" refuse to start. */
+export function parseMaxTurns(raw: string): number {
+  const n = Number(raw);
+  if (!Number.isInteger(n) || n <= 0) {
+    throw new Error(`--max-turns must be a positive integer, got "${raw}"`);
+  }
+  return n;
+}
+
+/**
+ * Turns offered when the budget runs out: ceil of the ORIGINAL budget (design
+ * D1), so repeat extensions offer the same increment instead of escalating
+ * with the already-extended turn count.
+ */
+export function budgetExtraTurns(stats: Pick<BudgetExhaustedStats, 'maxTurns'>): number {
+  return Math.ceil(stats.maxTurns / 2);
+}
+
+/** The attended "continue?" question, with the cost of the run so far spelled out. */
+export function budgetPromptText(stats: BudgetExhaustedStats): string {
+  const k = (n: number): string => `${(n / 1000).toFixed(1)}k`;
+  return (
+    `Turn budget exhausted (${stats.turnsUsed} turns, ${k(stats.tokensIn)} in / ${k(stats.tokensOut)} out, ` +
+    `${stats.filesTouched.length} file(s) touched, ${stats.openObligations} open obligation(s)). ` +
+    `Continue with ${budgetExtraTurns(stats)} more turns?`
+  );
+}

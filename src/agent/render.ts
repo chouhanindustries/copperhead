@@ -3,7 +3,12 @@
  * once at startup: interactive (TTY, no --json/--plain) pins a status line to
  * the bottom of the terminal and redraws it in place; plain emits line-oriented
  * output with zero ANSI escapes — the mode CI, pipes, and tests see.
+ *
+ * Interactive mode adds subtle SGR chrome (copper accent, dim secondary text).
+ * Plain mode never emits color (AC-8.9).
  */
+
+import { copper, dim, setColorEnabled, styleOutcome, toolLine, warn } from './theme.js';
 
 export interface ProgressRenderer {
   log(line: string): void;
@@ -12,6 +17,14 @@ export interface ProgressRenderer {
   toolResult(name: string, firstLine: string): void;
   /** Busy text while a provider call is in flight; null when idle. */
   status(text: string | null): void;
+  /**
+   * Liveness signal emitted periodically while a provider turn is in flight
+   * (5.1): distinguishes a slow turn from a hung one. `elapsedMs` is time since
+   * this turn's provider call began; `streamedChars` is cumulative streamed
+   * output (0 when the provider doesn't stream — the elapsed time still tells
+   * the operator the turn is alive).
+   */
+  heartbeat(info: { elapsedMs: number; streamedChars: number }): void;
   /** Final outcome line; replaces the status line in interactive mode. */
   finish(line: string): void;
 }
@@ -41,6 +54,11 @@ export function plainRenderer(log: (line: string) => void): ProgressRenderer {
     turnStart: (turn, maxTurns, tokensIn, tokensOut) => log(turnMarker(turn, maxTurns, tokensIn, tokensOut)),
     toolResult: (name, firstLine) => log(`  [${name}] ${firstLine}`),
     status: () => {},
+    heartbeat: ({ elapsedMs, streamedChars }) =>
+      log(
+        `  … still working — ${fmtDuration(elapsedMs)} elapsed` +
+          (streamedChars ? `, ~${fmtTokens(streamedChars)} chars streamed` : ' (no output yet)'),
+      ),
     finish: (line) => log(line),
   };
 }
@@ -68,6 +86,7 @@ export class InteractiveRenderer implements ProgressRenderer {
   private maxTurns = 0;
   private tokensIn = 0;
   private tokensOut = 0;
+  private streamedChars = 0;
   private busy: string | null = null;
   private frame = 0;
   private timer: ReturnType<typeof setInterval> | null = null;
@@ -92,16 +111,29 @@ export class InteractiveRenderer implements ProgressRenderer {
   }
 
   private statusText(): string {
-    const parts = [
-      `turn ${this.turn}/${this.maxTurns}`,
-      `${fmtTokens(this.tokensIn)} in / ${fmtTokens(this.tokensOut)} out`,
-      fmtDuration(Date.now() - this.startMs),
-    ];
-    if (this.busy) parts.push(this.busy);
-    const spinner = this.busy ? FRAMES[this.frame % FRAMES.length] : '·';
-    const line = `${spinner} ${parts.join(' · ')}`;
+    // Raw (uncolored) segments once; both the colored line and the
+    // narrow-terminal fallback are assembled from these.
+    const spinner = this.busy ? FRAMES[this.frame % FRAMES.length]! : '·';
+    const turn = `turn ${this.turn}/${this.maxTurns}`;
+    const tokens = `${fmtTokens(this.tokensIn)} in / ${fmtTokens(this.tokensOut)} out`;
+    const elapsed = fmtDuration(Date.now() - this.startMs);
+    // Fold streamed-output volume into the busy segment so a large turn's
+    // status line visibly grows — a hung one stays frozen (5.1).
+    const busy = this.busy
+      ? this.streamedChars
+        ? `${this.busy} ~${fmtTokens(this.streamedChars)} ch`
+        : this.busy
+      : undefined;
+    const parts = [turn, dim(tokens), dim(elapsed), ...(busy ? [warn(busy)] : [])];
+    const line = `${this.busy ? copper(spinner) : dim(spinner)} ${parts.join(dim(' · '))}`;
+    // Truncate by visible length roughly: strip SGR when measuring so color
+    // codes don't eat the column budget and clip the readable text early.
     const width = this.out.columns ?? 80;
-    return line.length > width ? line.slice(0, width - 1) : line;
+    const visible = line.replace(/\x1b\[[0-9;]*m/g, '');
+    if (visible.length <= width) return line;
+    // Fall back to an uncolored truncated line when the terminal is too narrow.
+    const plain = [spinner, turn, tokens, elapsed, ...(busy ? [busy] : [])].join(' · ');
+    return plain.length > width ? plain.slice(0, width - 1) : plain;
   }
 
   private redraw(): void {
@@ -138,23 +170,32 @@ export class InteractiveRenderer implements ProgressRenderer {
     this.maxTurns = maxTurns;
     this.tokensIn = tokensIn;
     this.tokensOut = tokensOut;
+    this.streamedChars = 0; // per-turn: reset so last turn's volume doesn't linger
     this.ensureTimer();
     this.redraw();
   }
 
   toolResult(name: string, firstLine: string): void {
-    this.log(`  [${name}] ${firstLine}`);
+    this.log(toolLine(name, firstLine));
   }
 
   status(text: string | null): void {
     this.busy = text;
+    if (!text) this.streamedChars = 0; // turn's provider call ended
     if (text && !this.idle) this.ensureTimer();
+    this.redraw();
+  }
+
+  heartbeat({ streamedChars }: { elapsedMs: number; streamedChars: number }): void {
+    // The spinner timer already advances elapsed time in place; the heartbeat's
+    // job here is to fold in the latest streamed-output volume and redraw.
+    this.streamedChars = streamedChars;
     this.redraw();
   }
 
   finish(line: string): void {
     if (this.statusShown) this.out.write(CLEAR_LINE);
-    this.out.write(line + '\n');
+    this.out.write(styleOutcome(line) + '\n');
     this.suspend();
   }
 
@@ -188,7 +229,10 @@ export class InteractiveRenderer implements ProgressRenderer {
  * (AC-2.4): the only thing a --json invocation writes to stdout is its JSON.
  */
 export function makeRenderer(opts: { json: boolean; plain: boolean }): ProgressRenderer {
+  const interactive = !opts.json && !opts.plain && Boolean(process.stdout.isTTY);
+  // Color tracks the interactive path so --plain / pipes stay zero-ANSI (AC-8.9).
+  setColorEnabled(interactive && !process.env.NO_COLOR);
   if (opts.json) return plainRenderer((line) => console.error(line));
-  if (!opts.plain && process.stdout.isTTY) return new InteractiveRenderer();
+  if (interactive) return new InteractiveRenderer();
   return plainRenderer((line) => console.log(line));
 }

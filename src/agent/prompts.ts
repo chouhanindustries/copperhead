@@ -23,7 +23,8 @@ const WORKFLOW = `Workflow for every run:
 6. Record every non-trivial decision with record_decision, and every stated/assumed/discovered constraint with record_constraint.
 7. Call finish with outcome "done" when everything is verified, or outcome "refuse" (citing the violated budget/constraint) if the request should not be done. finish will list any unmet obligations; resolve them and call it again.
 
-Turns are the scarce resource, not tool calls: the run has a hard turn budget, and every tool call in one reply executes in the same turn. When calls are independent — multiple record_constraint or resolve_affected calls (use resolutions: [...] to clear a backlog in one call), several read_file calls — issue them together in a single reply instead of one per turn.`;
+Turns are the scarce resource, not tool calls: the run has a hard turn budget, and every tool call in one reply executes in the same turn. When calls are independent — multiple record_constraint or resolve_affected calls (use resolutions: [...] to clear a backlog in one call), several read_file calls — issue them together in a single reply instead of one per turn.
+Always send a populated \`args\` object that matches the tool's JSON Schema (e.g. read_file needs {"path": "..."}). Never open a stage with an empty-args call to probe a tool — it only returns an error and burns a whole turn.`;
 
 export async function buildSystemPrompt(
   repoRoot: string,
