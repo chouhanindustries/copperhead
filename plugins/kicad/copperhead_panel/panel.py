@@ -175,6 +175,19 @@ class CopperheadPanel(wx.Panel):
             return
         if self.active_id is not None:
             return  # input is disabled anyway; single flight mirrors serve
+        # Slash commands are REPL vocabulary; running them as change requests
+        # burns an agent run on "/clear". Handle the one that makes sense in
+        # a pane locally and steer the rest.
+        if text.startswith("/"):
+            self.input.SetValue("")
+            if text in ("/clear", "/cls"):
+                self.log.SetValue("")
+            else:
+                self._append(
+                    "%s: slash commands live in the terminal REPL; this pane runs change requests\n" % text,
+                    DIM,
+                )
+            return
         self._append("\n> %s\n" % text, COPPER)
         self.active_id = self.client.run(text)
         self.input.SetValue("")
