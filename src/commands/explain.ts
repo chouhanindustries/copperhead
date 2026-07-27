@@ -11,14 +11,26 @@ export class ExplainError extends Error {
   }
 }
 
-export interface ExplainResult {
-  target: string;
-  kind: 'refdes' | 'pin' | 'net';
-  symbol?: SchematicSymbol;
-  pins?: PinNet[];
-  net?: string;
-  bomRationale?: string;
-}
+export type ExplainResult =
+  | {
+      target: string;
+      kind: 'refdes';
+      symbol: SchematicSymbol;
+      pins: PinNet[];
+      bomRationale?: string;
+    }
+  | {
+      target: string;
+      kind: 'pin';
+      pins: [PinNet];
+      symbol?: SchematicSymbol;
+    }
+  | {
+      target: string;
+      kind: 'net';
+      net: string;
+      pins: PinNet[];
+    };
 
 async function tryReadBomRationale(repoRoot: string, docsDir: string, ref: string): Promise<string | undefined> {
   const p = path.join(repoRoot, docsDir, 'BOM.md');
@@ -112,7 +124,7 @@ export async function runExplain(repoRoot: string, target: string): Promise<Expl
 }
 
 export function formatExplainReport(res: ExplainResult): string {
-  if (res.kind === 'refdes' && res.symbol) {
+  if (res.kind === 'refdes') {
     const lines = [
       `Symbol ${res.symbol.ref}:`,
       `  Value: ${res.symbol.value}`,
@@ -120,33 +132,37 @@ export function formatExplainReport(res: ExplainResult): string {
       `  Footprint: ${res.symbol.footprint || '(none)'}`,
       `  Sheet: ${res.symbol.sheet}`,
     ];
+
     if (res.bomRationale) {
       lines.push(`  BOM Rationale: ${res.bomRationale}`);
     }
-    if (res.pins && res.pins.length > 0) {
+
+    if (res.pins.length > 0) {
       lines.push(`  Pins (${res.pins.length}):`);
       for (const p of res.pins) {
         lines.push(`    ${p.pinNumber} (${p.pinName}): ${p.net || '(unconnected)'}`);
       }
     }
-    return lines.join('\n');
-  }
 
-  if (res.kind === 'pin' && res.pins && res.pins.length > 0) {
-    const p = res.pins[0]!;
+    return lines.join('\n');
+  } else if (res.kind === 'pin') {
+    const [p] = res.pins;
+
     const lines = [
       `Pin ${p.ref}.${p.pinNumber} (${p.pinName}):`,
       `  Net: ${p.net || '(unconnected)'}`,
     ];
+
     if (res.symbol) {
       lines.push(`  Symbol: ${res.symbol.value} (${res.symbol.libId})`);
     }
-    return lines.join('\n');
-  }
 
-  if (res.kind === 'net') {
+    return lines.join('\n');
+  } else {
+    // res.kind === 'net'
     const lines = [`Net ${res.net}:`];
-    if (res.pins && res.pins.length > 0) {
+
+    if (res.pins.length > 0) {
       lines.push(`  Connected Pins (${res.pins.length}):`);
       for (const p of res.pins) {
         lines.push(`    ${p.ref}.${p.pinNumber} (${p.pinName})`);
@@ -154,8 +170,7 @@ export function formatExplainReport(res: ExplainResult): string {
     } else {
       lines.push('  No connected component pins found.');
     }
+
     return lines.join('\n');
   }
-
-  return `Explain target: ${res.target}`;
 }

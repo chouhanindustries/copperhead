@@ -9,6 +9,11 @@ import { runCheck } from './commands/check.js';
 import { syncVerify, syncResolve, formatSyncReport } from './commands/sync.js';
 import { runCreate } from './commands/create.js';
 import {
+  runExplain,
+  formatExplainReport,
+  ExplainError,
+} from './commands/explain.js';
+import {
   runExportBom,
   parseSupplier,
   parseBoards,
