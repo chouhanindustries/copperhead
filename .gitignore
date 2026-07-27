@@ -1,7 +1,10 @@
 .env
+.env.backup
 .copperhead/runs/
+.DS_Store
 node_modules/
 dist/
+coverage/
 *.tsbuildinfo
 docs/.astro/
 docs/dist/

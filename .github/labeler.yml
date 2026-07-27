@@ -1,0 +1,61 @@
+# Path-based labels for actions/labeler@v5 (see workflows/labeler.yml).
+# Globs map onto the area:* labels defined in the repo's label set.
+
+documentation:
+  - changed-files:
+      - any-glob-to-any-file:
+          - 'docs/**'
+          - '*.md'
+          - '.github/**/*.md'
+
+'area:ci':
+  - changed-files:
+      - any-glob-to-any-file:
+          - '.github/workflows/**'
+          - '.github/labeler.yml'
+
+'area:bom-export':
+  - changed-files:
+      - any-glob-to-any-file:
+          - 'src/kicad/bom-export.ts'
+          - 'src/memory/bom-table.ts'
+          - 'test/bom-*.test.ts'
+
+'area:fab-gate':
+  - changed-files:
+      - any-glob-to-any-file:
+          - 'src/kicad/fab.ts'
+          - 'test/fab-*.test.ts'
+
+'area:integrations':
+  - changed-files:
+      - any-glob-to-any-file:
+          - 'src/agent/providers/**'
+          - 'test/*provider*.test.ts'
+
+'area:pipeline':
+  - changed-files:
+      - any-glob-to-any-file:
+          - 'src/commands/**'
+          - 'src/agent/loop.ts'
+          - 'src/agent/tools.ts'
+          - 'src/agent/filetools.ts'
+          - 'src/kicad/**'
+
+'area:observability':
+  - changed-files:
+      - any-glob-to-any-file:
+          - 'src/agent/runmeta.ts'
+          - 'src/agent/transcript.ts'
+          - 'src/agent/render.ts'
+          - 'test/observability.test.ts'
+          - 'test/runmeta.test.ts'
+
+chore:
+  - changed-files:
+      - any-glob-to-any-file:
+          - 'package.json'
+          - 'package-lock.json'
+          - 'tsconfig*.json'
+          - '.gitignore'
+          - 'install.sh'

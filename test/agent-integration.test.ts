@@ -29,6 +29,10 @@ const providers: { model: string; key: string | undefined }[] = [
     model: process.env.COPPERHEAD_TEST_CLAUDE_CODE_MODEL ?? 'claude-code',
     key: claudeCodeSdkInstalled() ? process.env.CLAUDE_CODE_OAUTH_TOKEN : undefined,
   },
+  {
+    model: process.env.COPPERHEAD_TEST_CURSOR_MODEL ?? 'cursor',
+    key: process.env.COPPERHEAD_TEST_CURSOR === '1' ? 'saved-cursor-login' : undefined,
+  },
 ];
 
 function claudeCodeSdkInstalled(): boolean {
@@ -157,7 +161,7 @@ for (const { model, key } of providers) {
 
 async function scanTreeForSecret(dir: string, pattern: RegExp, root = dir): Promise<string[]> {
   const matches: string[] = [];
-  const skip = new Set(['.git', 'node_modules', 'dist']);
+  const skip = new Set(['.git', 'node_modules']);
   async function walk(current: string): Promise<void> {
     for (const entry of await readdir(current)) {
       if (skip.has(entry)) continue;
@@ -183,7 +187,7 @@ describe.skipIf(!providers.some((p) => p.key))('safety net', () => {
   it('AC-4.1: no API key material anywhere in the tree after runs', async () => {
     const { repo, cleanup } = await tempFixtureRepo();
     try {
-      const matches = await scanTreeForSecret(repo, /sk-[A-Za-z0-9_-]{20,}/);
+      const matches = await scanTreeForSecret(repo, /sk-[A-Za-z0-9_-]+/);
       expect(matches).toEqual([]);
     } finally {
       await cleanup();

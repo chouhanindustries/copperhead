@@ -10,6 +10,10 @@
 
 **Cursor for circuit boards.** An AI agent that designs, documents, and validates real PCBs from a prompt, working directly on existing KiCad repositories.
 
+<p align="center">
+  <img src="https://raw.githubusercontent.com/chouhanindustries/copperhead/main/assets/copperhead.gif" alt="copperhead agent shell demo" width="720">
+</p>
+
 > **Status: early.** Phase 1 is implemented and the CLI runs. The [technical specification](openspec/specs/SPEC.md) is the source of truth; expect the surface to move before 1.0.
 
 Full documentation lives at [docs.copperhead.sh](https://docs.copperhead.sh).
@@ -25,23 +29,47 @@ It reads and edits real `.kicad_sch` / `.kicad_pcb` files (s-expression text), m
 
 ## Install
 
+> [!TIP]
+> **Most users should not install copperhead by hand.** If you are working inside an AI coding assistant (like Claude Code, Cursor, or Codex), you can install and configure copperhead automatically for your repository by pasting this single line:
+> ```text
+> Install copperhead for this repo using https://raw.githubusercontent.com/chouhanindustries/copperhead/main/agent-install-prompt.md
+> ```
+
+If you prefer to install manually:
+
 ```bash
 npm install -g copperhead   # or: npx copperhead check
 ```
+
+### Bootstrap script (macOS and Linux)
+
+Prefer a one-command setup? [`install.sh`](install.sh) checks the prerequisites below, installs copperhead (globally via npm, or built from source when run inside a checkout), and verifies the result with `copperhead doctor`:
+
+```bash
+./install.sh                # interactive: asks before installing anything
+./install.sh --yes          # assume yes to the install prompts
+./install.sh --check-only   # report what is missing, install nothing
+```
+
+The script is conservative by design: it never runs `sudo` and never edits shell config; whenever it cannot act safely on its own it prints the exact command for you to run instead. Rerunning is safe: on a ready machine it installs nothing and exits 0.
 
 ### Requirements
 
 - Node.js ≥ 20
 - [KiCad](https://www.kicad.org/) ≥ 8 with `kicad-cli` on PATH
-- One model backend: a locally installed, ChatGPT-authenticated [Codex CLI](https://learn.chatgpt.com/docs/codex/cli), a logged-in Claude Code (see [Saved login](#saved-login-claude-code)), or `ANTHROPIC_API_KEY`/`OPENAI_API_KEY` in the environment. `check` never calls an LLM.
+- One model backend: a locally installed, ChatGPT-authenticated [Codex CLI](https://learn.chatgpt.com/docs/codex/cli), a logged-in [Cursor Agent CLI](#saved-login-cursor-agent) (`agent login`), logged-in Claude Code (see [Saved login](#saved-login-claude-code)), or `ANTHROPIC_API_KEY`/`OPENAI_API_KEY` in the environment. `check` never calls an LLM.
 
 ## Quick start
 
 In an existing KiCad repository:
 
 ```bash
-export ANTHROPIC_API_KEY=...   # or OPENAI_API_KEY
+export ANTHROPIC_API_KEY=...   # or OPENAI_API_KEY; optional: with no key, `copperhead` offers a model picker
 copperhead init                # scaffold docs/ from the schematic; idempotent
+copperhead                     # interactive agent shell (Claude Code–style REPL)
+copperhead demo --tour          # what the agent does (no LLM)
+copperhead demo --model cursor # full USB-C breakout create pipeline
+# or one-shot:
 copperhead do "add reverse-polarity protection on VIN"
 copperhead check               # ERC + DRC + doc drift; no LLM, CI-safe
 ```
@@ -88,14 +116,26 @@ Spec-gated in, verification-gated out: the design can't drift from its requireme
 copperhead init [--path hardware/]   # scaffold docs/ from an existing schematic; idempotent
 copperhead do "<change request>"     # the core loop: propose, edit, verify, propagate, commit
 copperhead check                     # ERC + DRC + doc-drift + spec validation; no LLM calls (alias: verify)
+copperhead doctor                    # env preflight: kicad-cli, git, node, provider credential; no LLM/network
 copperhead sync [--dry-run]          # verify the whole design state, resolve drift
 copperhead create --brief brief.md   # brief → full output package
 copperhead export bom --supplier jlcpcb   # supplier-ready ordering file from docs/BOM.md
 ```
 
-Global flags: `--repo <path>` (default: cwd) and `--json` for machine-readable output. `do` and `create` take `--model` and `--interactive`; `do` also takes `--dry-run`, `--max-turns`, and `--allow-dirty`.
+Global flags: `--repo <path>` (default: cwd) and `--json` for machine-readable output. `--model` is available on `do`, `sync`, `create`, and `doctor`; `--interactive` only on `do` and `create`; `do` also takes `--dry-run`, `--max-turns`, and `--allow-dirty`.
 
-`--model` accepts `gpt-5` (OpenAI), `claude` / `claude-<id>` (Anthropic API), `claude-code` / `claude-code:<id>` (Claude Code, saved login), and `codex` / `codex:<id>` (Codex CLI, saved login). Routing is by prefix; `claude-code` is matched before the `claude` prefix.
+`--model` accepts `gpt-5` (OpenAI), `claude` / `claude-<id>` (Anthropic API), `claude-code` / `claude-code:<id>` (Claude Code, saved login), `cursor` / `cursor:<id>` (Cursor Agent CLI, saved login), and `codex` / `codex:<id>` (Codex CLI, saved login). Routing is by prefix; `claude-code` is matched before the `claude` prefix.
+
+### Saved login (Cursor Agent)
+
+`--model cursor` drives the Cursor Agent CLI with your saved login from `agent login`, so you can run copperhead with **no `OPENAI_API_KEY` or `ANTHROPIC_API_KEY`**. Cursor is used purely as a reasoning backend in plan mode: the agent loop, safety gates, and every file edit stay inside copperhead.
+
+```bash
+agent status
+copperhead do "add reverse-polarity protection on VIN" --model cursor
+```
+
+If `agent` is not on `PATH`, set `COPPERHEAD_CURSOR_PATH` to the CLI binary (also available as `cursor-agent` on some installs). Cursor's JSON schema does not report token usage, so run summaries show 0 tokens for `--model cursor`.
 
 ### Saved login (Claude Code)
 

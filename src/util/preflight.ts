@@ -28,11 +28,14 @@ export function isNotFoundError(err: any): boolean {
   if (err.code === 'ENOENT') return true;
   if (process.platform === 'win32') {
     const msg = String(err.stderr || err.message || '');
-    if (err.exitCode === 1 || err.exitCode === 9009) {
+    if (err.exitCode === 9009) {
       return (
         msg.includes('is not recognized') ||
         msg.includes('cannot find the path specified')
       );
+    }
+    if (err.exitCode === 1) {
+      return msg.includes('is not recognized');
     }
   }
   return false;

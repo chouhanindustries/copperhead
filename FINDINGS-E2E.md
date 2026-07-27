@@ -43,7 +43,7 @@ consisted of:
   a recorded fixture before running.
 - **Status:** Fixed (COPPERHEAD_NO_CACHE removed, cache-friendly defaults used).
 
-### BLOCKER: e2e test suite calls isComplete directly instead of driving runCreate  [P0]
+### DEFECT: e2e test suite calls isComplete directly instead of driving runCreate  [P0]
 
 - **Where:** `test/create-e2e.test.ts`
 - **Symptom:** The test suite calls each stage's `isComplete` function directly
@@ -83,7 +83,7 @@ consisted of:
 ## Acceptance criteria status
 
 - [x] Source fix (isPowerSymbol) with test coverage
-- [x] `npm test` passes (all 340 tests pass or skip, 0 failures)
+- [x] `npm test` passes (all offline tests pass or skip, 0 failures; KiCad-dependent tests skipped when kicad-cli is absent)
 - [x] `npm run lint` passes
 - [x] End-to-end pipeline test drives `runCreate` with mocked dependencies
 - [x] Stage contract integrity verified (names, order, completion detection)

@@ -14,6 +14,7 @@ import { diagnoseStageFailure, transcriptExcerpt, withTimeout, type StageDiagnos
 import type { Provider } from '../agent/types.js';
 import type { RunMetaInput } from '../agent/runmeta.js';
 import { fmtDuration, fmtTokens, type ProgressRenderer } from '../agent/render.js';
+import { copper, dim, ok, stageLine, warn } from '../agent/theme.js';
 import { openspecInit } from '../openspec/cli.js';
 import { sweepStaleTempDirs, pruneHistoryDir } from '../util/tmp.js';
 import { assertDiskSpace, DEFAULT_MIN_FREE_BYTES } from '../util/preflight.js';
@@ -161,7 +162,7 @@ export interface CreateOptions {
 async function emitJlcpcbAfterOutputs(stageName: string, opts: CreateOptions): Promise<void> {
   if (stageName !== 'outputs') return;
   const out = await emitCreateJlcpcbBom(opts.repoRoot);
-  if (out) opts.log(`stage outputs: emitted ${out} (JLCPCB assembly BOM)`);
+  if (out) opts.log(stageLine('outputs', `emitted ${out} (JLCPCB assembly BOM)`, 'ok'));
 }
 
 /** Stages whose output is a KiCad file worth rendering to an image (5.4). */
@@ -203,16 +204,26 @@ async function commitResumedStage(opts: CreateOptions, config: CopperheadConfig,
   const foreign = dirty.filter((f) => !isManagedPath(f, config));
   if (foreign.length) {
     opts.log(
-      `stage ${stageName}: already-complete work is uncommitted, but the tree also has non-copperhead changes ` +
-        `(${foreign.slice(0, 3).join(', ')}${foreign.length > 3 ? ', …' : ''}); leaving it uncommitted so nothing of yours is swept up`,
+      stageLine(
+        stageName,
+        `already-complete work is uncommitted, but the tree also has non-copperhead changes ` +
+          `(${foreign.slice(0, 3).join(', ')}${foreign.length > 3 ? ', …' : ''}); leaving it uncommitted so nothing of yours is swept up`,
+        'warn',
+      ),
     );
     return;
   }
   try {
     const sha = await commitAll(opts.repoRoot, `copperhead: resume — commit completed stage ${stageName}`);
-    opts.log(`stage ${stageName}: committed already-complete work ${sha.slice(0, 10)} so a later rollback cannot wipe it (2.4)`);
-  } catch (err) {
-    opts.log(`stage ${stageName}: could not commit resumed work (${(err as Error).message})`);
+    opts.log(
+      stageLine(
+        stageName,
+        `committed already-complete work ${sha.slice(0, 10)} so a later rollback cannot wipe it (2.4)`,
+        'ok',
+      ),
+    );
+  } catch (e) {
+    opts.log(stageLine(stageName, `could not commit resumed work (${(e as Error).message})`, 'err'));
   }
 }
 
@@ -243,12 +254,18 @@ async function renderStageArtifacts(opts: CreateOptions, stageName: string, tran
     try {
       await exportSvg(kind, path.join(opts.repoRoot, file), artifactsDir);
       rendered++;
-    } catch (err) {
-      opts.log(`stage ${stageName}: could not render ${kind} SVG (${(err as Error).message})`);
+    } catch (e) {
+      opts.log(stageLine(stageName, `could not render ${kind} SVG (${(e as Error).message})`, 'warn'));
     }
   }
   if (rendered) {
-    opts.log(`stage ${stageName}: rendered ${rendered} SVG artifact(s) into ${path.relative(opts.repoRoot, artifactsDir)}/`);
+    opts.log(
+      stageLine(
+        stageName,
+        `rendered ${rendered} SVG artifact(s) into ${path.relative(opts.repoRoot, artifactsDir)}/`,
+        'ok',
+      ),
+    );
   }
 }
 
@@ -331,10 +348,14 @@ function resumeCommand(opts: CreateOptions): string {
  */
 function logResumePoint(opts: CreateOptions, stage: Stage, index: number): void {
   opts.log('');
-  opts.log(`⏸  stopped at stage ${index + 1}/${STAGES.length} (${stage.name}). To resume from here, run:`);
-  opts.log(`     ${resumeCommand(opts)}`);
   opts.log(
-    `   (${index} stage(s) already complete are detected from repo state and skipped; it resumes at ${stage.name}.)`,
+    warn(`⏸  stopped at stage ${index + 1}/${STAGES.length} (${stage.name}). To resume from here, run:`),
+  );
+  opts.log(copper(`     ${resumeCommand(opts)}`));
+  opts.log(
+    dim(
+      `   (${index} stage(s) already complete are detected from repo state and skipped; it resumes at ${stage.name}.)`,
+    ),
   );
 }
 
@@ -380,14 +401,19 @@ function printCostTable(opts: CreateOptions, costs: StageCost[]): void {
     `  ${r.stage.padEnd(w.stage)}  ${r.wall.padStart(w.wall)}  ${r.turns.padStart(w.turns)}  ${r.out.padStart(w.out)}  ${r.cache.padStart(w.cache)}`;
   const rule = `  ${'-'.repeat(w.stage)}  ${'-'.repeat(w.wall)}  ${'-'.repeat(w.turns)}  ${'-'.repeat(w.out)}  ${'-'.repeat(w.cache)}`;
   opts.log('');
-  opts.log('Per-stage cost summary (5.2):');
-  opts.log(line(header));
-  opts.log(rule);
+  opts.log(copper('Per-stage cost summary'));
+  opts.log(dim(line(header)));
+  opts.log(dim(rule));
   for (const r of rows) opts.log(line(r));
   if (total) {
-    opts.log(rule);
-    opts.log(line(total));
+    opts.log(dim(rule));
+    opts.log(boldTotal(line(total)));
   }
+}
+
+function boldTotal(s: string): string {
+  // TOTAL row: keep digits readable, accent only the label when color is on.
+  return s.replace(/^(\s*)TOTAL/, (_, sp: string) => `${sp}${copper('TOTAL')}`);
 }
 
 /** Sum the cost of the stages that actually ran this invocation (resumed stages
@@ -422,8 +448,10 @@ function logCumulative(opts: CreateOptions, stageCosts: StageCost[]): void {
   const t = ranTotals(stageCosts);
   if (!t.turns && !t.wallMs) return; // nothing has actually run yet (all resumed)
   opts.log(
-    `pipeline so far: ${stageCosts.length}/${STAGES.length} stages · ${fmtDuration(t.wallMs)} · ` +
-      `${fmtTokens(t.tokensOut)} out tokens · ${cachePct(t.cacheHits, t.turns)}% cache hits`,
+    dim(
+      `pipeline so far: ${stageCosts.length}/${STAGES.length} stages · ${fmtDuration(t.wallMs)} · ` +
+        `${fmtTokens(t.tokensOut)} out tokens · ${cachePct(t.cacheHits, t.turns)}% cache hits`,
+    ),
   );
 }
 
@@ -533,11 +561,11 @@ export async function runCreate(opts: CreateOptions): Promise<{ ok: boolean; com
   // so a concurrent run's fresh dirs are never touched; best-effort, so it never
   // blocks a run (I8).
   const swept = await sweepStaleTempDirs(Date.now());
-  if (swept.length) opts.log(`startup: reclaimed ${swept.length} stale temp dir(s) from earlier runs`);
+  if (swept.length) opts.log(dim(`startup: reclaimed ${swept.length} stale temp dir(s) from earlier runs`));
   // Cap the gitignored .history/ so KiCad local history cannot grow unbounded
   // across a long run and fill the disk (4.1, I8). Best-effort; keeps the newest.
   const pruned = await pruneHistoryDir(opts.repoRoot);
-  if (pruned) opts.log(`startup: pruned ${pruned} old .history/ entrie(s) to cap local-history growth`);
+  if (pruned) opts.log(dim(`startup: pruned ${pruned} old .history/ entrie(s) to cap local-history growth`));
   await openspecInit(opts.repoRoot);
   const completed: string[] = [];
   const stageCosts: StageCost[] = [];
@@ -550,10 +578,12 @@ export async function runCreate(opts: CreateOptions): Promise<{ ok: boolean; com
     // contract can eventually be met. No-op once a project exists.
     if (stage.name === 'schematic') {
       const created = await bootstrapKicadProject(opts.repoRoot, brief);
-      if (created) opts.log(`stage schematic: scaffolded empty KiCad project (${created} + board + project), wired into config`);
+      if (created) {
+        opts.log(stageLine('schematic', `scaffolded empty KiCad project (${created} + board + project), wired into config`));
+      }
     }
     if (await stage.isComplete(opts.repoRoot, config.docs)) {
-      opts.log(`stage ${stage.name}: already complete (resuming past it)`);
+      opts.log(stageLine(stage.name, 'already complete (resuming past it)', 'ok'));
       await commitResumedStage(opts, config, stage.name);
       completed.push(stage.name);
       stageCosts.push({ name: stage.name, resumed: true, wallMs: 0, turns: 0, tokensIn: 0, tokensOut: 0, cacheHits: 0 });
@@ -585,9 +615,16 @@ export async function runCreate(opts: CreateOptions): Promise<{ ok: boolean; com
       // whenever the project already exists.
       if (stage.name === 'schematic') {
         const rescaffolded = await bootstrapKicadProject(opts.repoRoot, brief);
-        if (rescaffolded && attempt > 1) opts.log(`stage schematic: re-scaffolded empty KiCad project after rollback, wired into config`);
+        if (rescaffolded && attempt > 1) {
+          opts.log(stageLine('schematic', 're-scaffolded empty KiCad project after rollback, wired into config'));
+        }
       }
-      opts.log(`stage ${stage.name}: running${attempt > 1 ? ` (attempt ${attempt}/${config.maxStageRetries + 1})` : ''}`);
+      opts.log(
+        stageLine(
+          stage.name,
+          `running${attempt > 1 ? ` (attempt ${attempt}/${config.maxStageRetries + 1})` : ''}`,
+        ),
+      );
       const res = await runAgentLoop({
         repoRoot: opts.repoRoot,
         model: opts.model,
@@ -635,12 +672,16 @@ export async function runCreate(opts: CreateOptions): Promise<{ ok: boolean; com
 
       if (attempt > config.maxStageRetries) {
         opts.log(
-          `stage ${stage.name}: ${failure}; exhausted ${config.maxStageRetries} auto-retry(ies). Stopping for a human.`,
+          stageLine(
+            stage.name,
+            `${failure}; exhausted ${config.maxStageRetries} auto-retry(ies). Stopping for a human.`,
+            'err',
+          ),
         );
         break;
       }
 
-      opts.log(`stage ${stage.name}: ${failure}; asking the model whether to retry…`);
+      opts.log(stageLine(stage.name, `${failure}; asking the model whether to retry…`, 'warn'));
       const diagnosis = await diagnose({
         model: opts.model,
         timeoutMs: config.turnTimeoutMs,
@@ -656,9 +697,15 @@ export async function runCreate(opts: CreateOptions): Promise<{ ok: boolean; com
       // not under-report by omitting it.
       cost.tokensIn += diagnosis.usage?.inputTokens ?? 0;
       cost.tokensOut += diagnosis.usage?.outputTokens ?? 0;
-      opts.log(`stage ${stage.name}: diagnosis → ${diagnosis.verdict} — ${diagnosis.reason}`);
+      opts.log(
+        stageLine(
+          stage.name,
+          `diagnosis → ${diagnosis.verdict} — ${diagnosis.reason}`,
+          diagnosis.verdict === 'abort' ? 'err' : 'warn',
+        ),
+      );
       if (diagnosis.verdict === 'abort') {
-        opts.log(`stage ${stage.name}: recovery supervisor recommends stopping for a human.`);
+        opts.log(stageLine(stage.name, 'recovery supervisor recommends stopping for a human.', 'err'));
         break;
       }
       guidance = diagnosis.guidance ?? `The previous attempt failed: ${failure}. ${diagnosis.reason}`;
@@ -680,7 +727,11 @@ export async function runCreate(opts: CreateOptions): Promise<{ ok: boolean; com
   }
 
   const check = await runCheck(opts.repoRoot, opts.log);
-  opts.log(check.ok ? 'create pipeline complete; all checks green' : 'create pipeline complete with check failures');
+  opts.log(
+    check.ok
+      ? ok('create pipeline complete; all checks green')
+      : warn('create pipeline complete with check failures'),
+  );
   printCostTable(opts, stageCosts);
   await writeRunReport(opts, stageCosts);
   return { ok: check.ok, completed };
