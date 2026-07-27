@@ -83,6 +83,7 @@ Resolved in strict precedence order:
 2. `COPPERHEAD_MODEL`
 3. `model` in `.copperhead/config.json`
 4. `gpt-5` if `OPENAI_API_KEY` is set, otherwise `claude` if `ANTHROPIC_API_KEY` is set
+5. In the interactive shell on a TTY: an arrow-key model picker (other commands fail with an error at this point)
 
 Set any of the first three to `codex` to use the installed Codex CLI and its saved ChatGPT login without a model API key. Plain `codex` uses your Codex default; `codex:<model-id>` selects an explicit Codex model. Run `codex login status` to verify authentication.
 

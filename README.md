@@ -10,6 +10,10 @@
 
 **Cursor for circuit boards.** An AI agent that designs, documents, and validates real PCBs from a prompt, working directly on existing KiCad repositories.
 
+<p align="center">
+  <img src="https://raw.githubusercontent.com/chouhanindustries/copperhead/main/assets/copperhead.gif" alt="copperhead agent shell demo" width="720">
+</p>
+
 > **Status: early.** Phase 1 is implemented and the CLI runs. The [technical specification](openspec/specs/SPEC.md) is the source of truth; expect the surface to move before 1.0.
 
 Full documentation lives at [docs.copperhead.sh](https://docs.copperhead.sh).
@@ -52,8 +56,12 @@ The script is conservative by design: it never runs `sudo` and never edits shell
 In an existing KiCad repository:
 
 ```bash
-export ANTHROPIC_API_KEY=...   # or OPENAI_API_KEY
+export ANTHROPIC_API_KEY=...   # or OPENAI_API_KEY; optional: with no key, `copperhead` offers a model picker
 copperhead init                # scaffold docs/ from the schematic; idempotent
+copperhead                     # interactive agent shell (Claude Code–style REPL)
+copperhead demo --tour          # what the agent does (no LLM)
+copperhead demo --model cursor # full USB-C breakout create pipeline
+# or one-shot:
 copperhead do "add reverse-polarity protection on VIN"
 copperhead check               # ERC + DRC + doc drift; no LLM, CI-safe
 ```

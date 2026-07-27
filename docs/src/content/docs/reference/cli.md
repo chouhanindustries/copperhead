@@ -6,15 +6,17 @@ sidebar:
 ---
 
 ```text
-copperhead [global options] <command>
+copperhead [global options] [<command>]
 ```
 
-Every command probes `kicad-cli` before doing anything and exits 1 if it is not on your `PATH`. A `.env` in the working directory is loaded before any command resolves a model or a provider; a real environment variable always beats the file.
+With no subcommand, `copperhead` starts the interactive agent shell. Every command probes `kicad-cli` before doing anything and exits 1 if it cannot be found. Resolution order: `COPPERHEAD_KICAD_CLI` when set, then `kicad-cli` on your `PATH`, then the macOS KiCad.app bundle locations. Setting `COPPERHEAD_KICAD_CLI` to a path that does not exist is an error naming that path, not a silent fall back to `PATH`. A `.env` in the working directory is loaded before any command resolves a model or a provider; a real environment variable always beats the file.
 
 ## Commands at a glance
 
 | Command | Flow | LLM? | What it does |
 | --- | --- | --- | --- |
+| `repl` (default) | [Edit an existing board](/workflows/edit-existing-board/) | Yes | Interactive agent shell; each prompt is one `do`-equivalent run. |
+| `demo` | [Simple demo](/getting-started/demo/) | Tour no / pipeline yes | Tour of what copperhead does, or run the USB-C breakout create pipeline. |
 | `init` | Setup | No | Scaffolds `docs/` from an existing schematic. |
 | `check` (`verify`) | Either | No | ERC, DRC, drift, constraints, spec validation. CI-safe. |
 | `do` | [Edit an existing board](/workflows/edit-existing-board/) | Yes | One change: propose, edit, verify, propagate, commit. |
@@ -30,6 +32,42 @@ Every command probes `kicad-cli` before doing anything and exits 1 if it is not 
 | `-V, --version` | Print the version. |
 
 Global options go before the subcommand: `copperhead --json check`.
+
+## `copperhead` / `copperhead repl`
+
+Interactive agent shell (default when no command is given). On a TTY it takes over the full window (alternate screen, restored on exit): banner on top, input pinned at the bottom, each line runs the same gated loop as `copperhead do`, then returns to the prompt. Ctrl+C twice exits; PgUp/PgDn scroll the session history; Esc dismisses the slash menu; a pasted multi-line request arrives as one request instead of submitting at its first newline. Every session mirrors its log to `.copperhead/runs/repl-<timestamp>.log` (ANSI stripped, secrets redacted with the same write-time redactor as the run transcripts).
+
+```bash
+copperhead
+copperhead "add reverse-polarity protection on VIN"   # seed request, then stay in the shell
+copperhead repl --model claude-code
+```
+
+| Option | Description |
+| --- | --- |
+| `--model <model>` | Model / provider selection (same as `do`). When no model is configured anywhere (flag, `COPPERHEAD_MODEL`, config, `.env` API keys), the shell offers an interactive picker instead of refusing to start. |
+| `--max-turns <n>` | Turn budget per request. |
+| `--allow-dirty` | Permit a dirty working tree, same meaning and same default (off) as on `do`. |
+| `--interactive` | Pause for approval after each proposal validates. |
+
+Slash commands inside the shell: `/help`, `/demo`, `/examples`, `/status`, `/check`, `/parts`, `/nets`, `/bom`, `/sync`, `/drift`, `/constraints`, `/openspec`, `/config`, `/git`, `/runs`, `/last`, `/model`, `/version`, `/clear`, `/quit` (`/exit`, `/q`). Type `/` to see live filtered suggestions immediately; ↑/↓ + Enter picks one, Tab completes. `/model` opens an arrow-key picker and switches the session model in place. Requires a TTY (or a seed request for a one-shot non-TTY run). `--json` is refused; use `copperhead do … --json` instead.
+
+## `copperhead demo`
+
+Tour of what the agent does, or an end-to-end create pipeline against the packaged USB-C power breakout brief (same as `npm run demo:simple`).
+
+```bash
+copperhead demo --tour                 # overview only (no LLM)
+copperhead demo --model cursor         # scaffold + create pipeline
+copperhead demo --dir /tmp/my-demo     # custom demo repo path
+```
+
+| Option | Description |
+| --- | --- |
+| `--tour` | Print the overview and exit. Honours the global `--json`, which emits `{ "tour": [...lines] }`. |
+| `--model <model>` | Model for the create pipeline. |
+| `--interactive` | Re-enable human gates during create. |
+| `--dir <path>` | Demo repo directory. Default `demo-runs/usb-c-breakout` (or `COPPERHEAD_DEMO_DIR`). |
 
 ## `copperhead init`
 
@@ -59,7 +97,7 @@ copperhead do "<change request>" [options]
 | --- | --- |
 | `--model <model>` | `codex`, `cursor`, `gpt-5`, `claude`, `claude-code`, or a provider-specific model id. Saved-login providers: `codex` (Codex CLI), `cursor` (Cursor Agent CLI), `claude-code` (Claude Code). |
 | `--max-turns <n>` | Turn budget for this run. Overrides `maxTurns` from config. |
-| `--allow-dirty` | Permit a dirty working tree. The snapshot is taken with `git stash create`. |
+| `--allow-dirty` | Permit a dirty working tree. The snapshot keeps tracked changes as a `git stash create` object and untracked files as a tree object, so a rollback restores both. |
 | `--dry-run` | Propose the diff and write nothing. |
 | `--interactive` | Pause for approval once the proposal validates. |
 

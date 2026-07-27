@@ -113,7 +113,7 @@ export async function loadConfig(repoRoot: string): Promise<CopperheadConfig> {
 }
 
 /** Which level of the model-selection precedence chain won. */
-export type ModelSource = 'flag' | 'env' | 'config' | 'openai-key' | 'anthropic-key';
+export type ModelSource = 'flag' | 'env' | 'config' | 'openai-key' | 'anthropic-key' | 'picker';
 
 export interface ResolvedModel {
   model: string;
