@@ -2,6 +2,7 @@ import path from 'node:path';
 import { existsSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { loadConfig } from '../config.js';
+import { parseCanonicalTables } from '../memory/bom-table.js';
 import { listSymbols, listNets, pinNets, type SchematicSymbol, type PinNet } from '../kicad/sexp.js';
 
 export class ExplainError extends Error {
@@ -32,23 +33,36 @@ export type ExplainResult =
       pins: PinNet[];
     };
 
-async function tryReadBomRationale(repoRoot: string, docsDir: string, ref: string): Promise<string | undefined> {
+async function tryReadBomRationale(
+  repoRoot: string,
+  docsDir: string,
+  ref: string,
+): Promise<string |undefined> {
   const p = path.join(repoRoot, docsDir, 'BOM.md');
   if (!existsSync(p)) return undefined;
+
   try {
     const text = await readFile(p, 'utf8');
     const refUpper = ref.toUpperCase();
-    for (const rawLine of text.split('\n')) {
-      const line = rawLine.trim();
-      if (!line.startsWith('|')) continue;
-      const cells = line.split('|').map((c) => c.trim());
-      if (cells.length >= 6 && cells[1]?.toUpperCase() === refUpper) {
-        return cells[5] || undefined;
+
+    for (const { header, rows } of parseCanonicalTables(text)) {
+      const refIndex = header.cells.findIndex((c) => /^refdes$/i.test(c));
+      const rationaleIndex = header.cells.findIndex((c) => /^rationale$/i.test(c));
+
+      if (refIndex < 0 || rationaleIndex < 0) continue;
+
+      const hit = rows.find(
+        (r) => r.cells[refIndex]?.toUpperCase() === refUpper,
+      );
+
+      if (hit) {
+        return hit.cells[rationaleIndex] || undefined;
       }
     }
   } catch {
     // Optional docs lookup - ignore read errors
   }
+
   return undefined;
 }
 

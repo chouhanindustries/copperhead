@@ -13,53 +13,68 @@ async function fixtureRepo(): Promise<{ repo: string; cleanup: () => Promise<voi
 }
 
 describe('copperhead explain (minimal v1)', () => {
-  it('explains a symbol by reference designator (copperhead explain U1)', async () => {
-    const { repo, cleanup } = await fixtureRepo();
-    try {
-      const res = await runExplain(repo, 'U1');
-      expect(res.kind).toBe('refdes');
-      expect(res.symbol).toBeDefined();
-      expect(res.symbol?.ref).toBe('U1');
-      expect(res.pins).toBeDefined();
+ it('explains a symbol by reference designator (copperhead explain U1)', async () => {
+  const { repo, cleanup } = await fixtureRepo();
+  try {
+    const res = await runExplain(repo, 'U1');
 
-      const formatted = formatExplainReport(res);
-      expect(formatted).toContain('Symbol U1:');
-      expect(formatted).toContain('Value:');
-      expect(formatted).toContain('Pins');
-    } finally {
-      await cleanup();
+    if (res.kind !== 'refdes') {
+      throw new Error(`Expected refdes result, got ${res.kind}`);
     }
-  });
 
-  it('explains a net (copperhead explain GND)', async () => {
-    const { repo, cleanup } = await fixtureRepo();
-    try {
-      const res = await runExplain(repo, 'GND');
-      expect(res.kind).toBe('net');
-      expect(res.net).toBe('GND');
+    expect(res.symbol).toBeDefined();
+    expect(res.symbol.ref).toBe('U1');
+    expect(res.pins).toBeDefined();
 
-      const formatted = formatExplainReport(res);
-      expect(formatted).toContain('Net GND:');
-    } finally {
-      await cleanup();
+    const formatted = formatExplainReport(res);
+    expect(formatted).toContain('Symbol U1:');
+    expect(formatted).toContain('Value:');
+    expect(formatted).toContain('Pins');
+    expect(formatted).toContain(
+      'BOM Rationale: extracted from schematic by copperhead init',
+    );
+  } finally {
+    await cleanup();
+  }
+});
+
+it('explains a net (copperhead explain GND)', async () => {
+  const { repo, cleanup } = await fixtureRepo();
+  try {
+    const res = await runExplain(repo, 'GND');
+
+    if (res.kind !== 'net') {
+      throw new Error(`Expected net result, got ${res.kind}`);
     }
-  });
+
+    expect(res.net).toBe('GND');
+
+    const formatted = formatExplainReport(res);
+    expect(formatted).toContain('Net GND:');
+  } finally {
+    await cleanup();
+  }
+});
 
   it('explains a pin (copperhead explain U1.1)', async () => {
-    const { repo, cleanup } = await fixtureRepo();
-    try {
-      const res = await runExplain(repo, 'U1.1');
-      expect(res.kind).toBe('pin');
-      expect(res.pins).toHaveLength(1);
-      expect(res.pins![0]!.ref).toBe('U1');
+  const { repo, cleanup } = await fixtureRepo();
+  try {
+    const res = await runExplain(repo, 'U1.1');
 
-      const formatted = formatExplainReport(res);
-      expect(formatted).toContain('Pin U1.');
-      expect(formatted).toContain('Net:');
-    } finally {
-      await cleanup();
+    if (res.kind !== 'pin') {
+      throw new Error(`Expected pin result, got ${res.kind}`);
     }
-  });
+
+    expect(res.pins).toHaveLength(1);
+    expect(res.pins[0]!.ref).toBe('U1');
+
+    const formatted = formatExplainReport(res);
+    expect(formatted).toContain('Pin U1.');
+    expect(formatted).toContain('Net:');
+  } finally {
+    await cleanup();
+  }
+});
 
   it('throws an ExplainError for a non-existent target', async () => {
     const { repo, cleanup } = await fixtureRepo();
