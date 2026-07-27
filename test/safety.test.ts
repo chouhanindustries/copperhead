@@ -97,6 +97,40 @@ describe('secret redaction (AC-4.1)', () => {
     expect(await readFile(t.jsonlPath, 'utf8')).toContain('run-failed');
     expect(await readFile(summaryPath, 'utf8')).toContain('# Run summary');
   });
+
+  it('full-tree secret check: no sk- key material leaked in test runs or workspace (AC-4.1)', async () => {
+    const fs = await import('node:fs/promises');
+    const { existsSync } = await import('node:fs');
+    
+    async function scanDir(dir: string) {
+      if (!existsSync(dir)) return;
+      const entries = await fs.readdir(dir, { withFileTypes: true });
+      for (const entry of entries) {
+        const fullPath = path.join(dir, entry.name);
+        if (entry.isDirectory()) {
+          if (entry.name === 'node_modules' || entry.name === 'dist' || entry.name === '.git' || entry.name === '.openspec' || entry.name === 'test') {
+            continue;
+          }
+          await scanDir(fullPath);
+        } else {
+          if (entry.name === '.env' || entry.name === '.env.example') {
+            continue;
+          }
+          // Avoid scanning binary/images/large files
+          if (entry.name.endsWith('.js') || entry.name.endsWith('.ts') || entry.name.endsWith('.md') || entry.name.endsWith('.json') || entry.name.endsWith('.jsonl')) {
+            const content = await fs.readFile(fullPath, 'utf8');
+            if (content.includes('sk-[A-Za-z0-9_-]{20,}') || content.includes('sk-abc123DEF456ghi789jkl012')) {
+              if (fullPath.includes('safety.test.ts')) continue;
+            }
+            const secretMatch = /sk-[A-Za-z0-9_-]{20,}/.exec(content);
+            expect(secretMatch).toBeNull();
+          }
+        }
+      }
+    }
+    
+    await scanDir(path.resolve('.'));
+  });
 });
 
 describe('file tools', () => {

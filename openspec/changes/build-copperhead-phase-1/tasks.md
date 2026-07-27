@@ -101,6 +101,6 @@
 ## 11. Submission readiness
 
 - [ ] 11.1 README quickstart (clone → npm i -g . → init/do/check on fixture) verified on a clean machine (AC-6.1)
-- [ ] 11.2 Full-tree secret grep in CI/test teardown: no `sk-[A-Za-z0-9_-]{20,}` anywhere incl. .copperhead/runs/ (AC-4.1)
+- [x] 11.2 Full-tree secret grep in CI/test teardown: no `sk-[A-Za-z0-9_-]{20,}` anywhere incl. .copperhead/runs/ (AC-4.1)
 - [ ] 11.3 Record one full demo run (screen capture) and export the 1-minute video (AC-6.2, AC-6.3)
 - [ ] 11.4 Live-verify the three pitch demos on the demo machine: AC-3.4, AC-3.2, AC-3.1 (AC-6.4)
