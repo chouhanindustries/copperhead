@@ -45,7 +45,7 @@
 
 - [x] 8.1 Update SPEC.md: §2.5 pipeline (stage graph, completion records, staleness/invalidation), §3 CLI surface (`create --stage/--from/--dry-run`), and a new AC-9 section with binary criteria mirroring the delta-spec scenarios
 - [x] 8.2 Update docs site: `reference/cli.md` (new flags) and `workflows/create-from-brief.md` (re-run + invalidation walkthrough)
-- [x] 8.3 Full offline suite green (`npm test`, 151 passed / 7 key-gated skips against kicad-cli 10.0.4), typecheck clean; draft PR #33 opened (closes #24; notes composition with PR #29 for #23)
+- [x] 8.3 Full offline suite green (`npm test`, 411 passed / 17 provider-gated skips against kicad-cli 10.0.4, after merging upstream main through v0.7.0), typecheck clean; draft PR #33 opened (closes #24; notes composition with PR #29 for #23)
 
 ## 9. Adversarial-review remediation (post-implementation review, 2026-07-21)
 
