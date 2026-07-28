@@ -8,6 +8,7 @@ import { writeFile, readFile, mkdir } from 'node:fs/promises';
 import path from 'node:path';
 
 describe('Part verification (verify-parts-networked)', () => {
+  // Note: Vitest 3 fetchSpy.mockReset() restores original fetch, so tests queue exact mock responses per unique MPN call.
   const fetchSpy = vi.spyOn(global, 'fetch');
 
   afterEach(() => {
@@ -323,5 +324,41 @@ describe('Part verification (verify-parts-networked)', () => {
       await cleanup();
     }
   });
+
+  it('runVerifyParts passes log callback to output human table and candidate suggestions on NOT FOUND', async () => {
+    const { repo, cleanup } = await tempFixtureRepo();
+    try {
+      const bomPath = path.join(repo, 'docs', 'BOM.md');
+      await mkdir(path.dirname(bomPath), { recursive: true });
+      await writeFile(
+        bomPath,
+        `# BOM\n| Refdes | Value | Footprint | MPN | LCSC |\n|---|---|---|---|---|\n| R1 | 10k | R_0603 | UNKNOWN_MPN | |\n`,
+        'utf8',
+      );
+
+      fetchSpy.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          components: [
+            { lcsc: 99999, mfr: 'UNKNOWN_MPN_V1', package: '0603', stock: 10, price: 0.05 },
+          ],
+        }),
+      } as Response);
+
+      const logged: string[] = [];
+      const res = await runVerifyParts({
+        repoRoot: repo,
+        log: (s) => logged.push(s),
+      });
+
+      expect(res.ok).toBe(false);
+      const output = logged.join('\n');
+      expect(output).toContain('Verifying BOM parts against catalog');
+      expect(output).toContain('Hint (near matches in catalog): UNKNOWN_MPN_V1');
+    } finally {
+      await cleanup();
+    }
+  });
 });
+
 
