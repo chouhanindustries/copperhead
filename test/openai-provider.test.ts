@@ -41,7 +41,7 @@ async function withStubApi(
   const previous = process.env.OPENAI_BASE_URL;
   process.env.OPENAI_BASE_URL = `http://127.0.0.1:${port}/v1`;
   try {
-    await run(new OpenAIProvider('gpt-5', 'sk-test'));
+    await run(new OpenAIProvider('gpt-5', undefined, { OPENAI_API_KEY: 'sk-test' }));
   } finally {
     if (previous === undefined) delete process.env.OPENAI_BASE_URL;
     else process.env.OPENAI_BASE_URL = previous;
