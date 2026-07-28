@@ -81,3 +81,8 @@ export interface VerificationResult {
 - **Network-Free Isolation**:
   The new command `verify-parts` is explicitly documented as a networked check.
   `runCheck` (the offline `copperhead check`) and plain `export bom` do NOT import `src/kicad/catalog` or call any network fetchers, maintaining the strict offline/CI-safe invariants verbatim.
+
+### 4. Relationship to `add-part-research-tools`
+
+This change introduces opt-in, non-LLM, catalog existence/stock verification (`copperhead verify-parts` and `copperhead export bom --verify`).
+The planned `add-part-research-tools` change defines the broader part research and datasheet intake agent tools. The networked lookup surface established here (`jlcsearch` catalog lookup) acts as a read-only catalog query helper for BOM verification while maintaining strict offline invariants for standard `check` and `export bom` operations.

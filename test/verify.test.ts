@@ -238,4 +238,90 @@ describe('Part verification (verify-parts-networked)', () => {
       await cleanup();
     }
   });
+
+  it('runVerifyParts logs tabular summary, near-match hints, and update confirmations via opts.log', async () => {
+    const { repo, cleanup } = await tempFixtureRepo();
+    try {
+      const bomPath = path.join(repo, 'docs', 'BOM.md');
+      await mkdir(path.dirname(bomPath), { recursive: true });
+      await writeFile(bomPath, `# BOM
+| Refdes | Value | Footprint | MPN | Manufacturer | LCSC |
+|---|---|---|---|---|---|
+| R1 | 10k | R_0603 | RC0603FR-0710KL | Yageo | |
+| U1 | ESP | SMD | ESP32-S3-WROOM-1 | Espressif | |
+`, 'utf8');
+
+      // RC0603FR-0710KL resolved
+      fetchSpy.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          components: [{ lcsc: 25804, mfr: 'RC0603FR-0710KL', package: '0603', stock: 500, price: 0.01 }]
+        })
+      } as Response);
+
+      // ESP32-S3-WROOM-1 returns candidates
+      fetchSpy.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          components: [
+            { lcsc: 111, mfr: 'ESP32-S3-WROOM-1-N16R8', package: 'SMD', stock: 100, price: 2.5 }
+          ]
+        })
+      } as Response);
+
+      const logs: string[] = [];
+      const res = await runVerifyParts({ repoRoot: repo, update: true, log: (msg) => logs.push(msg) });
+
+      expect(res.ok).toBe(false);
+      const fullLog = logs.join('\n');
+      expect(fullLog).toContain('Verifying BOM parts against catalog...');
+      expect(fullLog).toContain('R1');
+      expect(fullLog).toContain('RESOLVED');
+      expect(fullLog).toContain('C25804');
+      expect(fullLog).toContain('Hint (near matches in catalog): ESP32-S3-WROOM-1-N16R8');
+      expect(fullLog).toContain('Updated 1 LCSC code(s) in BOM.md.');
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it('runVerifyParts throws VerificationError when docs/BOM.md is missing', async () => {
+    const { repo, cleanup } = await tempFixtureRepo();
+    try {
+      await expect(runVerifyParts({ repoRoot: repo })).rejects.toThrow(/no docs[/\\]BOM\.md to verify/);
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it('runVerifyParts warns when --update is used but no LCSC column is present in BOM.md', async () => {
+    const { repo, cleanup } = await tempFixtureRepo();
+    try {
+      const bomPath = path.join(repo, 'docs', 'BOM.md');
+      await mkdir(path.dirname(bomPath), { recursive: true });
+      await writeFile(bomPath, `# BOM
+| Refdes | Value | Footprint | MPN | Manufacturer |
+|---|---|---|---|---|
+| R1 | 10k | R_0603 | RC0603FR-0710KL | Yageo |
+`, 'utf8');
+
+      fetchSpy.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          components: [{ lcsc: 25804, mfr: 'RC0603FR-0710KL', package: '0603', stock: 500, price: 0.01 }]
+        })
+      } as Response);
+
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      try {
+        await runVerifyParts({ repoRoot: repo, update: true });
+        expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('no LCSC column in docs/BOM.md'));
+      } finally {
+        warnSpy.mockRestore();
+      }
+    } finally {
+      await cleanup();
+    }
+  });
 });
+

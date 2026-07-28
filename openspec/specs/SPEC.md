@@ -269,6 +269,16 @@ copperhead check          (alias: copperhead verify)
     Run ERC + DRC + doc-drift check; exit non-zero on violations.
     No LLM calls. Usable as CI step / pre-commit hook.
 
+copperhead verify-parts [--strict] [--update]
+    Opt-in, networked part verification command. Queries distributor and catalog
+    APIs (LCSC/JLCPCB) to validate Manufacturer Part Numbers (MPNs) in BOM.md
+    against real stock/catalog databases. `--strict` fails on missing/out-of-stock
+    parts; `--update` writes resolved LCSC part numbers back into docs/BOM.md.
+
+copperhead export bom [--supplier jlcpcb|pcbway] [--verify]
+    Export supplier-formatted BOM CSV from KiCad project files and docs/BOM.md.
+    Optional `--verify` runs inline networked part verification prior to export.
+
 copperhead sync [--dry-run]
     Verify the entire design state for inconsistencies — doc tables vs
     schematic, constraints.json vs docs and openspec specs, PINOUT.md vs
