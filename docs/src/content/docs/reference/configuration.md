@@ -32,6 +32,8 @@ Written by `copperhead init`. Every key is optional; the defaults below apply wh
 | `maxTurns` | `40` | Turn budget per run. |
 | `maxRepairCycles` | `5` | ERC/DRC repair attempts before the run rolls back to the git snapshot. |
 | `budgets` | `{}` | Free-form hard constraints, surfaced verbatim into every run's system prompt. |
+| `openaiCompatBaseUrl` | unset | Endpoint base URL for `--model compat:<id>` (Groq, Cerebras, OpenRouter, Gemini, local Ollama). Read only by that route — never affects `gpt-5`/`claude`/any other model id. Overridden by `COPPERHEAD_BASE_URL`. See [Zero-cost contributor stack](/getting-started/free-stack/). |
+| `openaiCompatApiKeyEnv` | `"OPENAI_API_KEY"` | Name of the env var holding the `compat:<id>` endpoint's key — the *name*, never the key value. Overridden by `COPPERHEAD_API_KEY_ENV`. |
 
 There is also a `generatedHashes` key, maintained by copperhead. It records content hashes of the generated docs so `init` can tell an untouched file from a hand-edited one. Do not edit it by hand.
 
@@ -62,6 +64,8 @@ The constraint registry: machine-readable counterparts to the constraints stated
 | `ANTHROPIC_API_KEY` | Anthropic API credentials. |
 | `CLAUDE_CODE_OAUTH_TOKEN` | Optional. Saved-login token for `--model claude-code` (see below). Minted by `claude setup-token`; lets you run against a Claude subscription with no `ANTHROPIC_API_KEY`. |
 | `COPPERHEAD_MODEL` | Default model. Overrides config, overridden by `--model`. |
+| `COPPERHEAD_BASE_URL` | Optional. Endpoint base URL for `--model compat:<id>`. Overrides `openaiCompatBaseUrl` in config. |
+| `COPPERHEAD_API_KEY_ENV` | Optional. Name of the env var holding the `compat:<id>` endpoint's key. Overrides `openaiCompatApiKeyEnv` in config; defaults to `OPENAI_API_KEY`. |
 | `COPPERHEAD_CODEX_PATH` | Optional path to a `codex` executable. Defaults to `codex` on `PATH`; the SDK-bundled launcher is a fallback. |
 | `COPPERHEAD_CURSOR_PATH` | Optional path to the Cursor Agent CLI (`agent` / `cursor-agent`). Defaults to `agent` on `PATH`. |
 | `NO_COLOR` | Optional. Disables ANSI colors in `doctor` output; colors are also skipped automatically when stdout is not a terminal. |
@@ -82,10 +86,14 @@ Resolved in strict precedence order:
 1. The `--model` flag
 2. `COPPERHEAD_MODEL`
 3. `model` in `.copperhead/config.json`
-4. `gpt-5` if `OPENAI_API_KEY` is set, otherwise `claude` if `ANTHROPIC_API_KEY` is set
+4. `gpt-5` if exactly one of `OPENAI_API_KEY`/`ANTHROPIC_API_KEY` is set (`claude` for the latter)
 5. In the interactive shell on a TTY: an arrow-key model picker (other commands fail with an error at this point)
 
+Step 4 only auto-selects when there is nothing to guess wrong: with **both** `OPENAI_API_KEY` and `ANTHROPIC_API_KEY` set and nothing from steps 1–3, copperhead refuses with an `ambiguous: 2 credentials found (...)` error rather than silently favoring one — a wrong silent guess could route a run to a provider, and a bill, you didn't intend. Pass `--model`, set `COPPERHEAD_MODEL`, or set `model` in config to break the tie.
+
 Set any of the first three to `codex` to use the installed Codex CLI and its saved ChatGPT login without a model API key. Plain `codex` uses your Codex default; `codex:<model-id>` selects an explicit Codex model. Run `codex login status` to verify authentication.
+
+Set any of the first three to `compat:<model-id>` to use an OpenAI-compatible endpoint (Groq, Cerebras, OpenRouter, Gemini, local Ollama) — see [Zero-cost contributor stack](/getting-started/free-stack/). This is the only model string that ever reads `openaiCompatBaseUrl`/`COPPERHEAD_BASE_URL`; every other model id ignores them entirely, so a value configured for one project's compat endpoint never redirects a plain `gpt-5`/`claude` run in another.
 
 If `codex` is not on `PATH`, point `COPPERHEAD_CODEX_PATH` at an executable explicitly. The optional SDK includes one at `node_modules/@openai/codex/bin/codex.js`; for a global installation, `$(npm root -g)/@openai/codex/bin/codex.js` resolves its path.
 

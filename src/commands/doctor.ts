@@ -2,10 +2,19 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
-import { DEFAULTS, loadConfig, resolveModel, type CopperheadConfig } from '../config.js';
+import {
+  DEFAULTS,
+  DEFAULT_OPENAI_COMPAT_API_KEY_ENV,
+  classifyPromptPrivacy,
+  isLocalEndpoint,
+  loadConfig,
+  resolveCompatSettings,
+  resolveModel,
+  type CompatSettings,
+  type CopperheadConfig,
+} from '../config.js';
 import { kicadCliVersion } from '../kicad/cli.js';
 import { redactSecrets } from '../util/redact.js';
-import { isPrivacySensitiveEndpoint } from '../agent/loop.js';
 
 const execFileP = promisify(execFile);
 
@@ -16,7 +25,7 @@ const execFileP = promisify(execFile);
  * at the model provider). Each probe fails soft: a missing tool is a reported
  * `fail`, never a thrown error, so `doctor` still prints the rest of the report.
  */
-export type DoctorStatus = 'ok' | 'fail' | 'info';
+export type DoctorStatus = 'ok' | 'fail' | 'warn' | 'info';
 
 export interface DoctorCheck {
   name: string;
@@ -101,12 +110,15 @@ async function gitCheck(probe: () => Promise<string>): Promise<DoctorCheck> {
 export function checkCredential(
   model: string,
   env: NodeJS.ProcessEnv,
-  config?: Pick<CopperheadConfig, 'openaiCompatBaseUrl' | 'openaiCompatApiKeyEnv'>,
+  compat?: CompatSettings | undefined,
 ): DoctorCheck {
   // A pasted API key can end up as the model value (--model sk-..., a stray
   // COPPERHEAD_MODEL); redact it before it reaches the report, same policy as
   // transcripts (AC-4.1). Routing below still uses the raw value.
   const shown = redactSecrets(model);
+  if (model === 'compat' || model.startsWith('compat:')) {
+    return checkCompatCredential(shown, model, env, compat);
+  }
   const savedLogin: Record<string, string> = {
     codex: 'uses local Codex login',
     'claude-code': 'uses Claude Code login',
@@ -140,53 +152,127 @@ export function checkCredential(
           hint: 'export ANTHROPIC_API_KEY=... (or use --model claude-code for saved login).',
         };
   }
-  // OpenAI or OpenAI-compatible endpoint. `||` (not `??`): an env var set to
-  // the empty string must fall through to config/default, not win as "".
-  const baseURL = env.COPPERHEAD_BASE_URL || config?.openaiCompatBaseUrl;
-  const apiKeyEnvName = env.COPPERHEAD_API_KEY_ENV || config?.openaiCompatApiKeyEnv || 'OPENAI_API_KEY';
-  const key = env[apiKeyEnvName];
-  const endpointStr = baseURL ? ` -> ${baseURL}` : ' -> api.openai.com (default)';
-  return key
-    ? { name: 'provider', status: 'ok', detail: `${shown} -> openai-compat: ${apiKeyEnvName} set${endpointStr}` }
+  // Plain OpenAI — anything else. `compat:` above is the only route that
+  // consults openaiCompatBaseUrl/openaiCompatApiKeyEnv.
+  return env.OPENAI_API_KEY
+    ? { name: 'provider', status: 'ok', detail: `${shown} -> openai: OPENAI_API_KEY set` }
     : {
         name: 'provider',
         status: 'fail',
-        detail: `${shown} -> openai-compat: ${apiKeyEnvName} not set${endpointStr}`,
-        hint: baseURL
-          ? `export ${apiKeyEnvName}=... (key for ${baseURL}). Or set COPPERHEAD_API_KEY_ENV to the correct env var name.`
-          : 'export OPENAI_API_KEY=... (or use --model codex for saved login).',
+        detail: `${shown} -> openai: OPENAI_API_KEY not set`,
+        hint: 'export OPENAI_API_KEY=... (or use --model codex for saved login).',
       };
+}
+
+/**
+ * Display-only: some endpoints embed a credential in the URL itself (a query
+ * param, userinfo) — Gemini's compat endpoint does this with `?key=...`, in a
+ * shape `redactSecrets`' `sk-`/`Bearer`/`npm_`/`gh*_` key-shape patterns don't
+ * cover. Dropping the query string and userinfo entirely, rather than pattern-
+ * matching a key shape, is what makes this hold regardless of what a given
+ * provider's key looks like.
+ */
+function redactEndpointForDisplay(baseURL: string): string {
+  try {
+    const u = new URL(baseURL);
+    return `${u.origin}${u.pathname}`;
+  } catch {
+    return redactSecrets(baseURL);
+  }
+}
+
+function checkCompatCredential(
+  shownModel: string,
+  model: string,
+  env: NodeJS.ProcessEnv,
+  compat: CompatSettings | undefined,
+): DoctorCheck {
+  const compatModel = model.startsWith('compat:') ? model.slice('compat:'.length) : undefined;
+  // Mirrors makeProvider (agent/loop.ts): bare `compat` has no valid default
+  // model, so it must fail here too, or doctor reports "ready" for a run that
+  // would fail on its very first turn.
+  if (!compatModel) {
+    return {
+      name: 'provider',
+      status: 'fail',
+      detail: `${shownModel} -> compat: ${model === 'compat:' ? 'empty' : 'missing'} model id`,
+      hint: 'use "compat:<model-id>"; a compatible endpoint has no default model to assume.',
+    };
+  }
+  const settings = compat ?? { openaiCompatApiKeyEnv: DEFAULT_OPENAI_COMPAT_API_KEY_ENV };
+  if (!settings.openaiCompatBaseUrl) {
+    return {
+      name: 'provider',
+      status: 'fail',
+      detail: `${shownModel} -> compat: no endpoint configured`,
+      hint: 'set COPPERHEAD_BASE_URL, or "openaiCompatBaseUrl" in .copperhead/config.json.',
+    };
+  }
+  const where = redactEndpointForDisplay(settings.openaiCompatBaseUrl);
+  // isLocalEndpoint() runs against the raw baseURL, never the redacted form above.
+  if (isLocalEndpoint(settings.openaiCompatBaseUrl)) {
+    return {
+      name: 'provider',
+      status: 'ok',
+      detail: `${shownModel} -> compat: ${where} (local endpoint, no key required)`,
+    };
+  }
+  return env[settings.openaiCompatApiKeyEnv]
+    ? {
+        name: 'provider',
+        status: 'ok',
+        detail: `${shownModel} -> compat: ${where} (${settings.openaiCompatApiKeyEnv} set)`,
+      }
+    : {
+        name: 'provider',
+        status: 'fail',
+        detail: `${shownModel} -> compat: ${where} (${settings.openaiCompatApiKeyEnv} not set)`,
+        hint: `export ${settings.openaiCompatApiKeyEnv}=... for that endpoint.`,
+      };
+}
+
+/** A `warn`/`info` line when the `compat:` endpoint's host has a documented (or unknown) prompt-training policy; `null` for anything else. */
+export function checkPromptPrivacy(model: string, compat?: CompatSettings | undefined): DoctorCheck | null {
+  const risk = classifyPromptPrivacy(model, compat);
+  if (risk.kind === 'none') return null;
+  if (risk.kind === 'unknown') {
+    return {
+      name: 'privacy',
+      status: 'info',
+      detail: `${risk.host}: no known training-on-prompts policy on record (copperhead cannot verify this; check the provider's terms)`,
+    };
+  }
+  return {
+    name: 'privacy',
+    status: 'warn',
+    detail: `${risk.host}: ${risk.reason}`,
+    hint: 'PCB designs are often proprietary. Use a paid tier or a local endpoint for confidential work.',
+  };
 }
 
 function providerCheck(
   flag: string | undefined,
   config: Awaited<ReturnType<typeof loadConfig>>,
   env: NodeJS.ProcessEnv,
-): DoctorCheck[] {
+): DoctorCheck {
   try {
     const { model } = resolveModel(flag, config, env);
-    const cred = checkCredential(model, env, config);
-    const checks: DoctorCheck[] = [cred];
-    // Append a privacy info row for known free-tier endpoints.
-    const baseURL = env.COPPERHEAD_BASE_URL || config.openaiCompatBaseUrl;
-    if (isPrivacySensitiveEndpoint(baseURL, model)) {
-      checks.push({
-        name: 'privacy',
-        status: 'info',
-        detail: 'this provider/tier may use prompt data for training — PCB designs are often proprietary; verify the data policy before running on confidential hardware',
-      });
-    }
-    return checks;
+    return checkCredential(model, env, resolveCompatSettings(config, env));
   } catch (err) {
-    // resolveModel throws only when nothing selects a model at all. Its message
-    // starts with "no model configured: " — already this check's detail line —
-    // so keep only the remedy part for the hint.
-    return [{
+    // resolveModel throws for two distinct reasons: nothing selects a model at
+    // all ("no model configured: ...") or two-plus credentials are present
+    // with nothing to break the tie ("ambiguous: ..."). Reflect which case it
+    // was in the detail, so an ambiguous setup doesn't misreport as "nothing
+    // configured" — that would send a user with two working keys off to fix
+    // something that isn't broken.
+    const message = (err as Error).message;
+    const ambiguous = message.startsWith('ambiguous:');
+    return {
       name: 'provider',
       status: 'fail',
-      detail: 'no model configured',
-      hint: (err as Error).message.replace(/^no model configured:\s*/, ''),
-    }];
+      detail: ambiguous ? 'ambiguous: multiple credentials, no model selected' : 'no model configured',
+      hint: message.replace(/^(no model configured|ambiguous):\s*/, ''),
+    };
   }
 }
 
@@ -247,17 +333,32 @@ export async function runDoctor(opts: RunDoctorOptions): Promise<DoctorReport> {
             hint: 'check that it is a regular file (not a directory) and that you have permission to read it.',
           };
   }
+  // Resolving the model can fail (nothing configured, or ambiguous); providerCheck
+  // reports that as its own `fail` row, and the privacy check simply doesn't
+  // apply in that case (there's no resolved model to classify).
+  const compat = resolveCompatSettings(config, deps.env);
+  let resolvedModel: string | null = null;
+  try {
+    resolvedModel = resolveModel(opts.model, config, deps.env).model;
+  } catch {
+    resolvedModel = null;
+  }
   const checks: DoctorCheck[] = [
     nodeCheck(deps.nodeVersion),
     await kicadCheck(deps.kicadVersion),
     await gitCheck(deps.gitVersion),
-    ...providerCheck(opts.model, config, deps.env),
-    configError ?? projectCheck(config, opts.repoRoot),
+    providerCheck(opts.model, config, deps.env),
   ];
+  if (resolvedModel) {
+    const privacy = checkPromptPrivacy(resolvedModel, compat);
+    if (privacy) checks.push(privacy);
+  }
+  checks.push(configError ?? projectCheck(config, opts.repoRoot));
+  // `warn` and `info` never block: only a hard `fail` means "not ready".
   return { ok: checks.every((c) => c.status !== 'fail'), checks };
 }
 
-const TAG: Record<DoctorStatus, string> = { ok: '[ok]', fail: '[FAIL]', info: '[info]' };
+const TAG: Record<DoctorStatus, string> = { ok: '[ok]', fail: '[FAIL]', warn: '[warn]', info: '[info]' };
 const TAG_COL = 2; // leading indent
 const NAME_COL = TAG_COL + 7; // widest tag "[FAIL]" + one space
 const DETAIL_COL = NAME_COL + 10; // widest name "kicad-cli" + one space
@@ -267,7 +368,7 @@ const DETAIL_COL = NAME_COL + 10; // widest name "kicad-cli" + one space
 // tests see plain text. Colored text is padded before painting — escape codes
 // have zero display width but nonzero string length, so painting first would
 // break the column math.
-const ANSI: Record<DoctorStatus, string> = { ok: '32', fail: '31', info: '36' };
+const ANSI: Record<DoctorStatus, string> = { ok: '32', fail: '31', warn: '33', info: '36' };
 const DIM = '2';
 function paint(text: string, code: string, on: boolean): string {
   return on ? `\u001b[${code}m${text}\u001b[0m` : text;

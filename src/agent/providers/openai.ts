@@ -1,23 +1,54 @@
+import { DEFAULT_OPENAI_COMPAT_API_KEY_ENV, isLocalEndpoint } from '../../config.js';
 import type { ChatOpts, Msg, Provider, ToolSchema, Turn, ToolCall } from '../types.js';
 
+/** Pointing this provider at an OpenAI-compatible endpoint instead of api.openai.com. */
+export interface OpenAIProviderOptions {
+  /** Endpoint base URL; omitted means the OpenAI SDK's own default. */
+  baseURL?: string | undefined;
+  /** Name of the env var holding the key; defaults to OPENAI_API_KEY. */
+  apiKeyEnv?: string | undefined;
+}
+
 export class OpenAIProvider implements Provider {
-  readonly name = 'openai';
+  readonly name: string;
+  private readonly apiKey: string | undefined;
+  private readonly baseURL: string | undefined;
 
   constructor(
     private readonly model = 'gpt-5',
-    private readonly apiKey = process.env.OPENAI_API_KEY,
-    private readonly baseURL?: string,
+    opts: OpenAIProviderOptions = {},
+    env: NodeJS.ProcessEnv = process.env,
   ) {
-    if (!this.apiKey) {
-      const hint = this.baseURL ? 'Set the env var named in COPPERHEAD_API_KEY_ENV (or openaiCompatApiKeyEnv in config).' : 'OPENAI_API_KEY is not set.';
-      throw new Error(hint);
+    // The key is always resolved through a named env var, never accepted as a
+    // literal — the only way application code (or a test) supplies one is by
+    // setting that variable, so a key can never end up hardcoded or passed
+    // around as a plain string (mirrors the AC-4.1 env-only rule elsewhere).
+    const keyEnv = opts.apiKeyEnv ?? DEFAULT_OPENAI_COMPAT_API_KEY_ENV;
+    this.baseURL = opts.baseURL;
+    // Distinct name when pointed at a compat endpoint: otherProvider() in
+    // agent/loop.ts fails a rate-limited run over to the other *keyed*
+    // provider by exact name match. Keeping the name 'openai' regardless of
+    // baseURL would let a 429 against a free/local compat endpoint (which
+    // routinely rate-limits) silently redirect to a real, paid Anthropic key
+    // sitting in the same environment — a run the user deliberately pointed
+    // elsewhere must never fail over to someone else's paid API.
+    this.name = this.baseURL ? 'openai-compat' : 'openai';
+    this.apiKey = env[keyEnv];
+    // A loopback endpoint (Ollama) serves the same API with no credential at
+    // all; requiring a placeholder key there would be a needless papercut on
+    // the most useful zero-cost config. Any other endpoint (or plain OpenAI)
+    // still requires one, naming the variable it expected.
+    if (!this.apiKey && !isLocalEndpoint(this.baseURL)) {
+      throw new Error(`${keyEnv} is not set.`);
     }
   }
 
   async chat(messages: Msg[], tools: ToolSchema[], opts: ChatOpts = {}): Promise<Turn> {
     const { default: OpenAI } = await import('openai');
     const client = new OpenAI({
-      apiKey: this.apiKey,
+      // A local endpoint may legitimately have no key; the SDK client still
+      // wants a non-empty string, so send a placeholder it will never check.
+      apiKey: this.apiKey ?? 'no-key-required',
       ...(this.baseURL ? { baseURL: this.baseURL } : {}),
     });
     const res = await client.chat.completions.create({

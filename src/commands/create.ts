@@ -2,12 +2,12 @@ import path from 'node:path';
 import { existsSync } from 'node:fs';
 import { readFile, mkdir, writeFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
-import { loadConfig } from '../config.js';
+import { loadConfig, resolveCompatSettings } from '../config.js';
 import { bootstrapKicadProject } from '../kicad/bootstrap.js';
 import { exportSvg, runErc } from '../kicad/cli.js';
 import { listSymbols } from '../kicad/sexp.js';
 import { isDirty, commitAll, changedFiles } from '../util/git.js';
-import type { CopperheadConfig } from '../config.js';
+import type { CompatSettings, CopperheadConfig } from '../config.js';
 import { checkDrift } from '../memory/drift.js';
 import { runAgentLoop, makeProvider, type BudgetExhaustedStats } from '../agent/loop.js';
 import { diagnoseStageFailure, transcriptExcerpt, withTimeout, type StageDiagnosis } from '../agent/recovery.js';
@@ -284,10 +284,12 @@ async function diagnose(input: {
   transcriptDir: string;
   attempt: number;
   maxAttempts: number;
+  /** Compat-endpoint settings, so a `compat:<id>` stage can diagnose its own failures. */
+  compat?: CompatSettings | undefined;
 }): Promise<StageDiagnosis> {
   let provider: Provider | undefined;
   try {
-    provider = await makeProvider(input.model);
+    provider = await makeProvider(input.model, false, input.compat);
     const p = provider;
     const excerpt = await transcriptExcerpt(input.transcriptDir);
     return await withTimeout(
@@ -691,6 +693,7 @@ export async function runCreate(opts: CreateOptions): Promise<{ ok: boolean; com
         transcriptDir: res.transcriptDir,
         attempt,
         maxAttempts: config.maxStageRetries + 1,
+        compat: resolveCompatSettings(config),
       });
       // Fold the diagnosis call's own tokens into the stage cost (F6): it is a
       // real model call made on behalf of this stage, so the cost table should

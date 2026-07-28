@@ -71,7 +71,7 @@ program
   .command('repl', { isDefault: true })
   .description('interactive agent shell (default when no command is given)')
   .argument('[request...]', 'optional first change request before the prompt loop')
-  .option('--model <model>', 'codex | cursor | gpt-5 | claude | claude-code (or a provider-specific model id)')
+  .option('--model <model>', 'codex | cursor | gpt-5 | claude | claude-code | compat:<id> (or a provider-specific model id)')
   .option('--max-turns <n>', 'turn budget per request')
   .option('--allow-dirty', 'let turns run on a dirty working tree')
   .option('--interactive', 'pause for approval after each proposal validates')
@@ -202,7 +202,7 @@ program
   .command('do')
   .description('the core loop: propose, edit, verify, propagate, commit')
   .argument('<request>', 'the change request in natural language')
-  .option('--model <model>', 'codex | cursor | gpt-5 | claude | claude-code (or a provider-specific model id)')
+  .option('--model <model>', 'codex | cursor | gpt-5 | claude | claude-code | compat:<id> (or a provider-specific model id)')
   .option('--max-turns <n>', 'turn budget for this run')
   .option('--allow-dirty', 'allow a dirty tree (snapshot via git stash create)')
   .option('--dry-run', 'propose the diff, write nothing')
@@ -279,7 +279,7 @@ program
 program
   .command('demo')
   .description('tour of what copperhead does, or run the USB-C breakout create pipeline')
-  .option('--model <model>', 'codex | cursor | gpt-5 | claude | claude-code (or a provider-specific model id)')
+  .option('--model <model>', 'codex | cursor | gpt-5 | claude | claude-code | compat:<id> (or a provider-specific model id)')
   .option('--interactive', 're-enable the human gates (spec approval, pre-export)')
   .option('--dir <path>', 'demo repo directory (default: demo-runs/usb-c-breakout)')
   .option('--tour', 'print the overview only; do not run the pipeline')
@@ -327,7 +327,7 @@ program
   .command('create')
   .description('Mode A: full pipeline from a product brief to the output package')
   .requiredOption('--brief <file>', 'product brief (markdown)')
-  .option('--model <model>', 'codex | cursor | gpt-5 | claude | claude-code (or a provider-specific model id)')
+  .option('--model <model>', 'codex | cursor | gpt-5 | claude | claude-code | compat:<id> (or a provider-specific model id)')
   .option('--interactive', 're-enable the human gates (spec approval, pre-export)')
   .action(async (opts: { brief: string; model?: string; interactive?: boolean }) => {
     const repo = repoOf(program.opts());

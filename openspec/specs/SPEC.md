@@ -262,8 +262,18 @@ copperhead init [--path hardware/]
     extracted from the schematic. Idempotent; never overwrites
     hand-edited docs without --force.
 
-copperhead do "<change request>" [--model codex|gpt-5|claude] [--max-turns N]
-    The core loop. See §4.
+copperhead do "<change request>" [--model codex|gpt-5|claude|compat:<id>] [--max-turns N]
+    The core loop. See §4. `--model compat:<model-id>` targets any
+    OpenAI-compatible endpoint (Groq, Cerebras, OpenRouter, Gemini, local
+    Ollama) via `openaiCompatBaseUrl`/`COPPERHEAD_BASE_URL` — the only model
+    value that ever consults those settings.
+
+copperhead doctor [--model <model>]
+    Env preflight: node/kicad-cli/git presence, the resolved model's
+    credential, and (for a compat: endpoint) a non-blocking prompt-privacy
+    signal. LLM-free and network-free by design — it does not probe the
+    endpoint; `copperhead do` with a trivial request verifies end-to-end
+    connectivity.
 
 copperhead check          (alias: copperhead verify)
     Run ERC + DRC + doc-drift check; exit non-zero on violations.
@@ -351,12 +361,12 @@ interface Provider {
 }
 ```
 
-- `openai.ts`: GPT-5 via chat completions + tool calling (hackathon shared key)
+- `openai.ts`: GPT-5 via chat completions + tool calling (hackathon shared key). Also serves any OpenAI-compatible endpoint (Groq, Cerebras, OpenRouter, Gemini's compat endpoint, local Ollama) via an optional `baseURL` and configurable API-key env-var name, selected only through the explicit `compat`/`compat:<model-id>` model prefix — no other model id ever consults those settings. A provider pointed at a compat endpoint reports a distinct `name` (`'openai-compat'`), so the rate-limit failover below never redirects it to a paid keyed provider. A local/loopback endpoint needs no credential.
 - `anthropic.ts`: Claude via messages API + tool use
 - `codex.ts`: locally installed Codex CLI via the official SDK and saved `codex login` authentication; Codex runs read-only and returns structured Copperhead tool requests
 - `claude-code.ts`: saved-login Claude Code via the Claude Agent SDK: a reasoning-only backend (no SDK tools, built-ins disabled, isolated cwd) mapped onto the single-turn `Provider` seam so the loop stays the driver. Selected by `--model claude-code` / `claude-code:<id>` (routed ahead of the `claude*` prefix); needs no `ANTHROPIC_API_KEY` (uses `CLAUDE_CODE_OAUTH_TOKEN` / the logged-in CLI); never falls back to a keyed provider. `@anthropic-ai/claude-agent-sdk` ships as an `optionalDependency` (its `@anthropic-ai/sdk >=0.93.0` peer is satisfied by copperhead's bumped core SDK), lazily imported and only loaded when `claude-code` is selected.
 - `cursor.ts`: saved-login Cursor Agent CLI subprocess (`agent login`), reasoning-only (plan mode, sandbox, isolated workspace, JSON tool protocol, session resume via `--resume`). Selected by `--model cursor` / `cursor:<id>`; needs no model API keys; never falls back to a keyed provider. Optional `COPPERHEAD_CURSOR_PATH` (default `agent` on PATH).
-- Selection: `--model` flag > `COPPERHEAD_MODEL` env > config.json > default (whichever key is present)
+- Selection: `--model` flag > `COPPERHEAD_MODEL` env > config.json > default (whichever key is present). With nothing selecting a model and two or more of `OPENAI_API_KEY`/`ANTHROPIC_API_KEY` present, selection refuses with an `ambiguous:` error rather than silently favoring one.
 - All providers must pass the same integration test on the fixture repo
 
 ### 4.5 Budgets & failure modes
@@ -448,9 +458,14 @@ Format: Given / When / Then. "Fixture" = the open-telegraph repo (or the tiny te
 - **AC-3.7 (surgical edits)** For every run above: the `.kicad_sch` diff touches only the s-expressions relevant to the change — file not regenerated (assert: < 5% of lines changed for AC-3.1).
 - **AC-3.8 (dirty tree)** With uncommitted changes and no `--allow-dirty`: refuses to start. Holds for `repl` as well as `do`, since `repl` is the default command. With `--allow-dirty`, a rollback restores both the tracked modifications and the untracked files that were present before the run.
 - **AC-3.9 (dry run)** `--dry-run` prints the proposed diff and writes nothing.
-- **AC-3.10 (provider parity)** AC-3.1 passes with `--model codex`, `--model gpt-5`, `--model claude`, `--model claude-code`, and `--model cursor` when each provider is configured.
+- **AC-3.10 (provider parity)** AC-3.1 passes with `--model codex`, `--model gpt-5`, `--model claude`, `--model claude-code`, `--model cursor`, and `--model compat:<model-id>` when each provider is configured.
 - **AC-3.11 (saved login)** With `--model claude-code`, a logged-in Claude Code (`CLAUDE_CODE_OAUTH_TOKEN` set) and **no** `ANTHROPIC_API_KEY`/`OPENAI_API_KEY`, a `do` run completes through the normal verify/commit path; copperhead reads no credential store; and no key material appears in the transcript, summary, or tree (AC-4.1 holds). A missing optional dependency or an unauthenticated install fails through the rollback path with an actionable error, not a raw stack trace.
 - **AC-3.12 (cursor saved login)** With `--model cursor`, a logged-in Cursor Agent CLI (`agent login`) and **no** model API keys, a `do` run completes through the normal verify/commit path; copperhead never reads Cursor credentials; unauthenticated or missing CLI installs fail with an actionable message and rollback.
+- **AC-3.13 (compat-endpoint isolation)** With `openaiCompatBaseUrl`/`COPPERHEAD_BASE_URL` configured, `--model gpt-5` (or `claude`, or any id without the `compat` prefix) still reaches the real OpenAI/Anthropic API — the configured endpoint is never consulted. Only `--model compat:<model-id>` reaches the configured endpoint.
+- **AC-3.14 (compat local endpoint)** With `--model compat:<model-id>` pointed at a local/loopback endpoint (`localhost`/`127.0.0.1`/`::1`/`*.local`) and no credential env var set, a `do` run completes normally — no key is required.
+- **AC-3.15 (compat no silent failover)** With `--model compat:<model-id>` and `ANTHROPIC_API_KEY` (or `OPENAI_API_KEY`) also set, a rate limit against the compat endpoint does not fail the run over to that keyed provider.
+- **AC-3.16 (ambiguous credentials)** With no model configured anywhere and both `OPENAI_API_KEY` and `ANTHROPIC_API_KEY` set, `do`/`doctor` refuse with an `ambiguous:` error rather than silently selecting a provider.
+- **AC-3.17 (compat prompt-privacy signal)** `doctor` reports a non-blocking `[warn]` when a `compat:<model-id>` endpoint's host is documented as training on submitted prompts, and a non-blocking `[info]` naming the host when no policy is on record; neither case fails the command. A true loopback endpoint (`localhost`, `127.0.0.1`, or `::1`, but not a `.local`/LAN host) bypasses this check entirely, since nothing leaves the machine.
 
 ### AC-4 · Safety
 

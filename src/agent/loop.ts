@@ -7,7 +7,14 @@ import { CachingProvider } from './response-cache.js';
 import { withTimeout, TurnTimeoutError } from './recovery.js';
 import { buildSystemPrompt } from './prompts.js';
 import { loadConstraints, reopenDeferredAffects } from '../memory/constraints.js';
-import { loadConfig, CONFIG_DIR, type CopperheadConfig } from '../config.js';
+import {
+  loadConfig,
+  resolveCompatSettings,
+  classifyPromptPrivacy,
+  CONFIG_DIR,
+  type CompatSettings,
+  type CopperheadConfig,
+} from '../config.js';
 import { Transcript, type ExitPath, type RunStats } from './transcript.js';
 import { collectRunMeta, renderCliHeader, type RunMeta, type RunMetaInput } from './runmeta.js';
 import { plainRenderer, fmtDuration, fmtTokens, type ProgressRenderer } from './render.js';
@@ -74,19 +81,44 @@ export interface RunResult {
   cacheHits: number;
 }
 
-/** Free-tier domains known to potentially train on prompts. */
-const PRIVACY_WARN_DOMAINS = ['generativelanguage.googleapis.com', 'openrouter.ai'];
-
-/** True when the configured base URL or model name suggests a free tier that may train on prompts. */
-export function isPrivacySensitiveEndpoint(baseURL: string | undefined, model: string): boolean {
-  if (!baseURL) return false;
-  const url = baseURL.toLowerCase();
-  if (PRIVACY_WARN_DOMAINS.some((d) => url.includes(d))) return true;
-  if (model.includes(':free')) return true;
-  return false;
-}
-
-export async function makeProvider(model: string, sessionResume = false, config?: { openaiCompatBaseUrl?: string; openaiCompatApiKeyEnv?: string }): Promise<Provider> {
+export async function makeProvider(
+  model: string,
+  sessionResume = false,
+  compat?: CompatSettings | undefined,
+): Promise<Provider> {
+  // OpenAI-compatible endpoint (Groq, Cerebras, OpenRouter, Gemini's compat
+  // endpoint, a local Ollama). An explicit `compat` prefix is the opt-in:
+  // nothing else consults openaiCompatBaseUrl/openaiCompatApiKeyEnv, so a
+  // stray COPPERHEAD_BASE_URL can never redirect a keyed `gpt-5`/`claude` run
+  // to a third party.
+  if (model === 'compat' || model.startsWith('compat:')) {
+    const compatModel = model.startsWith('compat:') ? model.slice('compat:'.length) : undefined;
+    if (compatModel === '') {
+      throw new Error('compat model override cannot be empty; use "compat:<model-id>"');
+    }
+    const settings = compat ?? { openaiCompatApiKeyEnv: 'OPENAI_API_KEY' };
+    // Bare `compat` (no model id) has no valid default: unlike gpt-5/claude, a
+    // compatible endpoint serves whatever models its host chooses, so there is
+    // no id that would ever be correct to assume. Falling through here would
+    // silently send the literal string "gpt-5" (OpenAIProvider's own default)
+    // to a host that almost certainly does not serve it.
+    if (!compatModel) {
+      throw new Error(
+        settings.openaiCompatBaseUrl
+          ? `compat requires a model id; use "compat:<model-id>" (endpoint ${settings.openaiCompatBaseUrl} is configured, but has no default model)`
+          : 'compat requires a model id and an endpoint; use "compat:<model-id>" and set openaiCompatBaseUrl (COPPERHEAD_BASE_URL or .copperhead/config.json)',
+      );
+    }
+    if (!settings.openaiCompatBaseUrl) {
+      throw new Error(
+        `compat:${compatModel} requires an endpoint; set openaiCompatBaseUrl (COPPERHEAD_BASE_URL or .copperhead/config.json) — without one this would silently fall back to the real OpenAI API.`,
+      );
+    }
+    return new OpenAIProvider(compatModel, {
+      baseURL: settings.openaiCompatBaseUrl,
+      apiKeyEnv: settings.openaiCompatApiKeyEnv,
+    });
+  }
   if (model === 'codex' || model.startsWith('codex:')) {
     const codexModel = model.startsWith('codex:') ? model.slice('codex:'.length) : undefined;
     if (codexModel === '') throw new Error('codex model override cannot be empty; use "codex" or "codex:<model-id>"');
@@ -125,14 +157,10 @@ export async function makeProvider(model: string, sessionResume = false, config?
   if (model === 'claude' || model.startsWith('claude')) {
     return new AnthropicProvider(model === 'claude' ? undefined : model);
   }
-  // OpenAI-compatible catch-all: resolve baseURL and API key env-var with
-  // precedence: env var > config field > hard default. `||` (not `??`): an
-  // env var set to the empty string (e.g. a sourced .env.example placeholder)
-  // must fall through to config/default rather than winning as "".
-  const baseURL = process.env.COPPERHEAD_BASE_URL || config?.openaiCompatBaseUrl;
-  const apiKeyEnv = process.env.COPPERHEAD_API_KEY_ENV || config?.openaiCompatApiKeyEnv || 'OPENAI_API_KEY';
-  const apiKey = process.env[apiKeyEnv];
-  return new OpenAIProvider(model === 'gpt-5' ? undefined : model, apiKey, baseURL);
+  // Anything else (gpt-5, a bare model id, a typo) goes to the real OpenAI
+  // API, exactly as before this change — only an explicit `compat:` prefix
+  // above ever consults openaiCompatBaseUrl/openaiCompatApiKeyEnv.
+  return new OpenAIProvider(model === 'gpt-5' ? undefined : model);
 }
 
 function otherProvider(current: Provider): Provider | null {
@@ -239,7 +267,8 @@ async function runWithMemory(
   // it only when the env flag is set AND config.llmCache is disabled — the same
   // condition under which we skip the CachingProvider wrap below.
   const sessionResume = process.env.COPPERHEAD_CC_SESSION_RESUME === '1' && !config.llmCache;
-  let provider = opts.provider ?? (await makeProvider(opts.model, sessionResume, config));
+  const compat = resolveCompatSettings(config);
+  let provider = opts.provider ?? (await makeProvider(opts.model, sessionResume, compat));
   // Cache every turn's response so a retried/restarted stage replays what it
   // already paid for instead of re-calling the model (repo-scoped, cross-run).
   // Skip an injected provider (tests drive scripted providers directly).
@@ -268,12 +297,17 @@ async function runWithMemory(
     input: opts.meta,
   });
   for (const line of styleHeaderLines(renderCliHeader(meta))) log(line);
-  // Privacy notice: if the configured endpoint is a known free-tier domain that
-  // may train on prompts, surface it at run-start so it appears in the transcript
-  // even for non-interactive runs. Doctor surfaces this more prominently pre-run.
-  const privacyBaseURL = process.env.COPPERHEAD_BASE_URL || config.openaiCompatBaseUrl;
-  if (isPrivacySensitiveEndpoint(privacyBaseURL, opts.model)) {
-    log('⚠  warning: configured provider/tier may use prompt data for training. PCB designs are often proprietary — verify the data policy before running on confidential hardware.');
+  // Privacy notice: if a `compat:` endpoint's host is a documented training
+  // risk, surface it at run-start so it appears in the transcript even for
+  // non-interactive runs — `doctor` surfaces the same signal more prominently,
+  // but is opt-in, so this is the guarantee a confidential run always gets it.
+  // Only the 'risk' classification logs here (not 'unknown'/no-policy-on-record):
+  // that case is informational, not actionable, and doctor is where it belongs.
+  const privacyRisk = classifyPromptPrivacy(opts.model, compat);
+  if (privacyRisk.kind === 'risk') {
+    log(
+      `⚠  warning: ${privacyRisk.host} — ${privacyRisk.reason}. PCB designs are often proprietary — verify the data policy before running on confidential hardware.`,
+    );
   }
   // Revisit obligations deferred while their artifact didn't exist re-open now
   // if it does (must run before loadConstraints so the prompt sees the updated

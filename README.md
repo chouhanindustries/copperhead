@@ -116,7 +116,7 @@ copperhead export bom --supplier jlcpcb   # supplier-ready ordering file from do
 
 Global flags: `--repo <path>` (default: cwd) and `--json` for machine-readable output. `--model` is available on `do`, `sync`, `create`, and `doctor`; `--interactive` only on `do` and `create`; `do` also takes `--dry-run`, `--max-turns`, and `--allow-dirty`.
 
-`--model` accepts `gpt-5` (OpenAI), `claude` / `claude-<id>` (Anthropic API), `claude-code` / `claude-code:<id>` (Claude Code, saved login), `cursor` / `cursor:<id>` (Cursor Agent CLI, saved login), and `codex` / `codex:<id>` (Codex CLI, saved login). Routing is by prefix; `claude-code` is matched before the `claude` prefix.
+`--model` accepts `gpt-5` (OpenAI), `claude` / `claude-<id>` (Anthropic API), `claude-code` / `claude-code:<id>` (Claude Code, saved login), `cursor` / `cursor:<id>` (Cursor Agent CLI, saved login), `codex` / `codex:<id>` (Codex CLI, saved login), and `compat:<model-id>` (any OpenAI-compatible endpoint — Groq, Cerebras, OpenRouter, Gemini, local Ollama; see [Zero-cost contributor stack](https://docs.copperhead.sh/getting-started/free-stack/)). Routing is by prefix; `claude-code` is matched before the `claude` prefix. `compat:` is the only route that reads `COPPERHEAD_BASE_URL`/`COPPERHEAD_API_KEY_ENV`, so a configured endpoint never redirects a plain `gpt-5`/`claude` run.
 
 ### Saved login (Cursor Agent)
 
