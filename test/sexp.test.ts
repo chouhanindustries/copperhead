@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import path from 'node:path';
 import { listSymbols, listNets, pinNets, parseSexp } from '../src/kicad/sexp.js';
-import { FIXTURE } from './helpers.js';
+import { FIXTURE, tempFixtureRepo } from './helpers.js';
 
 const SCH = path.join(FIXTURE, 'hardware', 'open-key.kicad_sch');
 
@@ -38,96 +38,134 @@ describe('sexp parser', () => {
     expect(r2.get('1')).toBe('KEY_DAH');
     expect(r2.get('2')).toBe('GND');
   });
-});
-import { describe, it, expect, afterEach } from 'vitest';
-import { addPowerSymbolPrefixes, resetPowerSymbolPrefixes } from '../src/kicad/sexp.js';
-import { listSymbols } from '../src/kicad/sexp.js';
-import path from 'node:path';
-import { tempFixtureRepo } from './helpers.js';
-import { mkdir, writeFile } from 'node:fs/promises';
 
-describe('isPowerSymbol with custom prefixes', () => {
-  afterEach(() => {
-    resetPowerSymbolPrefixes();
-  });
-  it('default behavior: power: prefix is recognized', async () => {
+  it('supports custom power symbol libraries dynamically', async () => {
     const { repo, cleanup } = await tempFixtureRepo();
     try {
-      const sch = path.join(repo, 'hardware', 'test.kicad_sch');
-      await mkdir(path.dirname(sch), { recursive: true });
-      // A minimal sch with only a power symbol (which should be excluded)
-      await writeFile(sch, `(kicad_sch
-  (version 20231120)
-  (generator "eeschema")
-  (lib_symbols
-    (symbol "power:VCC"
-      (pin_numbers (pin_count 1) (number_size 50))
-      (pin_names (offset 0) (hide))
-      (in_bom yes) (on_board yes)
-      (symbol "VCC_0_1"
-        (pin power_in line (at 0 0 90) (length 0)
-          (name "VCC" (effects (font (size 50 50))))
-          (number "1" (effects (font (size 50 50))))
+      const customSch = path.join(repo, 'custom.kicad_sch');
+      const content = `(kicad_sch
+        (version 20231120)
+        (uuid "0a0a0a0a-0000-4000-8000-000000000001")
+        (lib_symbols
+          (symbol "CustomPower:GND" (power)
+            (pin power_in line (at 0 0 0) (length 0) hide
+              (name "GND" (effects (font (size 1.27 1.27))))
+              (number "1" (effects (font (size 1.27 1.27))))
+            )
+          )
+          (symbol "Device:R"
+            (property "Reference" "R" (at 0 0 0) (effects (font (size 1.27 1.27))))
+            (property "Value" "R" (at 0 0 0) (effects (font (size 1.27 1.27))))
+            (property "Footprint" "" (at 0 0 0) (effects (font (size 1.27 1.27)) hide))
+            (pin passive line (at 0 3.81 270) (length 1.27)
+              (name "~" (effects (font (size 1.27 1.27))))
+              (number "1" (effects (font (size 1.27 1.27))))
+            )
+            (pin passive line (at 0 -3.81 90) (length 1.27)
+              (name "~" (effects (font (size 1.27 1.27))))
+              (number "2" (effects (font (size 1.27 1.27))))
+            )
+          )
         )
-      )
-    )
-  )
-  (symbol (lib_id "power:VCC") (at 0 0 0)
-    (property "Reference" "#PWR1" (at 0 0 0)(effects (font (size 50 50)) (justify left)))
-    (property "Value" "VCC" (at 0 0 0)(effects (font (size 50 50)) (justify left)))
-    (pin "1" (uuid "0000-0001"))
-    (instances (project "test" (path "/" (page "1"))))
-  )
-  (sheet_instances (path "/" (page "1")))
-)`, 'utf8');
-      // power:VCC should be excluded from listSymbols
-      const syms = await listSymbols(sch);
-      expect(syms).toHaveLength(0);
+        (symbol
+          (lib_id "CustomPower:GND")
+          (at 10 6.19 0)
+          (uuid "0d0d0d0d-0000-4000-8000-000000000001")
+          (property "Reference" "#PWR1" (at 10 6.19 0) (effects (font (size 1.27 1.27)) hide))
+          (property "Value" "GND" (at 10 6.19 0) (effects (font (size 1.27 1.27))))
+          (property "Footprint" "" (at 10 6.19 0) (effects (font (size 1.27 1.27)) hide))
+          (pin "1" (uuid "0e0e0e0e-0000-4000-8000-000000000001"))
+        )
+        (symbol
+          (lib_id "Device:R")
+          (at 10 10 0)
+          (uuid "0d0d0d0d-0000-4000-8000-000000000002")
+          (property "Reference" "R1" (at 10 10 0) (effects (font (size 1.27 1.27))))
+          (property "Value" "10k" (at 10 10 0) (effects (font (size 1.27 1.27))))
+          (property "Footprint" "Resistor_SMD:R_0603_1608Metric" (at 10 10 0) (effects (font (size 1.27 1.27)) hide))
+          (pin "1" (uuid "0e0e0e0e-0000-4000-8000-000000000002"))
+          (pin "2" (uuid "0e0e0e0e-0000-4000-8000-000000000003"))
+        )
+        (wire
+          (pts
+            (xy 10 6.19)
+            (xy 10 10)
+          )
+        )
+      )`;
+
+      const { writeFile } = await import('node:fs/promises');
+      await writeFile(customSch, content, 'utf8');
+
+      // 1. listSymbols: should EXCLUDE CustomPower:GND (only return R1)
+      const syms = await listSymbols(customSch);
+      expect(syms.map((s) => s.ref)).toEqual(['R1']);
+
+      // 2. listNets: should INCLUDE "GND"
+      const nets = await listNets(customSch);
+      expect(nets).toContain('GND');
+
+      // 3. pinNets: R1 pin 1 connected to GND should have net "GND"
+      const pins = await pinNets(customSch);
+      const r1Pins = pins.filter((p) => p.ref === 'R1');
+      expect(r1Pins.find((p) => p.pinNumber === '1')?.net).toBe('GND');
     } finally {
       await cleanup();
     }
   });
 
-  it('custom prefixes are recognized after addPowerSymbolPrefixes', async () => {
-    // Register a custom prefix
-    addPowerSymbolPrefixes(['custom_power:']);
+  it('treats legacy power: prefix symbols as power symbols (not real components)', async () => {
     const { repo, cleanup } = await tempFixtureRepo();
     try {
-      const sch = path.join(repo, 'hardware', 'test.kicad_sch');
-      await mkdir(path.dirname(sch), { recursive: true });
-      await writeFile(sch, `(kicad_sch
-  (version 20231120)
-  (generator "eeschema")
-  (lib_symbols
-    (symbol "custom_power:MY_VCC"
-      (pin_numbers (pin_count 1) (number_size 50))
-      (pin_names (offset 0) (hide))
-      (in_bom yes) (on_board yes)
-      (symbol "MY_VCC_0_1"
-        (pin power_in line (at 0 0 90) (length 0)
-          (name "MY_VCC" (effects (font (size 50 50))))
-          (number "1" (effects (font (size 50 50))))
+      const legacySch = path.join(repo, 'legacy.kicad_sch');
+      const content = `(kicad_sch
+        (version 20231120)
+        (uuid "1a1a1a1a-0000-4000-8000-000000000001")
+        (lib_symbols
+          (symbol "power:GND"
+            (pin power_in line (at 0 0 0) (length 0) hide
+              (name "GND" (effects (font (size 1.27 1.27))))
+              (number "1" (effects (font (size 1.27 1.27))))
+            )
+          )
+          (symbol "Device:C"
+            (property "Reference" "C" (at 0 0 0) (effects (font (size 1.27 1.27))))
+            (property "Value" "100n" (at 0 0 0) (effects (font (size 1.27 1.27))))
+            (property "Footprint" "" (at 0 0 0) (effects (font (size 1.27 1.27)) hide))
+            (pin passive line (at 0 3.81 270) (length 1.27)
+              (name "~" (effects (font (size 1.27 1.27))))
+              (number "1" (effects (font (size 1.27 1.27))))
+            )
+          )
         )
-      )
-    )
-  )
-  (symbol (lib_id "custom_power:MY_VCC") (at 0 0 0)
-    (property "Reference" "#PWR1" (at 0 0 0)(effects (font (size 50 50)) (justify left)))
-    (property "Value" "MY_VCC" (at 0 0 0)(effects (font (size 50 50)) (justify left)))
-    (pin "1" (uuid "0000-0001"))
-    (instances (project "test" (path "/" (page "1"))))
-  )
-  (sheet_instances (path "/" (page "1")))
-)`, 'utf8');
-      const syms = await listSymbols(sch);
-      expect(syms).toHaveLength(0);
+        (symbol
+          (lib_id "power:GND")
+          (at 10 5 0)
+          (uuid "1d1d1d1d-0000-4000-8000-000000000001")
+          (property "Reference" "#PWR1" (at 10 5 0) (effects (font (size 1.27 1.27)) hide))
+          (property "Value" "GND" (at 10 5 0) (effects (font (size 1.27 1.27))))
+          (pin "1" (uuid "1e1e1e1e-0000-4000-8000-000000000001"))
+        )
+        (symbol
+          (lib_id "Device:C")
+          (at 10 10 0)
+          (uuid "1d1d1d1d-0000-4000-8000-000000000002")
+          (property "Reference" "C1" (at 10 10 0) (effects (font (size 1.27 1.27))))
+          (property "Value" "100n" (at 10 10 0) (effects (font (size 1.27 1.27))))
+          (property "Footprint" "Capacitor_SMD:C_0402_1005Metric" (at 10 10 0) (effects (font (size 1.27 1.27)) hide))
+          (pin "1" (uuid "1e1e1e1e-0000-4000-8000-000000000002"))
+        )
+      )`;
+
+      const { writeFile } = await import('node:fs/promises');
+      await writeFile(legacySch, content, 'utf8');
+
+      // power:GND must be excluded; only Device:C (C1) is a real component
+      const syms = await listSymbols(legacySch);
+      expect(syms.map((s) => s.ref)).toEqual(['C1']);
     } finally {
       await cleanup();
     }
   });
-
-  it('throws an error if empty or blank prefixes are provided', () => {
-    expect(() => addPowerSymbolPrefixes([''])).toThrow('Power symbol prefixes must be non-empty');
-    expect(() => addPowerSymbolPrefixes(['   '])).toThrow('Power symbol prefixes must be non-empty');
-  });
 });
+
