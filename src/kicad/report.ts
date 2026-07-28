@@ -47,23 +47,51 @@ function normViolation(v: RawViolation, sheet?: string): Violation {
 /**
  * Normalize kicad-cli ERC and DRC JSON reports into one shape. ERC nests
  * violations per sheet; DRC has top-level `violations` plus `unconnected_items`
- * and `schematic_parity`. Tolerant of missing fields across KiCad versions.
+ * and `schematic_parity`. Tolerant of missing fields across KiCad versions
+ * including KiCad 10 counts and alternative keys.
  */
 export function normalizeReport(raw: unknown, source: 'erc' | 'drc'): CheckReport {
   const r = raw as {
     sheets?: { path?: string; violations?: RawViolation[] }[];
     violations?: RawViolation[];
+    err_items?: RawViolation[];
+    drc_items?: RawViolation[];
     unconnected_items?: RawViolation[];
     schematic_parity?: RawViolation[];
+    error_count?: number;
+    warning_count?: number;
+    status?: string | boolean;
+    ok?: boolean;
   };
-  const violations: Violation[] = [];
+
+  const allViolations: Violation[] = [];
+  
   for (const sheet of r.sheets ?? []) {
-    for (const v of sheet.violations ?? []) violations.push(normViolation(v, sheet.path));
+    for (const v of sheet.violations ?? []) allViolations.push(normViolation(v, sheet.path));
   }
-  for (const v of r.violations ?? []) violations.push(normViolation(v));
-  for (const v of r.unconnected_items ?? []) violations.push(normViolation(v));
-  for (const v of r.schematic_parity ?? []) violations.push(normViolation(v));
-  return { ok: violations.length === 0, source, violations };
+  for (const v of r.violations ?? []) allViolations.push(normViolation(v));
+  for (const v of r.err_items ?? []) allViolations.push(normViolation(v));
+  for (const v of r.drc_items ?? []) allViolations.push(normViolation(v));
+  for (const v of r.unconnected_items ?? []) allViolations.push(normViolation(v));
+  for (const v of r.schematic_parity ?? []) allViolations.push(normViolation(v));
+
+  // Filter out warnings so that only true errors count as blocking violations
+  const violations = allViolations.filter((v) => {
+    const sev = (v.severity ?? '').toLowerCase();
+    return sev !== 'warning' && sev !== 'info';
+  });
+
+  // Handle explicit error counts or status fields introduced in KiCad 10
+  let ok = violations.length === 0;
+  if (typeof r.error_count === 'number') {
+    ok = r.error_count === 0;
+  } else if (typeof r.ok === 'boolean') {
+    ok = r.ok && violations.length === 0;
+  } else if (r.status !== undefined) {
+    ok = r.status === true || r.status === 'ok' || r.status === 'success';
+  }
+
+  return { ok, source, violations };
 }
 
 export function formatViolations(report: CheckReport): string {
