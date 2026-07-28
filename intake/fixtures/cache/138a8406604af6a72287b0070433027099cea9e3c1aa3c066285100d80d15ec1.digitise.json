@@ -1,0 +1,414 @@
+[
+  {
+    "page": 1,
+    "text": "SN5400, SN54LS00, SN54S00\nSN7400, SN74LS00, SN74S00\nSDLS025D –DECEMBER 1983–REVISED MAY 2017\nTEXAS\nINSTRUMENTS\nwww.ti.com\n6.4 Thermal Information\n<table>\n<thead>\n<tr>\n<th rowspan=\"3\">THERMAL METRIC(1)(2)</th>\n<th colspan=\"4\">SN74LS00</th>\n<th rowspan=\"3\">UNIT</th>\n</tr>\n<tr>\n<th>D (SOIC)</th>\n<th>DB (SSOP)</th>\n<th>N (PDIP)</th>\n<th>NS (SO)</th>\n</tr>\n<tr>\n<th>14 PINS</th>\n<th>14 PINS</th>\n<th>14 PINS</th>\n<th>14 PINS</th>\n</tr>\n</thead>\n<tbody>\n<tr>\n<td>R<sub>θJA</sub> Junction-to-ambient thermal resistance</td>\n<td>90.9</td>\n<td>102.8</td>\n<td>54.8</td>\n<td>89.7</td>\n<td>°C/W</td>\n</tr>\n<tr>\n<td>R<sub>θJC(top)</sub> Junction-to-case (top) thermal resistance</td>\n<td>51.9</td>\n<td>53.3</td>\n<td>42.1</td>\n<td>48.1</td>\n<td>°C/W</td>\n</tr>\n<tr>\n<td>R<sub>θJB</sub> Junction-to-board thermal resistance</td>\n<td>48</td>\n<td>53.4</td>\n<td>34.8</td>\n<td>50.1</td>\n<td>°C/W</td>\n</tr>\n<tr>\n<td>ψ<sub>JT</sub> Junction-to-top characterization parameter</td>\n<td>18.6</td>\n<td>16.5</td>\n<td>26.9</td>\n<td>16.7</td>\n<td>°C/W</td>\n</tr>\n<tr>\n<td>ψ<sub>JB</sub> Junction-to-board characterization parameter</td>\n<td>47.8</td>\n<td>52.9</td>\n<td>34.7</td>\n<td>49.8</td>\n<td>°C/W</td>\n</tr>\n</tbody>\n</table>\n(1) For more information about traditional and new thermal metrics, see the Semiconductor and IC Package Thermal Metrics application\nreport.\n(2) The package thermal impedance is calculated in accordance with JESD 51-7.\n6.5 Electrical Characteristics: SNx400\nover operating free-air temperature range (unless otherwise noted)\n<table>\n<thead>\n<tr>\n<th>PARAMETER</th>\n<th colspan=\"3\">TEST CONDITIONS</th>\n<th>MIN</th>\n<th>TYP</th>\n<th>MAX</th>\n<th>UNIT</th>\n</tr>\n</thead>\n<tbody>\n<tr>\n<td>V<sub>IK</sub></td>\n<td colspan=\"3\">V<sub>CC</sub> = MIN and I<sub>I</sub> = −12 mA</td>\n<td></td>\n<td></td>\n<td>−1.5</td>\n<td>V</td>\n</tr>\n<tr>\n<td>V<sub>OH</sub></td>\n<td colspan=\"3\">V<sub>CC</sub> = MIN, V<sub>IL</sub> = 0.8 V, and I<sub>OH</sub> = −0.4 mA</td>\n<td>2.4</td>\n<td>3.4</td>\n<td></td>\n<td>V</td>\n</tr>\n<tr>\n<td>V<sub>OL</sub></td>\n<td colspan=\"3\">V<sub>CC</sub> = MIN, V<sub>IH</sub> = 2 V, and I<sub>OL</sub> = 16 mA</td>\n<td></td>\n<td>0.2</td>\n<td>0.4</td>\n<td>V</td>\n</tr>\n<tr>\n<td>I<sub>I</sub></td>\n<td colspan=\"3\">V<sub>CC</sub> = MAX and V<sub>I</sub> = 5.5 V</td>\n<td></td>\n<td></td>\n<td>1</td>\n<td>mA</td>\n</tr>\n<tr>\n<td>I<sub>IH</sub></td>\n<td colspan=\"3\">V<sub>CC</sub> = MAX and V<sub>I</sub> = 2.4 V</td>\n<td></td>\n<td></td>\n<td>40</td>\n<td>µA</td>\n</tr>\n<tr>\n<td>I<sub>IL</sub></td>\n<td colspan=\"3\">V<sub>CC</sub> = MAX and V<sub>I</sub> = 0.4 V</td>\n<td></td>\n<td></td>\n<td>−1.6</td>\n<td>mA</td>\n</tr>\n<tr>\n<td rowspan=\"2\">I<sub>OS</sub></td>\n<td rowspan=\"2\">V<sub>CC</sub> = MAX</td>\n<td>SN5400</td>\n<td>−20</td>\n<td>−55</td>\n<td rowspan=\"2\">mA</td>\n</tr>\n<tr>\n<td>SN7400</td>\n<td>−18</td>\n<td>−55</td>\n</tr>\n<tr>\n<td>I<sub>CCH</sub></td>\n<td colspan=\"3\">V<sub>CC</sub> = MAX and V<sub>I</sub> = 0 V</td>\n<td></td>\n<td>4</td>\n<td>8</td>\n<td>mA</td>\n</tr>\n<tr>\n<td>I<sub>CCL</sub></td>\n<td colspan=\"3\">V<sub>CC</sub> = MAX and V<sub>I</sub> = 4.5 V</td>\n<td></td>\n<td>12</td>\n<td>22</td>\n<td>mA</td>\n</tr>\n</tbody>\n</table>\n6.6 Electrical Characteristics: SNx4LS00\nover operating free-air temperature range (unless otherwise noted)\n<table>\n<thead>\n<tr>\n<th>PARAMETER</th>\n<th colspan=\"3\">TEST CONDITIONS</th>\n<th>MIN</th>\n<th>TYP</th>\n<th>MAX</th>\n<th>UNIT</th>\n</tr>\n</thead>\n<tbody>\n<tr>\n<td>V<sub>IK</sub></td>\n<td colspan=\"3\">V<sub>CC</sub> = MIN and I<sub>I</sub> = −18 mA</td>\n<td></td>\n<td></td>\n<td>−1.5</td>\n<td>V</td>\n</tr>\n<tr>\n<td>V<sub>OH</sub></td>\n<td colspan=\"3\">V<sub>CC</sub> = MIN, V<sub>IL</sub> = MAX, and I<sub>OH</sub> = −0.4 mA</td>\n<td>2.5</td>\n<td>3.4</td>\n<td></td>\n<td>V</td>\n</tr>\n<tr>\n<td rowspan=\"2\">V<sub>OL</sub></td>\n<td rowspan=\"2\">V<sub>CC</sub> = MIN and V<sub>IH</sub> = 2 V</td>\n<td>I<sub>OL</sub> = 4 mA</td>\n<td></td>\n<td>0.25</td>\n<td>0.4</td>\n<td rowspan=\"2\">V</td>\n</tr>\n<tr>\n<td>I<sub>OL</sub> = 8 mA (SN74LS00)</td>\n<td></td>\n<td>0.35</td>\n<td>0.5</td>\n</tr>\n<tr>\n<td>I<sub>I</sub></td>\n<td colspan=\"3\">V<sub>CC</sub> = MAX and V<sub>I</sub> = 7 V</td>\n<td></td>\n<td></td>\n<td>0.1</td>\n<td>mA</td>\n</tr>\n<tr>\n<td>I<sub>IH</sub></td>\n<td colspan=\"3\">V<sub>CC</sub> = MAX and V<sub>I</sub> = 2.7 V</td>\n<td></td>\n<td></td>\n<td>20</td>\n<td>µA</td>\n</tr>\n<tr>\n<td>I<sub>IL</sub></td>\n<td colspan=\"3\">V<sub>CC</sub> = MAX and V<sub>I</sub> = 0.4 V</td>\n<td></td>\n<td></td>\n<td>−0.4</td>\n<td>mA</td>\n</tr>\n<tr>\n<td>I<sub>OS</sub></td>\n<td colspan=\"3\">V<sub>CC</sub> = MAX</td>\n<td>−20</td>\n<td></td>\n<td>−100</td>\n<td>mA</td>\n</tr>\n<tr>\n<td>I<sub>CCH</sub></td>\n<td colspan=\"3\">V<sub>CC</sub> = MAX and V<sub>I</sub> = 0 V</td>\n<td></td>\n<td>0.8</td>\n<td>1.6</td>\n<td>mA</td>\n</tr>\n<tr>\n<td>I<sub>CCL</sub></td>\n<td colspan=\"3\">V<sub>CC</sub> = MAX and V<sub>I</sub> = 4.5 V</td>\n<td></td>\n<td>2.4</td>\n<td>4.4</td>\n<td>mA</td>\n</tr>\n</tbody>\n</table>\n6.7 Electrical Characteristics: SNx4S00\nover operating free-air temperature range (unless otherwise noted)\n<table>\n<thead>\n<tr>\n<th>PARAMETER</th>\n<th>TEST CONDITIONS</th>\n<th>MIN</th>\n<th>TYP</th>\n<th>MAX</th>\n<th>UNIT</th>\n</tr>\n</thead>\n<tbody>\n<tr>\n<td>V_IK</td>\n<td>V_CC = MIN and I_I = –18 mA</td>\n<td colspan=\"3\">–1.2</td>\n<td>V</td>\n</tr>\n<tr>\n<td>V_OH</td>\n<td>V_CC = MIN, V_IL = 0.8 V, and I_OH = –1 mA</td>\n<td>2.5</td>\n<td>3.4</td>\n<td></td>\n<td>V</td>\n</tr>\n<tr>\n<td>V_OL</td>\n<td>V_CC = MIN, V_IH = 2 V, and I_OL = 20 mA</td>\n<td colspan=\"3\">0.5</td>\n<td>V</td>\n</tr>\n<tr>\n<td>I_I</td>\n<td>V_CC = MAX and V_I = 5.5 V</td>\n<td colspan=\"3\">1</td>\n<td>mA</td>\n</tr>\n<tr>\n<td>I_IH</td>\n<td>V_CC = MAX and V_I = 2.7 V</td>\n<td colspan=\"3\">50</td>\n<td>µA</td>\n</tr>\n<tr>\n<td>I_IL</td>\n<td>V_CC = MAX and V_I = 0.5 V</td>\n<td colspan=\"3\">–2</td>\n<td>mA</td>\n</tr>\n</tbody>\n</table>\n6\nSubmit Documentation Feedback\nCopyright © 1983–2017, Texas Instruments Incorporated\nProduct Folder Links: SN5400 SN54LS00 SN54S00 SN7400 SN74LS00 SN74S00",
+    "regions": [
+      {
+        "text": "SN5400, SN54LS00, SN54S00\nSN7400, SN74LS00, SN74S00\nSDLS025D –DECEMBER 1983–REVISED MAY 2017",
+        "bbox": {
+          "page": 1,
+          "x": 0.08470588235294117,
+          "y": 0.03727272727272727,
+          "width": 0.28274509803921566,
+          "height": 0.04181818181818182
+        }
+      },
+      {
+        "text": "TEXAS\nINSTRUMENTS",
+        "bbox": {
+          "page": 1,
+          "x": 0.7584313725490196,
+          "y": 0.02,
+          "width": 0.15568627450980393,
+          "height": 0.03272727272727273
+        }
+      },
+      {
+        "text": "www.ti.com",
+        "bbox": {
+          "page": 1,
+          "x": 0.8396078431372549,
+          "y": 0.06848484848484848,
+          "width": 0.07333333333333333,
+          "height": 0.010606060606060607
+        }
+      },
+      {
+        "text": "6.4 Thermal Information",
+        "bbox": {
+          "page": 1,
+          "x": 0.08549019607843138,
+          "y": 0.09272727272727273,
+          "width": 0.2196078431372549,
+          "height": 0.01606060606060606
+        }
+      },
+      {
+        "text": "<table>\n<thead>\n<tr>\n<th rowspan=\"3\">THERMAL METRIC(1)(2)</th>\n<th colspan=\"4\">SN74LS00</th>\n<th rowspan=\"3\">UNIT</th>\n</tr>\n<tr>\n<th>D (SOIC)</th>\n<th>DB (SSOP)</th>\n<th>N (PDIP)</th>\n<th>NS (SO)</th>\n</tr>\n<tr>\n<th>14 PINS</th>\n<th>14 PINS</th>\n<th>14 PINS</th>\n<th>14 PINS</th>\n</tr>\n</thead>\n<tbody>\n<tr>\n<td>R<sub>θJA</sub> Junction-to-ambient thermal resistance</td>\n<td>90.9</td>\n<td>102.8</td>\n<td>54.8</td>\n<td>89.7</td>\n<td>°C/W</td>\n</tr>\n<tr>\n<td>R<sub>θJC(top)</sub> Junction-to-case (top) thermal resistance</td>\n<td>51.9</td>\n<td>53.3</td>\n<td>42.1</td>\n<td>48.1</td>\n<td>°C/W</td>\n</tr>\n<tr>\n<td>R<sub>θJB</sub> Junction-to-board thermal resistance</td>\n<td>48</td>\n<td>53.4</td>\n<td>34.8</td>\n<td>50.1</td>\n<td>°C/W</td>\n</tr>\n<tr>\n<td>ψ<sub>JT</sub> Junction-to-top characterization parameter</td>\n<td>18.6</td>\n<td>16.5</td>\n<td>26.9</td>\n<td>16.7</td>\n<td>°C/W</td>\n</tr>\n<tr>\n<td>ψ<sub>JB</sub> Junction-to-board characterization parameter</td>\n<td>47.8</td>\n<td>52.9</td>\n<td>34.7</td>\n<td>49.8</td>\n<td>°C/W</td>\n</tr>\n</tbody>\n</table>",
+        "bbox": {
+          "page": 1,
+          "x": 0.08549019607843138,
+          "y": 0.1096969696969697,
+          "width": 0.8254901960784313,
+          "height": 0.13303030303030303
+        }
+      },
+      {
+        "text": "(1) For more information about traditional and new thermal metrics, see the Semiconductor and IC Package Thermal Metrics application\nreport.",
+        "bbox": {
+          "page": 1,
+          "x": 0.08509803921568627,
+          "y": 0.24848484848484848,
+          "width": 0.8043137254901961,
+          "height": 0.024242424242424242
+        }
+      },
+      {
+        "text": "(2) The package thermal impedance is calculated in accordance with JESD 51-7.",
+        "bbox": {
+          "page": 1,
+          "x": 0.08431372549019608,
+          "y": 0.2724242424242424,
+          "width": 0.48705882352941177,
+          "height": 0.013333333333333334
+        }
+      },
+      {
+        "text": "6.5 Electrical Characteristics: SNx400",
+        "bbox": {
+          "page": 1,
+          "x": 0.08392156862745098,
+          "y": 0.29757575757575755,
+          "width": 0.3396078431372549,
+          "height": 0.016363636363636365
+        }
+      },
+      {
+        "text": "over operating free-air temperature range (unless otherwise noted)",
+        "bbox": {
+          "page": 1,
+          "x": 0.08509803921568627,
+          "y": 0.3181818181818182,
+          "width": 0.4403921568627451,
+          "height": 0.014242424242424242
+        }
+      },
+      {
+        "text": "<table>\n<thead>\n<tr>\n<th>PARAMETER</th>\n<th colspan=\"3\">TEST CONDITIONS</th>\n<th>MIN</th>\n<th>TYP</th>\n<th>MAX</th>\n<th>UNIT</th>\n</tr>\n</thead>\n<tbody>\n<tr>\n<td>V<sub>IK</sub></td>\n<td colspan=\"3\">V<sub>CC</sub> = MIN and I<sub>I</sub> = −12 mA</td>\n<td></td>\n<td></td>\n<td>−1.5</td>\n<td>V</td>\n</tr>\n<tr>\n<td>V<sub>OH</sub></td>\n<td colspan=\"3\">V<sub>CC</sub> = MIN, V<sub>IL</sub> = 0.8 V, and I<sub>OH</sub> = −0.4 mA</td>\n<td>2.4</td>\n<td>3.4</td>\n<td></td>\n<td>V</td>\n</tr>\n<tr>\n<td>V<sub>OL</sub></td>\n<td colspan=\"3\">V<sub>CC</sub> = MIN, V<sub>IH</sub> = 2 V, and I<sub>OL</sub> = 16 mA</td>\n<td></td>\n<td>0.2</td>\n<td>0.4</td>\n<td>V</td>\n</tr>\n<tr>\n<td>I<sub>I</sub></td>\n<td colspan=\"3\">V<sub>CC</sub> = MAX and V<sub>I</sub> = 5.5 V</td>\n<td></td>\n<td></td>\n<td>1</td>\n<td>mA</td>\n</tr>\n<tr>\n<td>I<sub>IH</sub></td>\n<td colspan=\"3\">V<sub>CC</sub> = MAX and V<sub>I</sub> = 2.4 V</td>\n<td></td>\n<td></td>\n<td>40</td>\n<td>µA</td>\n</tr>\n<tr>\n<td>I<sub>IL</sub></td>\n<td colspan=\"3\">V<sub>CC</sub> = MAX and V<sub>I</sub> = 0.4 V</td>\n<td></td>\n<td></td>\n<td>−1.6</td>\n<td>mA</td>\n</tr>\n<tr>\n<td rowspan=\"2\">I<sub>OS</sub></td>\n<td rowspan=\"2\">V<sub>CC</sub> = MAX</td>\n<td>SN5400</td>\n<td>−20</td>\n<td>−55</td>\n<td rowspan=\"2\">mA</td>\n</tr>\n<tr>\n<td>SN7400</td>\n<td>−18</td>\n<td>−55</td>\n</tr>\n<tr>\n<td>I<sub>CCH</sub></td>\n<td colspan=\"3\">V<sub>CC</sub> = MAX and V<sub>I</sub> = 0 V</td>\n<td></td>\n<td>4</td>\n<td>8</td>\n<td>mA</td>\n</tr>\n<tr>\n<td>I<sub>CCL</sub></td>\n<td colspan=\"3\">V<sub>CC</sub> = MAX and V<sub>I</sub> = 4.5 V</td>\n<td></td>\n<td>12</td>\n<td>22</td>\n<td>mA</td>\n</tr>\n</tbody>\n</table>",
+        "bbox": {
+          "page": 1,
+          "x": 0.08549019607843138,
+          "y": 0.33,
+          "width": 0.8262745098039216,
+          "height": 0.18878787878787878
+        }
+      },
+      {
+        "text": "6.6 Electrical Characteristics: SNx4LS00",
+        "bbox": {
+          "page": 1,
+          "x": 0.08431372549019608,
+          "y": 0.5333333333333333,
+          "width": 0.36196078431372547,
+          "height": 0.016363636363636365
+        }
+      },
+      {
+        "text": "over operating free-air temperature range (unless otherwise noted)",
+        "bbox": {
+          "page": 1,
+          "x": 0.08509803921568627,
+          "y": 0.553939393939394,
+          "width": 0.4411764705882353,
+          "height": 0.013939393939393939
+        }
+      },
+      {
+        "text": "<table>\n<thead>\n<tr>\n<th>PARAMETER</th>\n<th colspan=\"3\">TEST CONDITIONS</th>\n<th>MIN</th>\n<th>TYP</th>\n<th>MAX</th>\n<th>UNIT</th>\n</tr>\n</thead>\n<tbody>\n<tr>\n<td>V<sub>IK</sub></td>\n<td colspan=\"3\">V<sub>CC</sub> = MIN and I<sub>I</sub> = −18 mA</td>\n<td></td>\n<td></td>\n<td>−1.5</td>\n<td>V</td>\n</tr>\n<tr>\n<td>V<sub>OH</sub></td>\n<td colspan=\"3\">V<sub>CC</sub> = MIN, V<sub>IL</sub> = MAX, and I<sub>OH</sub> = −0.4 mA</td>\n<td>2.5</td>\n<td>3.4</td>\n<td></td>\n<td>V</td>\n</tr>\n<tr>\n<td rowspan=\"2\">V<sub>OL</sub></td>\n<td rowspan=\"2\">V<sub>CC</sub> = MIN and V<sub>IH</sub> = 2 V</td>\n<td>I<sub>OL</sub> = 4 mA</td>\n<td></td>\n<td>0.25</td>\n<td>0.4</td>\n<td rowspan=\"2\">V</td>\n</tr>\n<tr>\n<td>I<sub>OL</sub> = 8 mA (SN74LS00)</td>\n<td></td>\n<td>0.35</td>\n<td>0.5</td>\n</tr>\n<tr>\n<td>I<sub>I</sub></td>\n<td colspan=\"3\">V<sub>CC</sub> = MAX and V<sub>I</sub> = 7 V</td>\n<td></td>\n<td></td>\n<td>0.1</td>\n<td>mA</td>\n</tr>\n<tr>\n<td>I<sub>IH</sub></td>\n<td colspan=\"3\">V<sub>CC</sub> = MAX and V<sub>I</sub> = 2.7 V</td>\n<td></td>\n<td></td>\n<td>20</td>\n<td>µA</td>\n</tr>\n<tr>\n<td>I<sub>IL</sub></td>\n<td colspan=\"3\">V<sub>CC</sub> = MAX and V<sub>I</sub> = 0.4 V</td>\n<td></td>\n<td></td>\n<td>−0.4</td>\n<td>mA</td>\n</tr>\n<tr>\n<td>I<sub>OS</sub></td>\n<td colspan=\"3\">V<sub>CC</sub> = MAX</td>\n<td>−20</td>\n<td></td>\n<td>−100</td>\n<td>mA</td>\n</tr>\n<tr>\n<td>I<sub>CCH</sub></td>\n<td colspan=\"3\">V<sub>CC</sub> = MAX and V<sub>I</sub> = 0 V</td>\n<td></td>\n<td>0.8</td>\n<td>1.6</td>\n<td>mA</td>\n</tr>\n<tr>\n<td>I<sub>CCL</sub></td>\n<td colspan=\"3\">V<sub>CC</sub> = MAX and V<sub>I</sub> = 4.5 V</td>\n<td></td>\n<td>2.4</td>\n<td>4.4</td>\n<td>mA</td>\n</tr>\n</tbody>\n</table>",
+        "bbox": {
+          "page": 1,
+          "x": 0.08549019607843138,
+          "y": 0.566969696969697,
+          "width": 0.8270588235294117,
+          "height": 0.18636363636363637
+        }
+      },
+      {
+        "text": "6.7 Electrical Characteristics: SNx4S00",
+        "bbox": {
+          "page": 1,
+          "x": 0.08431372549019608,
+          "y": 0.7684848484848484,
+          "width": 0.3509803921568627,
+          "height": 0.015454545454545455
+        }
+      },
+      {
+        "text": "over operating free-air temperature range (unless otherwise noted)",
+        "bbox": {
+          "page": 1,
+          "x": 0.08509803921568627,
+          "y": 0.7890909090909091,
+          "width": 0.4411764705882353,
+          "height": 0.014242424242424242
+        }
+      },
+      {
+        "text": "<table>\n<thead>\n<tr>\n<th>PARAMETER</th>\n<th>TEST CONDITIONS</th>\n<th>MIN</th>\n<th>TYP</th>\n<th>MAX</th>\n<th>UNIT</th>\n</tr>\n</thead>\n<tbody>\n<tr>\n<td>V_IK</td>\n<td>V_CC = MIN and I_I = –18 mA</td>\n<td colspan=\"3\">–1.2</td>\n<td>V</td>\n</tr>\n<tr>\n<td>V_OH</td>\n<td>V_CC = MIN, V_IL = 0.8 V, and I_OH = –1 mA</td>\n<td>2.5</td>\n<td>3.4</td>\n<td></td>\n<td>V</td>\n</tr>\n<tr>\n<td>V_OL</td>\n<td>V_CC = MIN, V_IH = 2 V, and I_OL = 20 mA</td>\n<td colspan=\"3\">0.5</td>\n<td>V</td>\n</tr>\n<tr>\n<td>I_I</td>\n<td>V_CC = MAX and V_I = 5.5 V</td>\n<td colspan=\"3\">1</td>\n<td>mA</td>\n</tr>\n<tr>\n<td>I_IH</td>\n<td>V_CC = MAX and V_I = 2.7 V</td>\n<td colspan=\"3\">50</td>\n<td>µA</td>\n</tr>\n<tr>\n<td>I_IL</td>\n<td>V_CC = MAX and V_I = 0.5 V</td>\n<td colspan=\"3\">–2</td>\n<td>mA</td>\n</tr>\n</tbody>\n</table>",
+        "bbox": {
+          "page": 1,
+          "x": 0.08588235294117647,
+          "y": 0.8027272727272727,
+          "width": 0.8262745098039216,
+          "height": 0.1203030303030303
+        }
+      },
+      {
+        "text": "6",
+        "bbox": {
+          "page": 1,
+          "x": 0.08627450980392157,
+          "y": 0.9345454545454546,
+          "width": 0.011764705882352941,
+          "height": 0.01090909090909091
+        }
+      },
+      {
+        "text": "Submit Documentation Feedback",
+        "bbox": {
+          "page": 1,
+          "x": 0.13529411764705881,
+          "y": 0.933939393939394,
+          "width": 0.1992156862745098,
+          "height": 0.012424242424242424
+        }
+      },
+      {
+        "text": "Copyright © 1983–2017, Texas Instruments Incorporated",
+        "bbox": {
+          "page": 1,
+          "x": 0.6203921568627451,
+          "y": 0.9342424242424242,
+          "width": 0.29294117647058826,
+          "height": 0.012424242424242424
+        }
+      },
+      {
+        "text": "Product Folder Links: SN5400 SN54LS00 SN54S00 SN7400 SN74LS00 SN74S00",
+        "bbox": {
+          "page": 1,
+          "x": 0.24862745098039216,
+          "y": 0.9524242424242424,
+          "width": 0.5031372549019608,
+          "height": 0.012727272727272728
+        }
+      }
+    ]
+  },
+  {
+    "page": 2,
+    "text": "TEXAS\nINSTRUMENTS\nSN5400, SN54LS00, SN54S00\nSN7400, SN74LS00, SN74S00\nwww.ti.com\nSDLS025D – DECEMBER 1983 – REVISED MAY 2017\nElectrical Characteristics: SNx4S00 (continued)\nover operating free-air temperature range (unless otherwise noted)\n<table>\n<thead>\n<tr>\n<th>PARAMETER</th>\n<th>TEST CONDITIONS</th>\n<th>MIN</th>\n<th>TYP</th>\n<th>MAX</th>\n<th>UNIT</th>\n</tr>\n</thead>\n<tbody>\n<tr>\n<td>I_OS</td>\n<td>V_CC = MAX</td>\n<td>–40</td>\n<td></td>\n<td>–100</td>\n<td>mA</td>\n</tr>\n<tr>\n<td>I_CCH</td>\n<td>V_CC = MAX and V_I = 0 V</td>\n<td></td>\n<td>10</td>\n<td>16</td>\n<td>mA</td>\n</tr>\n<tr>\n<td>I_CCL</td>\n<td>V_CC = MAX and V_I = 4.5 V</td>\n<td></td>\n<td>20</td>\n<td>36</td>\n<td>mA</td>\n</tr>\n</tbody>\n</table>\n6.8 Switching Characteristics: SNx400\n$ V_CC = 5   V, T_A = 25^∘C, and over operating free-air temperature range (unless otherwise noted). See Figure 2. $\n<table>\n<thead>\n<tr>\n<th>PARAMETER</th>\n<th>FROM (INPUT)</th>\n<th>TO (OUTPUT)</th>\n<th>TEST CONDITIONS</th>\n<th>MIN TYP MAX</th>\n<th>UNIT</th>\n</tr>\n</thead>\n<tbody>\n<tr>\n<td>t_{PLH}</td>\n<td rowspan=\"2\">A or B</td>\n<td rowspan=\"2\">Y</td>\n<td rowspan=\"2\">R_L = 400 \\Omega and C_L = 15 pF</td>\n<td>11 22</td>\n<td rowspan=\"2\">ns</td>\n</tr>\n<tr>\n<td>t_{PHL}</td>\n<td>7 15</td>\n</tr>\n</tbody>\n</table>\n6.9 Switching Characteristics: SNx4LS00\n$ V_CC = 5   V, T_A = 25^∘C, and over operating free-air temperature range (unless otherwise noted). See Figure 2. $\n<table>\n<thead>\n<tr>\n<th>PARAMETER</th>\n<th>FROM (INPUT)</th>\n<th>TO (OUTPUT)</th>\n<th>TEST CONDITIONS</th>\n<th>MIN</th>\n<th>TYP</th>\n<th>MAX</th>\n<th>UNIT</th>\n</tr>\n</thead>\n<tbody>\n<tr>\n<td>t_{PLH}</td>\n<td rowspan=\"2\">A or B</td>\n<td rowspan=\"2\">Y</td>\n<td rowspan=\"2\">R_L = 2 k\\Omega and C_L = 15 pF</td>\n<td colspan=\"3\">9 15</td>\n<td rowspan=\"2\">ns</td>\n</tr>\n<tr>\n<td>t_{PHL}</td>\n<td>10</td>\n<td>15</td>\n</tr>\n</tbody>\n</table>\n6.10 Switching Characteristics: SNx4S00\n$ V_CC = 5 V, T_A = 25^∘C, and over operating free-air temperature range (unless otherwise noted). See Figure 2. $\n<table>\n<thead>\n<tr>\n<th>PARAMETER</th>\n<th>FROM (INPUT)</th>\n<th>TO (OUTPUT)</th>\n<th>TEST CONDITIONS</th>\n<th>MIN</th>\n<th>TYP</th>\n<th>MAX</th>\n<th>UNIT</th>\n</tr>\n</thead>\n<tbody>\n<tr>\n<td rowspan=\"2\">t<sub>PLH</sub></td>\n<td rowspan=\"2\">A or B</td>\n<td rowspan=\"2\">Y</td>\n<td>R<sub>L</sub> = 280 &Omega; and C<sub>L</sub> = 15 pF</td>\n<td>3</td>\n<td>4.5</td>\n<td rowspan=\"6\">ns</td>\n</tr>\n<tr>\n<td>R<sub>L</sub> = 280 &Omega; and C<sub>L</sub> = 50 pF</td>\n<td>4.5</td>\n</tr>\n<tr>\n<td rowspan=\"2\">t<sub>PHL</sub></td>\n<td rowspan=\"2\">A or B</td>\n<td rowspan=\"2\">Y</td>\n<td>R<sub>L</sub> = 280 &Omega; and C<sub>L</sub> = 15 pF</td>\n<td>3</td>\n<td>5</td>\n</tr>\n<tr>\n<td>R<sub>L</sub> = 280 &Omega; and C<sub>L</sub> = 50 pF</td>\n<td>5</td>\n</tr>\n</tbody>\n</table>\nCopyright © 1983–2017, Texas Instruments Incorporated\nSubmit Documentation Feedback\nProduct Folder Links: SN5400 SN54LS00 SN54S00 SN7400 SN74LS00 SN74S00\n7",
+    "regions": [
+      {
+        "text": "TEXAS\nINSTRUMENTS",
+        "bbox": {
+          "page": 2,
+          "x": 0.08784313725490196,
+          "y": 0.021212121212121213,
+          "width": 0.15490196078431373,
+          "height": 0.031212121212121212
+        }
+      },
+      {
+        "text": "SN5400, SN54LS00, SN54S00\nSN7400, SN74LS00, SN74S00",
+        "bbox": {
+          "page": 2,
+          "x": 0.6858823529411765,
+          "y": 0.037575757575757575,
+          "width": 0.22627450980392158,
+          "height": 0.02666666666666667
+        }
+      },
+      {
+        "text": "www.ti.com",
+        "bbox": {
+          "page": 2,
+          "x": 0.08588235294117647,
+          "y": 0.06848484848484848,
+          "width": 0.07372549019607844,
+          "height": 0.01090909090909091
+        }
+      },
+      {
+        "text": "SDLS025D – DECEMBER 1983 – REVISED MAY 2017",
+        "bbox": {
+          "page": 2,
+          "x": 0.6309803921568627,
+          "y": 0.06696969696969697,
+          "width": 0.2819607843137255,
+          "height": 0.011515151515151515
+        }
+      },
+      {
+        "text": "Electrical Characteristics: SNx4S00 (continued)",
+        "bbox": {
+          "page": 2,
+          "x": 0.08470588235294117,
+          "y": 0.09303030303030303,
+          "width": 0.4117647058823529,
+          "height": 0.01575757575757576
+        }
+      },
+      {
+        "text": "over operating free-air temperature range (unless otherwise noted)",
+        "bbox": {
+          "page": 2,
+          "x": 0.08588235294117647,
+          "y": 0.11848484848484848,
+          "width": 0.4392156862745098,
+          "height": 0.013333333333333334
+        }
+      },
+      {
+        "text": "<table>\n<thead>\n<tr>\n<th>PARAMETER</th>\n<th>TEST CONDITIONS</th>\n<th>MIN</th>\n<th>TYP</th>\n<th>MAX</th>\n<th>UNIT</th>\n</tr>\n</thead>\n<tbody>\n<tr>\n<td>I_OS</td>\n<td>V_CC = MAX</td>\n<td>–40</td>\n<td></td>\n<td>–100</td>\n<td>mA</td>\n</tr>\n<tr>\n<td>I_CCH</td>\n<td>V_CC = MAX and V_I = 0 V</td>\n<td></td>\n<td>10</td>\n<td>16</td>\n<td>mA</td>\n</tr>\n<tr>\n<td>I_CCL</td>\n<td>V_CC = MAX and V_I = 4.5 V</td>\n<td></td>\n<td>20</td>\n<td>36</td>\n<td>mA</td>\n</tr>\n</tbody>\n</table>",
+        "bbox": {
+          "page": 2,
+          "x": 0.08627450980392157,
+          "y": 0.13242424242424242,
+          "width": 0.8254901960784313,
+          "height": 0.06787878787878789
+        }
+      },
+      {
+        "text": "6.8 Switching Characteristics: SNx400",
+        "bbox": {
+          "page": 2,
+          "x": 0.08470588235294117,
+          "y": 0.21666666666666667,
+          "width": 0.34431372549019607,
+          "height": 0.015151515151515152
+        }
+      },
+      {
+        "text": "$ V_CC = 5   V, T_A = 25^∘C, and over operating free-air temperature range (unless otherwise noted). See Figure 2. $",
+        "bbox": {
+          "page": 2,
+          "x": 0.08470588235294117,
+          "y": 0.23636363636363636,
+          "width": 0.7137254901960784,
+          "height": 0.014545454545454545
+        }
+      },
+      {
+        "text": "<table>\n<thead>\n<tr>\n<th>PARAMETER</th>\n<th>FROM (INPUT)</th>\n<th>TO (OUTPUT)</th>\n<th>TEST CONDITIONS</th>\n<th>MIN TYP MAX</th>\n<th>UNIT</th>\n</tr>\n</thead>\n<tbody>\n<tr>\n<td>t_{PLH}</td>\n<td rowspan=\"2\">A or B</td>\n<td rowspan=\"2\">Y</td>\n<td rowspan=\"2\">R_L = 400 \\Omega and C_L = 15 pF</td>\n<td>11 22</td>\n<td rowspan=\"2\">ns</td>\n</tr>\n<tr>\n<td>t_{PHL}</td>\n<td>7 15</td>\n</tr>\n</tbody>\n</table>",
+        "bbox": {
+          "page": 2,
+          "x": 0.08627450980392157,
+          "y": 0.2515151515151515,
+          "width": 0.8254901960784313,
+          "height": 0.05090909090909091
+        }
+      },
+      {
+        "text": "6.9 Switching Characteristics: SNx4LS00",
+        "bbox": {
+          "page": 2,
+          "x": 0.08392156862745098,
+          "y": 0.32575757575757575,
+          "width": 0.36745098039215685,
+          "height": 0.01575757575757576
+        }
+      },
+      {
+        "text": "$ V_CC = 5   V, T_A = 25^∘C, and over operating free-air temperature range (unless otherwise noted). See Figure 2. $",
+        "bbox": {
+          "page": 2,
+          "x": 0.08470588235294117,
+          "y": 0.34575757575757576,
+          "width": 0.7141176470588235,
+          "height": 0.014848484848484849
+        }
+      },
+      {
+        "text": "<table>\n<thead>\n<tr>\n<th>PARAMETER</th>\n<th>FROM (INPUT)</th>\n<th>TO (OUTPUT)</th>\n<th>TEST CONDITIONS</th>\n<th>MIN</th>\n<th>TYP</th>\n<th>MAX</th>\n<th>UNIT</th>\n</tr>\n</thead>\n<tbody>\n<tr>\n<td>t_{PLH}</td>\n<td rowspan=\"2\">A or B</td>\n<td rowspan=\"2\">Y</td>\n<td rowspan=\"2\">R_L = 2 k\\Omega and C_L = 15 pF</td>\n<td colspan=\"3\">9 15</td>\n<td rowspan=\"2\">ns</td>\n</tr>\n<tr>\n<td>t_{PHL}</td>\n<td>10</td>\n<td>15</td>\n</tr>\n</tbody>\n</table>",
+        "bbox": {
+          "page": 2,
+          "x": 0.08549019607843138,
+          "y": 0.3606060606060606,
+          "width": 0.8243137254901961,
+          "height": 0.05121212121212121
+        }
+      },
+      {
+        "text": "6.10 Switching Characteristics: SNx4S00",
+        "bbox": {
+          "page": 2,
+          "x": 0.08431372549019608,
+          "y": 0.4354545454545454,
+          "width": 0.36549019607843136,
+          "height": 0.015151515151515152
+        }
+      },
+      {
+        "text": "$ V_CC = 5 V, T_A = 25^∘C, and over operating free-air temperature range (unless otherwise noted). See Figure 2. $",
+        "bbox": {
+          "page": 2,
+          "x": 0.08549019607843138,
+          "y": 0.45545454545454545,
+          "width": 0.7129411764705882,
+          "height": 0.014242424242424242
+        }
+      },
+      {
+        "text": "<table>\n<thead>\n<tr>\n<th>PARAMETER</th>\n<th>FROM (INPUT)</th>\n<th>TO (OUTPUT)</th>\n<th>TEST CONDITIONS</th>\n<th>MIN</th>\n<th>TYP</th>\n<th>MAX</th>\n<th>UNIT</th>\n</tr>\n</thead>\n<tbody>\n<tr>\n<td rowspan=\"2\">t<sub>PLH</sub></td>\n<td rowspan=\"2\">A or B</td>\n<td rowspan=\"2\">Y</td>\n<td>R<sub>L</sub> = 280 &Omega; and C<sub>L</sub> = 15 pF</td>\n<td>3</td>\n<td>4.5</td>\n<td rowspan=\"6\">ns</td>\n</tr>\n<tr>\n<td>R<sub>L</sub> = 280 &Omega; and C<sub>L</sub> = 50 pF</td>\n<td>4.5</td>\n</tr>\n<tr>\n<td rowspan=\"2\">t<sub>PHL</sub></td>\n<td rowspan=\"2\">A or B</td>\n<td rowspan=\"2\">Y</td>\n<td>R<sub>L</sub> = 280 &Omega; and C<sub>L</sub> = 15 pF</td>\n<td>3</td>\n<td>5</td>\n</tr>\n<tr>\n<td>R<sub>L</sub> = 280 &Omega; and C<sub>L</sub> = 50 pF</td>\n<td>5</td>\n</tr>\n</tbody>\n</table>",
+        "bbox": {
+          "page": 2,
+          "x": 0.08627450980392157,
+          "y": 0.4703030303030303,
+          "width": 0.8243137254901961,
+          "height": 0.08393939393939394
+        }
+      },
+      {
+        "text": "Copyright © 1983–2017, Texas Instruments Incorporated",
+        "bbox": {
+          "page": 2,
+          "x": 0.08588235294117647,
+          "y": 0.9345454545454546,
+          "width": 0.2945098039215686,
+          "height": 0.012121212121212121
+        }
+      },
+      {
+        "text": "Submit Documentation Feedback",
+        "bbox": {
+          "page": 2,
+          "x": 0.668235294117647,
+          "y": 0.9336363636363636,
+          "width": 0.19686274509803922,
+          "height": 0.012424242424242424
+        }
+      },
+      {
+        "text": "Product Folder Links: SN5400 SN54LS00 SN54S00 SN7400 SN74LS00 SN74S00",
+        "bbox": {
+          "page": 2,
+          "x": 0.24862745098039216,
+          "y": 0.9524242424242424,
+          "width": 0.5035294117647059,
+          "height": 0.012727272727272728
+        }
+      },
+      {
+        "text": "7",
+        "bbox": {
+          "page": 2,
+          "x": 0.9027450980392157,
+          "y": 0.9336363636363636,
+          "width": 0.010588235294117647,
+          "height": 0.012424242424242424
+        }
+      }
+    ]
+  }
+]

@@ -1,0 +1,35 @@
+{
+  "name": "copperhead-intake",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Datasheet intake and constraint verdict surface: typed, source-cited, confidence-scored facts from datasheets, evaluated against a board constraint registry.",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "^0.3.220",
+    "@anthropic-ai/sdk": "^0.115.0",
+    "fflate": "^0.8.3",
+    "next": "^16.2.12",
+    "pdfjs-dist": "^6.1.200",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8",
+    "sarvamai": "^1.1.7"
+  },
+  "devDependencies": {
+    "@types/node": "^26.1.1",
+    "@types/react": "^19.2.17",
+    "@types/react-dom": "^19.2.3",
+    "tsx": "^4.23.1",
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.10"
+  }
+}
