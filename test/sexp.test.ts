@@ -164,6 +164,11 @@ describe('sexp parser', () => {
       // power:GND must be excluded; only Device:C (C1) is a real component
       const syms = await listSymbols(legacySch);
       expect(syms.map((s) => s.ref)).toEqual(['C1']);
+    } finally {
+      await cleanup();
+    }
+  });
+
   it('connects a mid-segment label and does not rename its net to PWR_FLAG', async () => {
     const { repo, cleanup } = await tempFixtureRepo();
     try {
