@@ -10,6 +10,10 @@
 
 **Cursor for circuit boards.** An AI agent that designs, documents, and validates real PCBs from a prompt, working directly on existing KiCad repositories.
 
+<p align="center">
+  <img src="https://raw.githubusercontent.com/chouhanindustries/copperhead/main/assets/copperhead.gif" alt="copperhead agent shell demo" width="720">
+</p>
+
 > **Status: early.** Phase 1 is implemented and the CLI runs. The [technical specification](openspec/specs/SPEC.md) is the source of truth; expect the surface to move before 1.0.
 
 Full documentation lives at [docs.copperhead.sh](https://docs.copperhead.sh).
@@ -25,23 +29,47 @@ It reads and edits real `.kicad_sch` / `.kicad_pcb` files (s-expression text), m
 
 ## Install
 
+> [!TIP]
+> **Most users should not install copperhead by hand.** If you are working inside an AI coding assistant (like Claude Code, Cursor, or Codex), you can install and configure copperhead automatically for your repository by pasting this single line:
+> ```text
+> Install copperhead for this repo using https://raw.githubusercontent.com/chouhanindustries/copperhead/main/agent-install-prompt.md
+> ```
+
+If you prefer to install manually:
+
 ```bash
 npm install -g copperhead   # or: npx copperhead check
 ```
+
+### Bootstrap script (macOS and Linux)
+
+Prefer a one-command setup? [`install.sh`](install.sh) checks the prerequisites below, installs copperhead (globally via npm, or built from source when run inside a checkout), and verifies the result with `copperhead doctor`:
+
+```bash
+./install.sh                # interactive: asks before installing anything
+./install.sh --yes          # assume yes to the install prompts
+./install.sh --check-only   # report what is missing, install nothing
+```
+
+The script is conservative by design: it never runs `sudo` and never edits shell config; whenever it cannot act safely on its own it prints the exact command for you to run instead. Rerunning is safe: on a ready machine it installs nothing and exits 0.
 
 ### Requirements
 
 - Node.js ≥ 20
 - [KiCad](https://www.kicad.org/) ≥ 8 with `kicad-cli` on PATH
-- One model backend: a locally installed, ChatGPT-authenticated [Codex CLI](https://learn.chatgpt.com/docs/codex/cli), or `ANTHROPIC_API_KEY`/`OPENAI_API_KEY` in the environment. `check` never calls an LLM.
+- One model backend: a locally installed, ChatGPT-authenticated [Codex CLI](https://learn.chatgpt.com/docs/codex/cli), a logged-in [Cursor Agent CLI](#saved-login-cursor-agent) (`agent login`), logged-in Claude Code (see [Saved login](#saved-login-claude-code)), or `ANTHROPIC_API_KEY`/`OPENAI_API_KEY` in the environment. `check` never calls an LLM.
 
 ## Quick start
 
 In an existing KiCad repository:
 
 ```bash
-export ANTHROPIC_API_KEY=...   # or OPENAI_API_KEY
+export ANTHROPIC_API_KEY=...   # or OPENAI_API_KEY; optional: with no key, `copperhead` offers a model picker
 copperhead init                # scaffold docs/ from the schematic; idempotent
+copperhead                     # interactive agent shell (Claude Code–style REPL)
+copperhead demo --tour          # what the agent does (no LLM)
+copperhead demo --model cursor # full USB-C breakout create pipeline
+# or one-shot:
 copperhead do "add reverse-polarity protection on VIN"
 copperhead check               # ERC + DRC + doc drift; no LLM, CI-safe
 ```
@@ -88,16 +116,44 @@ Spec-gated in, verification-gated out: the design can't drift from its requireme
 copperhead init [--path hardware/]   # scaffold docs/ from an existing schematic; idempotent
 copperhead do "<change request>"     # the core loop: propose, edit, verify, propagate, commit
 copperhead check                     # ERC + DRC + doc-drift + spec validation; no LLM calls (alias: verify)
+copperhead doctor                    # env preflight: kicad-cli, git, node, provider credential; no LLM/network
 copperhead sync [--dry-run]          # verify the whole design state, resolve drift
 copperhead create --brief brief.md   # brief → full output package
 copperhead export bom --supplier jlcpcb   # supplier-ready ordering file from docs/BOM.md
 ```
 
-Global flags: `--repo <path>` (default: cwd) and `--json` for machine-readable output. `do` and `create` take `--model` and `--interactive`; `do` also takes `--dry-run`, `--max-turns`, and `--allow-dirty`.
+Global flags: `--repo <path>` (default: cwd) and `--json` for machine-readable output. `--model` is available on `do`, `sync`, `create`, and `doctor`; `--interactive` only on `do` and `create`; `do` also takes `--dry-run`, `--max-turns`, and `--allow-dirty`.
+
+`--model` accepts `gpt-5` (OpenAI), `claude` / `claude-<id>` (Anthropic API), `claude-code` / `claude-code:<id>` (Claude Code, saved login), `cursor` / `cursor:<id>` (Cursor Agent CLI, saved login), and `codex` / `codex:<id>` (Codex CLI, saved login). Routing is by prefix; `claude-code` is matched before the `claude` prefix.
+
+### Saved login (Cursor Agent)
+
+`--model cursor` drives the Cursor Agent CLI with your saved login from `agent login`, so you can run copperhead with **no `OPENAI_API_KEY` or `ANTHROPIC_API_KEY`**. Cursor is used purely as a reasoning backend in plan mode: the agent loop, safety gates, and every file edit stay inside copperhead.
+
+```bash
+agent status
+copperhead do "add reverse-polarity protection on VIN" --model cursor
+```
+
+If `agent` is not on `PATH`, set `COPPERHEAD_CURSOR_PATH` to the CLI binary (also available as `cursor-agent` on some installs). Cursor's JSON schema does not report token usage, so run summaries show 0 tokens for `--model cursor`.
+
+### Saved login (Claude Code)
+
+`--model claude-code` drives Claude Code through the [Claude Agent SDK](https://code.claude.com/docs/en/agent-sdk) and reuses your saved login (the `CLAUDE_CODE_OAUTH_TOKEN` from `claude setup-token`), so a Claude subscription runs copperhead with **no `ANTHROPIC_API_KEY`**. Claude Code is used purely as a reasoning backend: the agent loop, its safety gates, and every file edit stay inside copperhead, identical to the other providers.
+
+```bash
+claude setup-token                          # while logged into Claude Code
+export CLAUDE_CODE_OAUTH_TOKEN=...           # the token setup-token printed
+copperhead do "add reverse-polarity protection on VIN" --model claude-code
+```
+
+The Claude Agent SDK ships as an optional dependency, so a normal install pulls it in. copperhead loads it only when you select `claude-code`, and prints an actionable error if it is missing (for example after `npm install --omit=optional`), telling you to add it with `npm i @anthropic-ai/claude-agent-sdk`.
+
+copperhead never reads, copies, or logs the credential; the CLI owns authentication. A missing dependency or an unauthenticated install fails with an actionable message and touches nothing.
 
 ### Ordering (`export bom`)
 
-`copperhead export bom` turns the drift-checked `docs/BOM.md` into a file a supplier accepts without hand-editing. It is deterministic, LLM-free, and network-free — safe anywhere `check` is, and it reads `BOM.md` (never the schematic) so it inherits the drift guarantee; it refuses to export while `BOM.md` disagrees with the schematic.
+`copperhead export bom` turns the drift-checked `docs/BOM.md` into a file a supplier accepts without hand-editing. It is deterministic, LLM-free, and network-free, safe anywhere `check` is, and it reads `BOM.md` (never the schematic) so it inherits the drift guarantee; it refuses to export while `BOM.md` disagrees with the schematic.
 
 ```bash
 copperhead export bom --supplier jlcpcb                 # JLCPCB assembly CSV → outputs/jlcpcb-bom.csv
@@ -106,10 +162,10 @@ copperhead export bom --supplier mouser --spares 15     # Mouser cart CSV, 15% s
 ```
 
 - `--supplier <jlcpcb|digikey|mouser>` (required). JLCPCB gets the assembly-service format (Comment, Designator, Footprint, LCSC Part #, designators grouped per line); DigiKey and Mouser get cart-upload lists (MPN, manufacturer, quantity, customer reference).
-- `--boards <n>` (default 1) and `--spares <percent>` (default 10) set the order quantity: `ceil(perBoardCount × boards × (1 + spares/100))`, raised to `perBoardCount × boards + 2` for passive lines (footprints `R_`/`C_`/`L_`) — losing a couple of 0402s to tweezers is the norm, and percentage-only spares under-order low-count passives.
+- `--boards <n>` (default 1) and `--spares <percent>` (default 10) set the order quantity: `ceil(perBoardCount × boards × (1 + spares/100))`, raised to `perBoardCount × boards + 2` for passive lines (footprints `R_`/`C_`/`L_`); losing a couple of 0402s to tweezers is the norm, and percentage-only spares under-order low-count passives.
 - Rows without an MPN, and rows still flagged `UNVERIFIED`, are excluded from the supplier file and named in a warnings footer on stderr. `--include-unverified` opts the flagged-but-MPN'd rows back in (it never includes MPN-less rows). `create` stage 6 also emits `outputs/jlcpcb-bom.csv` automatically.
 
-`docs/BOM.md` may carry optional `Manufacturer` and `LCSC` columns beyond the base `Refdes | Value | Footprint | MPN | Rationale` — the exporter matches columns by header, so add them when you want them populated in supplier files; `init` scaffolds the base columns only. Only *appending* columns is safe: keep `Refdes | Value | Footprint` first and in that order, because the drift check (`check`/`sync`, which the exporter gates on) reads those three by position — reordering them makes it compare the wrong cells and refuse the export with a spurious drift message.
+`docs/BOM.md` may carry optional `Manufacturer` and `LCSC` columns beyond the base `Refdes | Value | Footprint | MPN | Rationale`; the exporter matches columns by header, so add them when you want them populated in supplier files; `init` scaffolds the base columns only. Only *appending* columns is safe: keep `Refdes | Value | Footprint` first and in that order, because the drift check (`check`/`sync`, which the exporter gates on) reads those three by position, so reordering them makes it compare the wrong cells and refuse the export with a spurious drift message.
 
 Nothing is a black box: decisions land in an append-only `docs/DECISIONS.md`, every run writes a human-readable summary next to its transcript, and a per-run `docs/CHANGELOG.md` narrates the design history.
 

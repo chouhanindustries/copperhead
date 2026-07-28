@@ -1,13 +1,16 @@
 #!/usr/bin/env node
 import { Command } from 'commander';
-import path from 'node:path';
 import { createRequire } from 'node:module';
 import { createInterface } from 'node:readline/promises';
-import { loadConfig, resolveModel } from './config.js';
+import { loadConfig, resolveModel, type ModelSource } from './config.js';
+import { pickModel } from './util/select.js';
 import { runInit, InitError } from './memory/scaffold.js';
 import { runCheck } from './commands/check.js';
+import { runDoctor, formatDoctor } from './commands/doctor.js';
 import { syncVerify, syncResolve, formatSyncReport } from './commands/sync.js';
 import { runCreate } from './commands/create.js';
+import { runDemo, demoTourText } from './commands/demo.js';
+import { runRepl } from './commands/repl.js';
 import {
   runExportBom,
   parseSupplier,
@@ -20,6 +23,7 @@ import { runAgentLoop, type BudgetExhaustedStats } from './agent/loop.js';
 import { makeRenderer } from './agent/render.js';
 import { kicadCliVersion } from './kicad/cli.js';
 import { loadEnvFile } from './util/env.js';
+import { budgetExtraTurns, budgetPromptText, parseMaxTurns, repoOf } from './util/cli-args.js';
 
 // Read .env from the working directory before any command resolves a model or a
 // provider. Loaded here rather than per-command so `check` behaves identically,
@@ -35,8 +39,6 @@ const { version } = createRequire(import.meta.url)('../package.json') as { versi
 
 const program = new Command();
 
-const repoOf = (opts: { repo?: string }): string => path.resolve(opts.repo ?? process.cwd());
-
 async function confirmTty(question: string): Promise<boolean> {
   const rl = createInterface({ input: process.stdin, output: process.stdout });
   const answer = await rl.question(`${question} [y/N] `);
@@ -50,14 +52,8 @@ async function confirmTty(question: string): Promise<boolean> {
  */
 function budgetContinuePrompt(): ((stats: BudgetExhaustedStats) => Promise<number>) | undefined {
   if (!process.stdin.isTTY || !process.stdout.isTTY) return undefined;
-  return async (stats) => {
-    // ceil of the ORIGINAL budget (design D1), so repeat extensions offer the
-    // same increment instead of escalating with the extended turn count.
-    const extra = Math.ceil(stats.maxTurns / 2);
-    const k = (n: number) => `${(n / 1000).toFixed(1)}k`;
-    const q = `Turn budget exhausted (${stats.turnsUsed} turns, ${k(stats.tokensIn)} in / ${k(stats.tokensOut)} out, ${stats.filesTouched.length} file(s) touched, ${stats.openObligations} open obligation(s)). Continue with ${extra} more turns?`;
-    return (await confirmTty(q)) ? extra : 0;
-  };
+  return async (stats) =>
+    (await confirmTty(budgetPromptText(stats))) ? budgetExtraTurns(stats) : 0;
 }
 
 program
@@ -70,6 +66,68 @@ program
 
 const rendererOf = () =>
   makeRenderer({ json: Boolean(program.opts().json), plain: Boolean(program.opts().plain) });
+
+program
+  .command('repl', { isDefault: true })
+  .description('interactive agent shell (default when no command is given)')
+  .argument('[request...]', 'optional first change request before the prompt loop')
+  .option('--model <model>', 'codex | cursor | gpt-5 | claude | claude-code (or a provider-specific model id)')
+  .option('--max-turns <n>', 'turn budget per request')
+  .option('--allow-dirty', 'let turns run on a dirty working tree')
+  .option('--interactive', 'pause for approval after each proposal validates')
+  .action(
+    async (
+      requestParts: string[],
+      opts: { model?: string; maxTurns?: string; allowDirty?: boolean; interactive?: boolean },
+    ) => {
+      const repo = repoOf(program.opts());
+      if (program.opts().json) {
+        console.error(
+          'copperhead: --json is not supported with the interactive shell. Use `copperhead do "<request>" --json`.',
+        );
+        process.exit(1);
+      }
+      try {
+        const kicadVer = await kicadCliVersion();
+        const config = await loadConfig(repo);
+        const renderer = rendererOf();
+        let model: string;
+        let source: ModelSource;
+        try {
+          ({ model, source } = resolveModel(opts.model, config));
+        } catch (err) {
+          // No model anywhere (flag, COPPERHEAD_MODEL, config, .env keys):
+          // on a TTY, offer an interactive pick instead of refusing to start.
+          if (!process.stdin.isTTY || !process.stdout.isTTY) throw err;
+          console.log('No model configured for this session, pick one:');
+          const chosen = await pickModel();
+          if (!chosen) throw err;
+          model = chosen;
+          source = 'picker';
+        }
+        const continuePrompt = budgetContinuePrompt();
+        const seed = requestParts.length ? requestParts.join(' ') : undefined;
+        const res = await runRepl({
+          repoRoot: repo,
+          model,
+          modelSource: source,
+          version,
+          kicadCliVersion: kicadVer,
+          ...(opts.maxTurns ? { maxTurns: parseMaxTurns(opts.maxTurns) } : {}),
+          allowDirty: opts.allowDirty ?? false,
+          interactive: opts.interactive ?? false,
+          ...(seed ? { seed } : {}),
+          confirm: confirmTty,
+          ...(continuePrompt ? { onBudgetExhausted: continuePrompt } : {}),
+          renderer,
+        });
+        process.exit(res.ok ? 0 : 1);
+      } catch (err) {
+        console.error((err as Error).message);
+        process.exit(1);
+      }
+    },
+  );
 
 program
   .command('init')
@@ -122,10 +180,29 @@ program
   .action(checkAction);
 
 program
+  .command('doctor')
+  .description('env preflight: kicad-cli, git, node, and the model provider credential; no LLM, no network')
+  .option('--model <model>', 'model to check the provider credential for (default: resolved like a run)')
+  .action(async (opts: { model?: string }) => {
+    const repo = repoOf(program.opts());
+    // Unlike other commands, doctor never gates on kicad-cli being present:
+    // runDoctor probes it and reports a failure instead of throwing, so a user
+    // with a missing tool still gets the full report.
+    const report = await runDoctor({ repoRoot: repo, model: opts.model });
+    if (program.opts().json) console.log(JSON.stringify(report, null, 2));
+    else {
+      const color = process.stdout.isTTY === true && !process.env.NO_COLOR;
+      // || not ??: some non-interactive ptys report columns as 0.
+      for (const line of formatDoctor(report, process.stdout.columns || 80, color)) console.log(line);
+    }
+    process.exit(report.ok ? 0 : 1);
+  });
+
+program
   .command('do')
   .description('the core loop: propose, edit, verify, propagate, commit')
   .argument('<request>', 'the change request in natural language')
-  .option('--model <model>', 'codex | gpt-5 | claude (or a provider-specific model id)')
+  .option('--model <model>', 'codex | cursor | gpt-5 | claude | claude-code (or a provider-specific model id)')
   .option('--max-turns <n>', 'turn budget for this run')
   .option('--allow-dirty', 'allow a dirty tree (snapshot via git stash create)')
   .option('--dry-run', 'propose the diff, write nothing')
@@ -145,7 +222,7 @@ program
           repoRoot: repo,
           request,
           model,
-          ...(opts.maxTurns ? { maxTurns: parseInt(opts.maxTurns, 10) } : {}),
+          ...(opts.maxTurns ? { maxTurns: parseMaxTurns(opts.maxTurns) } : {}),
           allowDirty: opts.allowDirty ?? false,
           dryRun: opts.dryRun ?? false,
           interactive: opts.interactive ?? false,
@@ -200,10 +277,57 @@ program
   });
 
 program
+  .command('demo')
+  .description('tour of what copperhead does, or run the USB-C breakout create pipeline')
+  .option('--model <model>', 'codex | cursor | gpt-5 | claude | claude-code (or a provider-specific model id)')
+  .option('--interactive', 're-enable the human gates (spec approval, pre-export)')
+  .option('--dir <path>', 'demo repo directory (default: demo-runs/usb-c-breakout)')
+  .option('--tour', 'print the overview only; do not run the pipeline')
+  .action(async (opts: { model?: string; interactive?: boolean; dir?: string; tour?: boolean }) => {
+    if (opts.tour) {
+      const { setColorEnabled } = await import('./agent/theme.js');
+      if (program.opts().json) {
+        // --json is a contract, not a suggestion: a script that passes it
+        // unconditionally must never get prose back. Plain lines, no SGR.
+        setColorEnabled(false);
+        console.log(JSON.stringify({ tour: demoTourText().split('\n') }, null, 2));
+        process.exit(0);
+      }
+      // Color on for attended TTY tours even without a renderer.
+      setColorEnabled(Boolean(process.stdout.isTTY) && !program.opts().plain && !process.env.NO_COLOR);
+      console.log(demoTourText());
+      process.exit(0);
+    }
+    try {
+      const kicadVer = await kicadCliVersion();
+      // Resolve model from the caller's cwd config / env / flag; the demo repo
+      // is scaffolded next and typically has no model of its own yet.
+      const config = await loadConfig(repoOf(program.opts()));
+      const { model, source } = resolveModel(opts.model, config);
+      const continuePrompt = budgetContinuePrompt();
+      const res = await runDemo({
+        model,
+        modelSource: source,
+        version,
+        kicadCliVersion: kicadVer,
+        interactive: opts.interactive ?? false,
+        ...(opts.dir ? { demoDir: opts.dir } : {}),
+        ...(continuePrompt ? { onBudgetExhausted: continuePrompt } : {}),
+        log: (s) => console.log(s),
+        renderer: rendererOf(),
+      });
+      process.exit(res.ok ? 0 : 1);
+    } catch (err) {
+      console.error((err as Error).message);
+      process.exit(1);
+    }
+  });
+
+program
   .command('create')
   .description('Mode A: full pipeline from a product brief to the output package')
   .requiredOption('--brief <file>', 'product brief (markdown)')
-  .option('--model <model>', 'codex | gpt-5 | claude')
+  .option('--model <model>', 'codex | cursor | gpt-5 | claude | claude-code (or a provider-specific model id)')
   .option('--interactive', 're-enable the human gates (spec approval, pre-export)')
   .action(async (opts: { brief: string; model?: string; interactive?: boolean }) => {
     const repo = repoOf(program.opts());

@@ -9,7 +9,7 @@ import type { CopperheadConfig, ModelSource } from '../config.js';
 
 /** Caller-supplied run identity: facts the loop cannot probe for itself. */
 export interface RunMetaInput {
-  command?: 'do' | 'create' | 'sync';
+  command?: 'do' | 'create' | 'sync' | 'repl';
   modelSource?: ModelSource;
   version?: string;
   kicadCliVersion?: string;
@@ -29,7 +29,7 @@ export interface RunMeta {
   modelSource: ModelSource | null;
   runId: string;
   startedAt: string;
-  command: 'do' | 'create' | 'sync' | null;
+  command: 'do' | 'create' | 'sync' | 'repl' | null;
   interactive: boolean;
   stage: { name: string; index: number; total: number } | null;
   brief: { path: string; sha256: string } | null;
@@ -150,14 +150,14 @@ export async function collectRunMeta(opts: CollectRunMetaOptions): Promise<RunMe
 
 const unk = (v: string | null | undefined): string => v ?? 'unknown';
 
-/** ≤ 2 lines, printed before the first turn (AC-8.4). */
+/** ≤ 2 lines, printed before the first turn (AC-8.4).
+ *  Live header stays compact: install path / platform live in summary.md only. */
 export function renderCliHeader(meta: RunMeta): string[] {
   const v = meta.versions;
   const line1 = [
-    `copperhead v${unk(v.copperhead)}${v.installPath ? ` (${v.installPath})` : ''}`,
+    `copperhead v${unk(v.copperhead)}`,
     `kicad-cli ${unk(v.kicadCli)}`,
     `node ${v.node}`,
-    v.platform,
   ].join(' · ');
 
   const repoState =
@@ -167,12 +167,11 @@ export function renderCliHeader(meta: RunMeta): string[] {
         ? `dirty(${meta.git.uncommittedFiles})`
         : 'clean';
   const line2 = [
-    `run ${meta.runId}`,
     unk(meta.command),
     ...(meta.stage ? [`stage ${meta.stage.name} (${meta.stage.index}/${meta.stage.total})`] : []),
     `model ${meta.model} (${meta.provider}, via ${unk(meta.modelSource)})`,
     `turns ≤${meta.config.maxTurns}`,
-    `repo ${unk(meta.git.branch)}@${meta.git.commit?.slice(0, 7) ?? 'unknown'} ${repoState}`,
+    `${unk(meta.git.branch)}@${meta.git.commit?.slice(0, 7) ?? 'unknown'} ${repoState}`,
   ].join(' · ');
   return [line1, line2];
 }

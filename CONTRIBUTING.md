@@ -2,6 +2,8 @@
 
 Thanks for your interest in contributing. This document covers the practical setup and the one piece of paperwork we require.
 
+By taking part you agree to our [Code of Conduct](.github/CODE_OF_CONDUCT.md). Found a security problem? Do not open an issue: follow the [security policy](.github/SECURITY.md) instead.
+
 ## Development setup
 
 Requirements: Node.js >= 20 and, for the KiCad integration paths, a local `kicad-cli` on your PATH.

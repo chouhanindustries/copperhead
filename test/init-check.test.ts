@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { readFile, writeFile, rm, mkdtemp } from 'node:fs/promises';
+import { readFile, writeFile, rm, mkdtemp, mkdir } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -137,12 +137,12 @@ describe('copperhead check (AC-2)', () => {
       await execa('git', ['add', '-A'], { cwd: repo });
       // the hook runs `copperhead check`; expose the dev build via PATH shim
       const bin = path.join(repo, '.testbin');
-      await execa('mkdir', ['-p', bin]);
+      await mkdir(bin, { recursive: true });
       const cliPath = path.resolve('dist', 'cli.js');
       await writeFile(path.join(bin, 'copperhead'), `#!/bin/sh\nexec node ${cliPath} "$@"\n`, { mode: 0o755 });
       const result = await execa('git', ['commit', '-q', '-m', 'desync'], {
         cwd: repo,
-        env: { ...process.env, PATH: `${bin}:${process.env.PATH}` },
+        env: { ...process.env, PATH: `${bin}${path.delimiter}${process.env.PATH}` },
         reject: false,
       });
       expect(result.exitCode).not.toBe(0);

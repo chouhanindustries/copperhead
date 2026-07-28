@@ -2,7 +2,7 @@
 title: Simple demo
 description: Run the create pipeline end to end against the USB-C power breakout brief.
 sidebar:
-  order: 3
+  order: 4
 ---
 
 The quickest end-to-end demo uses the USB-C power breakout brief. It is intentionally small: one connector, passives, a power LED, and output protection.
@@ -12,10 +12,12 @@ The quickest end-to-end demo uses the USB-C power breakout brief. It is intentio
 From the copperhead checkout:
 
 ```bash
+copperhead demo --model cursor
+# or from a checkout:
 npm run demo:simple
 ```
 
-The script creates or resumes a git repo at `demo-runs/usb-c-breakout/`, initializes it if needed, creates a baseline commit for copperhead's rollback snapshots, and runs the create pipeline against:
+Both create or resume a git repo at `demo-runs/usb-c-breakout/`, initialize it if needed, create a baseline commit for copperhead's rollback snapshots, and run the create pipeline against:
 
 ```text
 examples/simple/usb-c-breakout.md
