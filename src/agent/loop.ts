@@ -81,6 +81,11 @@ export interface RunResult {
   cacheHits: number;
 }
 
+/** True for the `compat` / `compat:<id>` route, the only one that reads baseURL. */
+function isCompatModel(model: string): boolean {
+  return model === 'compat' || model.startsWith('compat:');
+}
+
 export async function makeProvider(
   model: string,
   sessionResume = false,
@@ -90,7 +95,7 @@ export async function makeProvider(
   // Ollama). An explicit `compat` prefix is the opt-in: nothing else
   // consults baseURL, so a stray COPPERHEAD_BASE_URL cannot redirect a keyed
   // `gpt-5` run to a third party (design D2).
-  if (model === 'compat' || model.startsWith('compat:')) {
+  if (isCompatModel(model)) {
     const compatModel = model.startsWith('compat:') ? model.slice('compat:'.length) : undefined;
     if (compatModel === '') {
       throw new Error('compat model override cannot be empty; use "compat:<model-id>"');
@@ -263,13 +268,18 @@ async function runWithMemory(
   // it only when the env flag is set AND config.llmCache is disabled — the same
   // condition under which we skip the CachingProvider wrap below.
   const sessionResume = process.env.COPPERHEAD_CC_SESSION_RESUME === '1' && !config.llmCache;
-  let provider =
-    opts.provider ?? (await makeProvider(opts.model, sessionResume, resolveCompatSettings(config)));
+  const compat = resolveCompatSettings(config);
+  let provider = opts.provider ?? (await makeProvider(opts.model, sessionResume, compat));
   // Cache every turn's response so a retried/restarted stage replays what it
   // already paid for instead of re-calling the model (repo-scoped, cross-run).
   // Skip an injected provider (tests drive scripted providers directly).
   if (config.llmCache && !opts.provider) {
-    provider = new CachingProvider(provider, path.join(repoRoot, CONFIG_DIR, 'llm-cache'), log, opts.model);
+    // Scope the key to the endpoint for a `compat:` route, where the model id
+    // no longer identifies the backend on its own. Only for that route: nothing
+    // else consults baseURL, so a stray COPPERHEAD_BASE_URL must not split a
+    // `gpt-5` run's cache either (design D2, same isolation as makeProvider).
+    const endpoint = isCompatModel(opts.model) ? compat.baseURL : undefined;
+    provider = new CachingProvider(provider, path.join(repoRoot, CONFIG_DIR, 'llm-cache'), log, opts.model, endpoint);
   }
   providers.add(provider);
   // Held separately from `provider` (which is reassigned on failover) so the

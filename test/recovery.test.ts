@@ -3,6 +3,7 @@ import path from 'node:path';
 import { tmpdir } from 'node:os';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { withTimeout, TurnTimeoutError, parseDiagnosis, diagnoseStageFailure } from '../src/agent/recovery.js';
 import { CachingProvider } from '../src/agent/response-cache.js';
 import type { Msg, Provider, ToolSchema, Turn } from '../src/agent/types.js';
@@ -124,6 +125,61 @@ describe('CachingProvider', () => {
       await cached.chat(msgs, tools);
       await cached.chat([{ role: 'user', content: 'different' }], tools);
       expect(inner.calls).toBe(2);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('misses when the same compat model id is served by a different endpoint — regression', async () => {
+    // One model id can be served by several hosts (`llama-3.1-8b-instant` is on
+    // both Groq and OpenRouter), so the id alone stopped identifying the
+    // backend once the compat route existed. Keying on it alone meant that
+    // re-running with a different COPPERHEAD_BASE_URL replayed the previous
+    // endpoint's turns and never called the new one: a backend comparison that
+    // silently compares one backend with itself.
+    const dir = await mkdtemp(path.join(tmpdir(), 'copperhead-cache-'));
+    try {
+      const inner = new CountingProvider((n) => turn(`answer ${n}`));
+      const model = 'compat:llama-3.1-8b-instant';
+      const groq = new CachingProvider(inner, dir, undefined, model, 'https://api.groq.com/openai/v1');
+      const openrouter = new CachingProvider(inner, dir, undefined, model, 'https://openrouter.ai/api/v1');
+      await groq.chat(msgs, tools);
+      await openrouter.chat(msgs, tools);
+      expect(inner.calls).toBe(2);
+      expect(openrouter.cacheHits).toBe(0);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('still replays when the endpoint is unchanged', async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), 'copperhead-cache-'));
+    try {
+      const inner = new CountingProvider((n) => turn(`answer ${n}`));
+      const model = 'compat:llama-3.1-8b-instant';
+      const endpoint = 'https://api.groq.com/openai/v1';
+      await new CachingProvider(inner, dir, undefined, model, endpoint).chat(msgs, tools);
+      const second = new CachingProvider(inner, dir, undefined, model, endpoint);
+      await second.chat(msgs, tools);
+      expect(inner.calls).toBe(1); // the endpoint is part of the key, not a cache-buster
+      expect(second.cacheHits).toBe(1);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('keys a non-compat run exactly as before, so caches already on disk keep replaying', async () => {
+    // The endpoint field is omitted from the hashed object (not nulled) when
+    // there is no endpoint, so a `gpt-5` run's key is byte-identical to the one
+    // it produced before the field existed.
+    const dir = await mkdtemp(path.join(tmpdir(), 'copperhead-cache-'));
+    try {
+      const inner = new CountingProvider((n) => turn(`answer ${n}`));
+      await new CachingProvider(inner, dir, undefined, 'gpt-5').chat(msgs, tools);
+      const key = createHash('sha256')
+        .update(JSON.stringify({ model: 'gpt-5', messages: msgs, tools: [] }))
+        .digest('hex');
+      expect(existsSync(path.join(dir, `${key}.json`))).toBe(true);
     } finally {
       await rm(dir, { recursive: true, force: true });
     }

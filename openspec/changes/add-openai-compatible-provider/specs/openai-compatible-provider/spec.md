@@ -43,3 +43,16 @@ The provider SHALL require a credential only when the resolved endpoint is remot
 - **GIVEN** `COPPERHEAD_BASE_URL` is exported in the environment
 - **WHEN** a run starts with `--model gpt-5`
 - **THEN** the provider targets the default OpenAI endpoint, because only the `compat` route consults `baseURL`
+
+### Requirement: The response cache is scoped to the endpoint
+The on-disk response cache SHALL include the resolved endpoint in its key for a `compat:<model-id>` run. A model id no longer identifies which backend answered, because one id can be served by several hosts, so keying on the id alone would replay one endpoint's turns for another. The endpoint SHALL NOT enter the key for any other route, since nothing else consults `baseURL`.
+
+#### Scenario: switching endpoints re-runs instead of replaying
+- **GIVEN** a `compat:<model-id>` run has been cached against one endpoint
+- **WHEN** the same request is re-run with the same model id but a different `baseURL`
+- **THEN** the cache misses and the new endpoint is actually called
+
+#### Scenario: a non-compat run's existing cache still replays
+- **GIVEN** a `gpt-5` run whose turns were cached before the endpoint entered the key
+- **WHEN** the same request is re-run
+- **THEN** the cached turns still replay, because the key omits the endpoint entirely for non-`compat` routes

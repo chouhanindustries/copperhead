@@ -16,8 +16,10 @@ import type { ChatOpts, Msg, Provider, ToolSchema, Turn } from './types.js';
  *
  * Best-effort by construction: a cache miss or any I/O error falls through to the
  * live provider, and a hit reports zero token usage (the real spend was zero).
- * The key is a content hash of the full message history and the advertised tool
- * names, so any change to the conversation or available tools is a fresh call.
+ * The key is a content hash of the full message history, the advertised tool
+ * names, and everything that decides which model actually answered (the model id
+ * and, for a `compat:` route, the endpoint), so any change to the conversation,
+ * the available tools, or the backend is a fresh call.
  */
 export class CachingProvider implements Provider {
   readonly name: string;
@@ -36,13 +38,32 @@ export class CachingProvider implements Provider {
      *  in the cache key so switching model on the same repo does not replay the
      *  other model's cached turns (F6). Falls back to the provider family name. */
     private readonly modelId?: string,
+    /** The compatible endpoint this run points at, for a `compat:` route only.
+     *  A model id alone stopped identifying the backend once one id could be
+     *  served by several hosts (`llama-3.1-8b-instant` is on both Groq and
+     *  OpenRouter): without this, switching `COPPERHEAD_BASE_URL` and re-running
+     *  replays the previous endpoint's turns instead of calling the new one, so
+     *  a backend comparison silently compares one backend with itself.
+     *  Undefined for every other route, since nothing else consults `baseURL`
+     *  (design D2). */
+    private readonly endpoint?: string,
   ) {
     this.name = inner.name;
   }
 
   private keyFor(messages: Msg[], tools: ToolSchema[]): string {
     return createHash('sha256')
-      .update(JSON.stringify({ model: this.modelId ?? this.name, messages, tools: tools.map((t) => t.name) }))
+      .update(
+        JSON.stringify({
+          model: this.modelId ?? this.name,
+          // Omitted rather than nulled when there is no endpoint: the key stays
+          // byte-identical to what a non-compat run produced before this field
+          // existed, so caches already on disk keep replaying.
+          ...(this.endpoint ? { endpoint: this.endpoint } : {}),
+          messages,
+          tools: tools.map((t) => t.name),
+        }),
+      )
       .digest('hex');
   }
 
