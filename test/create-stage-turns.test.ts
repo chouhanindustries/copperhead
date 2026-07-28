@@ -13,7 +13,7 @@ const mockRunAgentLoop = vi.hoisted(() =>
     const docs = pathMod.join(opts.repoRoot, 'docs');
     await mkdirFs(docs, { recursive: true });
     if (opts.request.includes('spec-seed'))
-      await writeFileFs(pathMod.join(docs, 'SPEC.md'), '# spec\n\n## Budgets\n', 'utf8');
+      await writeFileFs(pathMod.join(docs, 'SPEC.md'), '# spec\n\n## Budgets\n\n- sleep_current_uA: 25\n', 'utf8');
     if (opts.request.includes('architecture'))
       await writeFileFs(pathMod.join(docs, 'SUBSYSTEMS.md'), '# subsystems\n', 'utf8');
     if (opts.request.includes('part-selection'))
@@ -104,6 +104,7 @@ describe('create pipeline per-stage turn budgets (AC-15.18, AC-15.19)', () => {
       expect(out).toContain('stopped at stage 4/8 (schematic)');
       expect(out).toMatch(/copperhead .*create --brief ['"]?[^'"]*brief\.md['"]? --model gpt-5/);
       expect(out).toContain('resumes at schematic');
+      expect(out).toContain('the schematic must contain symbols, be drift-clean, and pass ERC');
 
       // 5.2: a cost table with a row per stage that ran and a TOTAL.
       expect(out).toContain('Per-stage cost summary');

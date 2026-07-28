@@ -5,7 +5,7 @@ import { createHash } from 'node:crypto';
 import { loadConfig, resolveCompatSettings } from '../config.js';
 import { bootstrapKicadProject } from '../kicad/bootstrap.js';
 import { exportSvg, runErc } from '../kicad/cli.js';
-import { listSymbols } from '../kicad/sexp.js';
+import { children, isList, listSymbols, parseSexp } from '../kicad/sexp.js';
 import { isDirty, commitAll, changedFiles } from '../util/git.js';
 import type { CompatSettings, CopperheadConfig } from '../config.js';
 import { checkDrift } from '../memory/drift.js';
@@ -30,111 +30,123 @@ import { emitCreateJlcpcbBom } from './export.js';
  */
 interface Stage {
   name: string;
-  /** true when repo state shows the stage is already done (resume support). */
+  /** true when repo state satisfies the stage contract (resume and acceptance). */
   isComplete: (repoRoot: string, docs: string) => Promise<boolean> | boolean;
+  /** Included in recovery logs when an agent reports success without the artifact. */
+  contract: string;
   prompt: (brief: string) => string;
 }
 
 const docExists = (repoRoot: string, rel: string) => existsSync(path.join(repoRoot, rel));
 
-async function docHasContent(repoRoot: string, rel: string, marker: string): Promise<boolean> {
+async function docHasFilledSection(repoRoot: string, rel: string, heading: string): Promise<boolean> {
   const p = path.join(repoRoot, rel);
   if (!existsSync(p)) return false;
-  return (await readFile(p, 'utf8')).includes(marker);
-}
-
-// Heading-aware variant of docHasContent: matches any Markdown heading whose
-// text contains `word`, ignoring heading level, leading numbering ("3."), and
-// trailing decoration ("Budgets and constraints (...)"). Stage prompts don't
-// dictate exact heading text, so a literal `.includes('## Budgets')` produces
-// false negatives against valid docs titled e.g. "## 3. Budgets and constraints".
-async function docHasHeading(repoRoot: string, rel: string, word: string): Promise<boolean> {
-  const p = path.join(repoRoot, rel);
-  if (!existsSync(p)) return false;
-  const re = new RegExp(`^#{1,6}\\s.*\\b${word}\\b`, 'im');
-  return re.test(await readFile(p, 'utf8'));
+  const lines = (await readFile(p, 'utf8')).split('\n');
+  const headingAt = lines.findIndex((line) => line.trim() === heading);
+  if (headingAt < 0) return false;
+  const nextHeading = lines.slice(headingAt + 1).findIndex((line) => /^##\s/.test(line));
+  const section = lines.slice(headingAt + 1, nextHeading < 0 ? undefined : headingAt + 1 + nextHeading).join('\n');
+  return section.replace(/<!--[\s\S]*?-->/g, '').trim().length > 0;
 }
 
 export const STAGES: Stage[] = [
   {
     name: 'spec-seed',
-    isComplete: (root, docs) => docHasHeading(root, path.join(docs, 'SPEC.md'), 'Budgets?'),
+    isComplete: (root, docs) => docHasFilledSection(root, path.join(docs, 'SPEC.md'), '## Budgets'),
+    contract: 'docs/SPEC.md must contain a filled ## Budgets section',
     prompt: (brief) =>
       `Stage 1 of the create pipeline: seed the requirements. From the product brief below, write docs/SPEC.md (what the device is, top-level constraints and budgets). Every budget you state must also be recorded with record_constraint. Anything the brief does not state: propose a sensible default and flag it ASSUMED. If an openspec/ workspace exists, also seed openspec/specs/ with per-capability requirements using Given/When/Then scenarios.\n\nBrief:\n${brief}`,
   },
   {
     name: 'architecture',
     isComplete: (root, docs) => docExists(root, path.join(docs, 'SUBSYSTEMS.md')),
+    contract: 'docs/SUBSYSTEMS.md must exist',
     prompt: () =>
       'Stage 2: architecture. Write docs/SUBSYSTEMS.md: the block diagram in prose, one section per subsystem (power, MCU, connectivity, UI, ...), with the reasoning and key values for each. Respect every budget in SPEC.md.',
   },
   {
     name: 'part-selection',
     isComplete: (root, docs) => docExists(root, path.join(docs, 'BOM.md')),
+    contract: 'docs/BOM.md must exist',
     prompt: () =>
       'Stage 3: part selection. Write docs/BOM.md with the fixed table format (| Refdes | Value | Footprint | MPN | Rationale |). Every MPN you introduce is flagged UNVERIFIED with a datasheet-verifiable justification. Check leakage/quiescent current of every part against the power budget. Run check_drift before finishing.',
   },
   {
     name: 'schematic',
     isComplete: async (root) => {
-      const config = await loadConfig(root);
-      if (!config.schematic) return false;
-      const p = path.join(root, config.schematic);
-      if (!existsSync(p)) return false;
-      // Mere file existence is not completion: bootstrapping leaves a blank
-      // sheet on disk (a hand-scaffolded project, or the future fix for #19),
-      // and skipping this stage over a blank sheet cascades — layout and
-      // outputs then run against nothing. The stage's contract is "build the
-      // schematic from BOM.md", so completion means symbols exist AND the
-      // BOM/PINOUT tables agree with them (drift-clean); anything less keeps
-      // the stage active on the next resume so partial capture continues.
-      if (!(await listSymbols(p)).length) return false;
-      if ((await checkDrift(root, config.docs, config.schematic)).length !== 0) return false;
-      // ERC-clean is part of "done" (F2 / verification-gated-out on the resume
-      // path). Symbols + drift-clean can still hold on a schematic with
-      // unconnected pins — e.g. a run hard-killed mid-capture after BOM/PINOUT
-      // went clean but before ERC passed. Without this check, resume would treat
-      // it as complete and commitResumedStage would commit an ERC-failing
-      // schematic, advancing the pipeline against unverified work. Returning
-      // false here keeps the stage active so it re-runs, fixes ERC, and commits
-      // through the normal finish gate.
-      return (await runErc(p)).ok;
+      try {
+        const config = await loadConfig(root);
+        if (!config.schematic) return false;
+        const p = path.join(root, config.schematic);
+        if (!existsSync(p)) return false;
+        // Mere file existence is not completion: bootstrapping leaves a blank
+        // sheet on disk (a hand-scaffolded project, or the future fix for #19),
+        // and skipping this stage over a blank sheet cascades — layout and
+        // outputs then run against nothing. The stage's contract is "build the
+        // schematic from BOM.md", so completion means symbols exist AND the
+        // BOM/PINOUT tables agree with them (drift-clean); anything less keeps
+        // the stage active on the next resume so partial capture continues.
+        if (!(await listSymbols(p)).length) return false;
+        if ((await checkDrift(root, config.docs, config.schematic)).length !== 0) return false;
+        // ERC-clean is part of "done" (F2 / verification-gated-out on the resume
+        // path). Symbols + drift-clean can still hold on a schematic with
+        // unconnected pins — e.g. a run hard-killed mid-capture after BOM/PINOUT
+        // went clean but before ERC passed. Without this check, resume would treat
+        // it as complete and commitResumedStage would commit an ERC-failing
+        // schematic, advancing the pipeline against unverified work. Returning
+        // false here keeps the stage active so it re-runs, fixes ERC, and commits
+        // through the normal finish gate.
+        return (await runErc(p)).ok;
+      } catch {
+        return false;
+      }
     },
+    contract: 'the schematic must contain symbols, be drift-clean, and pass ERC',
     prompt: () =>
       'Stage 4: schematic. An empty KiCad project has already been scaffolded and wired into .copperhead/config.json (an empty schematic and a blank board with a default outline). Populate the existing schematic with edit_file — write_file refuses KiCad files, so add lib_symbols, symbols, and connectivity by anchored edits into the file that already exists. Work ONE part at a time, not in large blocks: add a symbol (its lib_symbols entry if new, then its placement), run run_erc, fix any violation, then move to the next part — small incremental edits keep a geometry or grid slip local instead of forcing a full-block rewrite. When you add a lib_symbols entry, use the exact canonical KiCad lib_id (e.g. Device:R, Connector:USB_C_Receptacle_USB2.0_16P) and reproduce the real part\'s pins faithfully — never invent pin numbers, names, or electrical types. Once symbols are placed, run verify_symbols and reconcile every divergence it reports (a wrong lib_id or pin set passes ERC but is still wrong); if it flags a renamed symbol, adopt the real name it suggests. Build subsystem by subsystem from BOM.md and SUBSYSTEMS.md. Same net names and refdes everywhere. Two KiCad rules the pipeline has repeatedly tripped on: (1) a net label placed on a pin only NAMES the net — it is NOT an electrical connection unless a wire actually reaches the pin; ERC will report the pin unconnected until you draw the wire. (2) Place every symbol origin and every wire endpoint on the 1.27mm (50mil) grid; an off-grid pin silently fails to connect and costs turns to diagnose. Update PINOUT.md as you assign pins; check the strapping table first.',
   },
   {
     name: 'layout-draft',
     isComplete: async (root, docs) => {
-      // The LAYOUT.md marker alone is not enough: `copperhead init` scaffolds
-      // LAYOUT.md with the literal "## Draft quality" heading, so an init-ed
-      // repo would skip this stage without a single footprint placed. Require
-      // a board with at least one footprint on it as well.
-      const config = await loadConfig(root);
-      if (!config.board) return false;
-      const p = path.join(root, config.board);
-      if (!existsSync(p)) return false;
-      if (!(await readFile(p, 'utf8')).includes('(footprint')) return false;
-      return docHasContent(root, path.join(docs, 'LAYOUT.md'), '## Draft quality');
+      try {
+        // The LAYOUT.md marker alone is not enough: `copperhead init` scaffolds
+        // LAYOUT.md with the literal "## Draft quality" heading, so an init-ed
+        // repo would skip this stage without a single footprint placed. Require
+        // a board with at least one footprint on it as well.
+        const config = await loadConfig(root);
+        if (!config.board) return false;
+        const p = path.join(root, config.board);
+        if (!existsSync(p)) return false;
+        const board = parseSexp(await readFile(p, 'utf8'))[0];
+        if (!board || !isList(board) || children(board, 'footprint').length === 0) return false;
+        return docHasFilledSection(root, path.join(docs, 'LAYOUT.md'), '## Draft quality');
+      } catch {
+        return false;
+      }
     },
+    contract: 'the board must contain a footprint and LAYOUT.md must contain a filled ## Draft quality section',
     prompt: () =>
       'Stage 5: first-draft layout. Rule-driven placement written as real coordinates: connectors on edges, decoupling at IC pins, ESD at connectors, keepouts honored. Route power and short critical nets; leave the rest as ratsnest. Every routed net must pass run_drc. Then write the "## Draft quality" section in LAYOUT.md: exactly what is fine and what a human or specialist tool should redo. Non-optimal is acceptable; unlabeled non-optimal is not.',
   },
   {
     name: 'outputs',
     isComplete: (root) => existsSync(path.join(root, 'outputs')),
+    contract: 'the outputs/ directory must exist',
     prompt: () =>
       'Stage 6: outputs package. Export into outputs/: gerbers+drill (JLC profile), DXF and STEP outline, SVG renders (export_svg), and an ordering BOM.csv generated from BOM.md (refdes, MPN, qty). Every export must succeed.',
   },
   {
     name: 'firmware',
     isComplete: (root) => existsSync(path.join(root, 'firmware')),
+    contract: 'the firmware/ directory must exist',
     prompt: () =>
       'Stage 7: firmware scaffold. Generate firmware/ for the chosen MCU HAL: pins.h generated from PINOUT.md (single source of truth), driver stubs, and one working happy path. If the vendor toolchain is available, the build must pass; if not, note "not compiled here" explicitly in DEVPLAN.md.',
   },
   {
     name: 'devplan',
     isComplete: (root, docs) => docExists(root, path.join(docs, 'DEVPLAN.md')),
+    contract: 'docs/DEVPLAN.md must exist',
     prompt: () =>
       'Stage 8: DEVPLAN.md. Write docs/DEVPLAN.md: bring-up steps in order, test points and what to meter first, risk list, and the prototype order plan.',
   },
@@ -665,7 +677,7 @@ export async function runCreate(opts: CreateOptions): Promise<{ ok: boolean; com
         res.outcome !== 'success'
           ? `the run ended as "${res.outcome}" (${res.exitPath})`
           : !(await stage.isComplete(opts.repoRoot, config.docs))
-            ? 'the run finished but the stage completion contract is not met — no usable artifact was produced'
+            ? `the run finished but the stage completion contract is not met: ${stage.contract}`
             : null;
       if (!failure) {
         stageDone = true;
