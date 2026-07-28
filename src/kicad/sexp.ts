@@ -224,7 +224,17 @@ function symbolsOf(sheet: ParsedSheet): { node: SexpNode[]; sym: SchematicSymbol
   return out;
 }
 
-const isPowerSymbol = (libId: string): boolean => libId.startsWith('power:');
+/** Default power symbol library prefix, as used by KiCad's built-in power library. */
+const DEFAULT_POWER_PREFIXES: string[] = ['power:'];
+/** Additional user-defined power symbol library prefixes. */
+let extraPowerPrefixes: string[] = [];
+
+export function addPowerSymbolPrefixes(prefixes: string[]): void {
+  extraPowerPrefixes.push(...prefixes);
+}
+
+const isPowerSymbol = (libId: string): boolean =>
+  DEFAULT_POWER_PREFIXES.concat(extraPowerPrefixes).some((p) => libId.startsWith(p));
 
 /** One row per real component (power symbols excluded), across all sheets. */
 export async function listSymbols(rootSch: string): Promise<SchematicSymbol[]> {

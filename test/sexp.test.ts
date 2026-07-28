@@ -39,3 +39,87 @@ describe('sexp parser', () => {
     expect(r2.get('2')).toBe('GND');
   });
 });
+import { describe, it, expect } from 'vitest';
+import { addPowerSymbolPrefixes } from '../src/kicad/sexp.js';
+import { listSymbols } from '../src/kicad/sexp.js';
+import path from 'node:path';
+import { tempFixtureRepo } from './helpers.js';
+import { mkdir, writeFile } from 'node:fs/promises';
+
+describe('isPowerSymbol with custom prefixes', () => {
+  it('default behavior: power: prefix is recognized', async () => {
+    const { repo, cleanup } = await tempFixtureRepo();
+    try {
+      const sch = path.join(repo, 'hardware', 'test.kicad_sch');
+      await mkdir(path.dirname(sch), { recursive: true });
+      // A minimal sch with only a power symbol (which should be excluded)
+      await writeFile(sch, `(kicad_sch
+  (version 20231120)
+  (generator "eeschema")
+  (lib_symbols
+    (symbol "power:VCC"
+      (pin_numbers (pin_count 1) (number_size 50))
+      (pin_names (offset 0) (hide))
+      (in_bom yes) (on_board yes)
+      (symbol "VCC_0_1"
+        (pin power_in line (at 0 0 90) (length 0)
+          (name "VCC" (effects (font (size 50 50))))
+          (number "1" (effects (font (size 50 50))))
+        )
+      )
+    )
+  )
+  (symbol (lib_id "power:VCC") (at 0 0 0)
+    (property "Reference" "#PWR1" (at 0 0 0)(effects (font (size 50 50)) (justify left)))
+    (property "Value" "VCC" (at 0 0 0)(effects (font (size 50 50)) (justify left)))
+    (pin "1" (uuid "0000-0001"))
+    (instances (project "test" (path "/" (page "1"))))
+  )
+  (sheet_instances (path "/" (page "1")))
+)`, 'utf8');
+      // power:VCC should be excluded from listSymbols
+      const syms = await listSymbols(sch);
+      expect(syms).toHaveLength(0);
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it('custom prefixes are recognized after addPowerSymbolPrefixes', async () => {
+    // Register a custom prefix
+    addPowerSymbolPrefixes(['custom_power:']);
+    const { repo, cleanup } = await tempFixtureRepo();
+    try {
+      const sch = path.join(repo, 'hardware', 'test.kicad_sch');
+      await mkdir(path.dirname(sch), { recursive: true });
+      await writeFile(sch, `(kicad_sch
+  (version 20231120)
+  (generator "eeschema")
+  (lib_symbols
+    (symbol "custom_power:MY_VCC"
+      (pin_numbers (pin_count 1) (number_size 50))
+      (pin_names (offset 0) (hide))
+      (in_bom yes) (on_board yes)
+      (symbol "MY_VCC_0_1"
+        (pin power_in line (at 0 0 90) (length 0)
+          (name "MY_VCC" (effects (font (size 50 50))))
+          (number "1" (effects (font (size 50 50))))
+        )
+      )
+    )
+  )
+  (symbol (lib_id "custom_power:MY_VCC") (at 0 0 0)
+    (property "Reference" "#PWR1" (at 0 0 0)(effects (font (size 50 50)) (justify left)))
+    (property "Value" "MY_VCC" (at 0 0 0)(effects (font (size 50 50)) (justify left)))
+    (pin "1" (uuid "0000-0001"))
+    (instances (project "test" (path "/" (page "1"))))
+  )
+  (sheet_instances (path "/" (page "1")))
+)`, 'utf8');
+      const syms = await listSymbols(sch);
+      expect(syms).toHaveLength(0);
+    } finally {
+      await cleanup();
+    }
+  });
+});
