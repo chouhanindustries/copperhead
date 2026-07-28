@@ -18,6 +18,8 @@ npm run build           # compile to dist/
 
 The offline test suite runs without any credentials. Integration tests that call an LLM are skipped automatically unless an API key environment variable is present, so `npm test` is safe to run anywhere.
 
+`COPPERHEAD_CACHE_ONLY=1` makes any LLM-cache miss a hard error instead of a live provider call; it is used by the deterministic replay test and is useful for offline reruns.
+
 ## Manual testing
 
 For exercising the CLI by hand against a real repository, see [manual-tests/README.md](manual-tests/README.md). It provides two sandbox variants: `create` (full pipeline from a product brief) and `edit` (`init`, `check`, and the `do` loop on an existing KiCad project).

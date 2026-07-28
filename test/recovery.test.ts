@@ -128,4 +128,43 @@ describe('CachingProvider', () => {
       await rm(dir, { recursive: true, force: true });
     }
   });
+
+  // Strict replay mode (COPPERHEAD_CACHE_ONLY=1, used by the deterministic e2e
+  // replay test): a miss is a divergence from the recording and must throw
+  // instead of falling through to a live provider call.
+  it('cache-only mode: a miss throws (naming the expected cache entry) without touching the model', async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), 'copperhead-cache-'));
+    const prev = process.env.COPPERHEAD_CACHE_ONLY;
+    process.env.COPPERHEAD_CACHE_ONLY = '1';
+    try {
+      const inner = new CountingProvider(() => turn('live answer'));
+      const cached = new CachingProvider(inner, dir);
+      await expect(cached.chat(msgs, tools)).rejects.toThrow(/cache-only mode.*no cached response/);
+      await expect(cached.chat(msgs, tools)).rejects.toThrow(/[0-9a-f]{64}\.json/); // the greppable key
+      expect(inner.calls).toBe(0); // the live provider was never reached
+    } finally {
+      if (prev === undefined) delete process.env.COPPERHEAD_CACHE_ONLY;
+      else process.env.COPPERHEAD_CACHE_ONLY = prev;
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('cache-only mode: hits are still served from disk with zero usage', async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), 'copperhead-cache-'));
+    const prev = process.env.COPPERHEAD_CACHE_ONLY;
+    try {
+      const inner = new CountingProvider(() => turn('recorded answer'));
+      const cached = new CachingProvider(inner, dir);
+      await cached.chat(msgs, tools); // record with the mode off
+      process.env.COPPERHEAD_CACHE_ONLY = '1';
+      const replayed = await cached.chat(msgs, tools);
+      expect(replayed.text).toBe('recorded answer');
+      expect(replayed.usage).toEqual({ inputTokens: 0, outputTokens: 0 });
+      expect(inner.calls).toBe(1); // only the recording call reached the model
+    } finally {
+      if (prev === undefined) delete process.env.COPPERHEAD_CACHE_ONLY;
+      else process.env.COPPERHEAD_CACHE_ONLY = prev;
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
 });

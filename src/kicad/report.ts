@@ -63,7 +63,12 @@ export function normalizeReport(raw: unknown, source: 'erc' | 'drc'): CheckRepor
   for (const v of r.violations ?? []) violations.push(normViolation(v));
   for (const v of r.unconnected_items ?? []) violations.push(normViolation(v));
   for (const v of r.schematic_parity ?? []) violations.push(normViolation(v));
-  return { ok: violations.length === 0, source, violations };
+  // Severity-aware gate: kicad-cli reports carry warning-level entries
+  // (exclusions, advisory checks) alongside errors. Only error severity blocks;
+  // an entry with no severity field is treated as an error for safety.
+  // Warnings stay in the list so callers can still surface them.
+  const blocking = violations.filter((v) => v.severity !== 'warning');
+  return { ok: blocking.length === 0, source, violations };
 }
 
 export function formatViolations(report: CheckReport): string {

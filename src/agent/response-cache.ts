@@ -59,6 +59,15 @@ export class CachingProvider implements Provider {
         // corrupt/partial cache file — fall through and regenerate
       }
     }
+    // Strict replay mode (deterministic e2e tests): a miss is a divergence from
+    // the recording, not something to paper over with a live call. Throw with
+    // the key so the missing/expected cache entry is directly greppable.
+    if (process.env.COPPERHEAD_CACHE_ONLY === '1') {
+      throw new Error(
+        `llm-cache: cache-only mode is on (COPPERHEAD_CACHE_ONLY=1) but this turn has no cached response ` +
+          `(expected ${path.basename(file)} in ${this.dir}); the replay diverged from the recording`,
+      );
+    }
     const turn = await this.inner.chat(messages, tools, opts);
     try {
       await mkdir(this.dir, { recursive: true });

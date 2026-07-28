@@ -4,7 +4,7 @@ import { readFile, writeFile } from 'node:fs/promises';
 import { execa } from 'execa';
 import { runAgentLoop, type BudgetExhaustedStats } from '../src/agent/loop.js';
 import type { Msg, Provider, ToolSchema, Turn } from '../src/agent/types.js';
-import { dispatchTool, type RunContext } from '../src/agent/tools.js';
+import { dispatchTool, newRepairProgress, type RunContext } from '../src/agent/tools.js';
 import { ObligationsLedger } from '../src/agent/ledger.js';
 import { Transcript } from '../src/agent/transcript.js';
 import { buildSystemPrompt } from '../src/agent/prompts.js';
@@ -61,6 +61,7 @@ async function makeCtx(repo: string): Promise<RunContext> {
     lastErc: null,
     lastDrc: null,
     repairCycles: 0,
+    repairProgress: newRepairProgress(),
     finishRequest: null,
   };
 }
