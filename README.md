@@ -29,6 +29,14 @@ It reads and edits real `.kicad_sch` / `.kicad_pcb` files (s-expression text), m
 
 ## Install
 
+> [!TIP]
+> **Most users should not install copperhead by hand.** If you are working inside an AI coding assistant (like Claude Code, Cursor, or Codex), you can install and configure copperhead automatically for your repository by pasting this single line:
+> ```text
+> Install copperhead for this repo using https://raw.githubusercontent.com/chouhanindustries/copperhead/main/agent-install-prompt.md
+> ```
+
+If you prefer to install manually:
+
 ```bash
 npm install -g copperhead   # or: npx copperhead check
 ```

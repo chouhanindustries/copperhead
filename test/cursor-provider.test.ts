@@ -264,19 +264,27 @@ describe('CursorProvider — env and lifecycle', () => {
 describe('CursorProvider — defaultCursorRun subprocess', () => {
   it('feeds the prompt on stdin (not argv) and keeps the flag vector', async () => {
     const dir = await mkdtemp(path.join(os.tmpdir(), 'copperhead-cursor-stub-'));
-    const stub = path.join(dir, 'stub-agent.sh');
     const argvFile = path.join(dir, 'argv.txt');
     const stdinFile = path.join(dir, 'stdin.txt');
+    const stubJs = path.join(dir, 'stub-agent.mjs');
     await writeFile(
-      stub,
-      `#!/bin/sh
-printf '%s\\n' "$@" > "${argvFile}"
-cat > "${stdinFile}"
-echo '{"type":"result","result":"from-stub","session_id":"s1"}'
+      stubJs,
+      `import fs from 'node:fs';
+fs.writeFileSync(${JSON.stringify(argvFile)}, process.argv.slice(2).join('\\n'), 'utf8');
+fs.writeFileSync(${JSON.stringify(stdinFile)}, fs.readFileSync(0, 'utf8'), 'utf8');
+console.log('{"type":"result","result":"from-stub","session_id":"s1"}');
 `,
       'utf8',
     );
-    await chmod(stub, 0o755);
+
+    const isWin = process.platform === 'win32';
+    const stub = path.join(dir, isWin ? 'stub-agent.bat' : 'stub-agent.sh');
+    if (isWin) {
+      await writeFile(stub, `@echo off\nnode "${stubJs}" %*\n`, 'utf8');
+    } else {
+      await writeFile(stub, `#!/bin/sh\nnode "${stubJs}" "$@"\n`, 'utf8');
+      await chmod(stub, 0o755);
+    }
 
     const prev = process.env.COPPERHEAD_CURSOR_PATH;
     process.env.COPPERHEAD_CURSOR_PATH = stub;

@@ -4,7 +4,7 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { normalizeReport, type CheckReport } from './report.js';
-import { PreflightError } from '../util/preflight.js';
+import { PreflightError, isNotFoundError } from '../util/preflight.js';
 
 export class KicadCliMissingError extends PreflightError {
   constructor() {
@@ -109,7 +109,7 @@ function fallbackAfterMissing(): string {
 async function runKicad(args: string[], opts?: { reject?: boolean }): Promise<Awaited<ReturnType<typeof execa>>> {
   let bin = resolveKicadCli();
   let res = await execa(bin, args, { reject: false });
-  if (res.failed && (res as unknown as ExecaError).code === 'ENOENT') {
+  if (res.failed && isNotFoundError(res)) {
     if (bin === 'kicad-cli') {
       bin = fallbackAfterMissing();
       res = await execa(bin, args, { reject: false });
@@ -117,10 +117,10 @@ async function runKicad(args: string[], opts?: { reject?: boolean }): Promise<Aw
       throw new KicadCliMissingError();
     }
   }
-  if (opts?.reject === false) return res;
-  if (res.failed && (res as unknown as ExecaError).code === 'ENOENT') {
+  if (res.failed && isNotFoundError(res)) {
     throw new KicadCliMissingError();
   }
+  if (opts?.reject === false) return res;
   if (res.failed) {
     throw Object.assign(new Error(res.stderr || res.stdout || `kicad-cli exited ${res.exitCode}`), res);
   }
@@ -143,15 +143,8 @@ export function setKicadFallbackBinaries(paths?: readonly string[]): void {
 }
 
 export async function kicadCliVersion(): Promise<string> {
-  try {
-    const res = await runKicad(['version']);
-    return String(res.stdout ?? '').trim();
-  } catch (err) {
-    if ((err as ExecaError).code === 'ENOENT') throw new KicadCliMissingError();
-    // runKicad already maps PATH ENOENT → fallback → KicadCliMissingError
-    if (err instanceof KicadCliMissingError) throw err;
-    throw err;
-  }
+  const res = await runKicad(['version']);
+  return String(res.stdout ?? '').trim();
 }
 
 async function runCheck(
@@ -167,9 +160,6 @@ async function runCheck(
       [...sub, '--format', 'json', '--exit-code-violations', '--output', out, ...extraArgs, filePath],
       { reject: false },
     );
-    if (res.failed && (res as unknown as ExecaError).code === 'ENOENT') {
-      throw new KicadCliMissingError();
-    }
     let raw: unknown;
     try {
       raw = JSON.parse(await readFile(out, 'utf8'));
@@ -218,7 +208,6 @@ export async function kicadLoadError(filePath: string): Promise<string | null> {
     : ['pcb', 'export', 'pos', '--output', path.join(dir, 'probe.pos'), filePath];
   try {
     const res = await runKicad(args, { reject: false });
-    if (res.failed && (res as unknown as ExecaError).code === 'ENOENT') throw new KicadCliMissingError();
     if (res.exitCode === 0) return null;
     return [res.stderr, res.stdout].filter(Boolean).join('\n').trim() || `kicad-cli exited ${res.exitCode}`;
   } finally {
@@ -258,7 +247,6 @@ export async function exportFab(pcbPath: string, schPath: string | null, outDir:
       result.produced.push(job.artifact);
     } catch (err) {
       if (err instanceof KicadCliMissingError) throw err;
-      if ((err as ExecaError).code === 'ENOENT') throw new KicadCliMissingError();
       result.failed.push({ artifact: job.artifact, reason: String((err as ExecaError).stderr ?? (err as Error).message).slice(0, 200) });
     }
   }
@@ -275,7 +263,6 @@ export async function exportSvg(kind: 'sch' | 'pcb', filePath: string, outDir: s
     await runKicad(args);
   } catch (err) {
     if (err instanceof KicadCliMissingError) throw err;
-    if ((err as ExecaError).code === 'ENOENT') throw new KicadCliMissingError();
     throw err;
   }
   return outDir;

@@ -75,6 +75,7 @@ export default defineConfig({
           items: [
             { label: 'Introduction', link: '/getting-started/introduction/' },
             { label: 'Quickstart', link: '/getting-started/quickstart/' },
+            { label: 'Agent install', link: '/getting-started/agent-install/' },
             { label: 'Simple demo', link: '/getting-started/demo/' },
           ],
         },
