@@ -260,7 +260,7 @@ copperhead sync [--dry-run]
     silently rewritten. `--dry-run` prints the full inconsistency report
     and writes nothing. Idempotent: a second run finds nothing to do.
 
-copperhead explain <refdes|net|pin>       # stretch
+copperhead explain <refdes|net|pin>       
     Answer "why is R7 here?" from docs + schematic context.
 
 copperhead watch                          # Phase 2

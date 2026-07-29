@@ -84,6 +84,21 @@ ERC and DRC are skipped when no schematic or board is configured, rather than fa
 
 With `--json`, prints a result object with `ok` plus per-check detail for `erc`, `drc`, `drift`, `openspec`, and `constraints`.
 
+## `copperhead explain`
+
+```bash
+copperhead explain <refdes|net|pin>
+```
+
+Explains a symbol, net, or pin from the schematic by reporting its associated schematic information and any available BOM rationale. The command is read-only and does not modify the design.
+
+Resolution order is **pin**, then **refdes**, then **net**. Matching is case-insensitive, and the canonical name from the schematic is shown in the output (for example, `copperhead explain gnd` reports `Net GND`).
+
+| Exit code | Meaning |
+| --- | --- |
+| `0` | Target found and explained. |
+| `1` | Target not found or the command could not be completed. |
+
 ## `copperhead sync`
 
 Verifies the whole design state and resolves drift. Two phases: a deterministic verify phase, then an LLM resolve phase.

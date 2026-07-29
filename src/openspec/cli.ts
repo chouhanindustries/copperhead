@@ -34,8 +34,17 @@ export async function openspecInit(repo: string): Promise<OpenSpecResult> {
   return openspec(repo, ['init', '--no-interactive']);
 }
 
-export function openspecValidate(repo: string, changeId?: string): Promise<OpenSpecResult> {
-  return openspec(repo, changeId ? ['validate', changeId] : ['validate']);
+export function openspecValidate(
+  repo: string,
+  changeId?: string,
+  extraArgs: string[] = [],
+): Promise<OpenSpecResult> {
+  return openspec(
+    repo,
+    changeId
+      ? ['validate', changeId, ...extraArgs]
+      : ['validate', ...extraArgs],
+  );
 }
 
 export function openspecArchive(repo: string, changeId: string): Promise<OpenSpecResult> {

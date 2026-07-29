@@ -1,34 +1,40 @@
-import path from 'node:path';
-import { existsSync } from 'node:fs';
-import { readFile } from 'node:fs/promises';
-import { loadConfig } from '../config.js';
-import { parseCanonicalTables } from '../memory/bom-table.js';
-import { listSymbols, listNets, pinNets, type SchematicSymbol, type PinNet } from '../kicad/sexp.js';
+import path from "node:path";
+import { existsSync } from "node:fs";
+import { readFile } from "node:fs/promises";
+import { loadConfig } from "../config.js";
+import { parseCanonicalTables } from "../memory/bom-table.js";
+import {
+  listSymbols,
+  listNets,
+  pinNets,
+  type SchematicSymbol,
+  type PinNet,
+} from "../kicad/sexp.js";
 
 export class ExplainError extends Error {
   constructor(message: string) {
     super(message);
-    this.name = 'ExplainError';
+    this.name = "ExplainError";
   }
 }
 
 export type ExplainResult =
   | {
       target: string;
-      kind: 'refdes';
+      kind: "refdes";
       symbol: SchematicSymbol;
       pins: PinNet[];
       bomRationale?: string;
     }
   | {
       target: string;
-      kind: 'pin';
+      kind: "pin";
       pins: [PinNet];
       symbol?: SchematicSymbol;
     }
   | {
       target: string;
-      kind: 'net';
+      kind: "net";
       net: string;
       pins: PinNet[];
     };
@@ -37,17 +43,19 @@ async function tryReadBomRationale(
   repoRoot: string,
   docsDir: string,
   ref: string,
-): Promise<string |undefined> {
-  const p = path.join(repoRoot, docsDir, 'BOM.md');
+): Promise<string | undefined> {
+  const p = path.join(repoRoot, docsDir, "BOM.md");
   if (!existsSync(p)) return undefined;
 
   try {
-    const text = await readFile(p, 'utf8');
+    const text = await readFile(p, "utf8");
     const refUpper = ref.toUpperCase();
 
     for (const { header, rows } of parseCanonicalTables(text)) {
       const refIndex = header.cells.findIndex((c) => /^refdes$/i.test(c));
-      const rationaleIndex = header.cells.findIndex((c) => /^rationale$/i.test(c));
+      const rationaleIndex = header.cells.findIndex((c) =>
+        /^rationale$/i.test(c),
+      );
 
       if (refIndex < 0 || rationaleIndex < 0) continue;
 
@@ -66,10 +74,13 @@ async function tryReadBomRationale(
   return undefined;
 }
 
-export async function runExplain(repoRoot: string, target: string): Promise<ExplainResult> {
+export async function runExplain(
+  repoRoot: string,
+  target: string,
+): Promise<ExplainResult> {
   const config = await loadConfig(repoRoot);
   if (!config.schematic || !existsSync(path.join(repoRoot, config.schematic))) {
-    throw new ExplainError('no schematic configured; run copperhead init');
+    throw new ExplainError("no schematic configured; run copperhead init");
   }
 
   const schPath = path.join(repoRoot, config.schematic);
@@ -82,9 +93,16 @@ export async function runExplain(repoRoot: string, target: string): Promise<Expl
   const targetTrimmed = target.trim();
   const targetLower = targetTrimmed.toLowerCase();
 
+  const targetParts = targetTrimmed.split(".");
+  if (targetParts.length > 2) {
+    throw new ExplainError(
+      `invalid pin target "${target}"; expected <refdes>.<pin>`,
+    );
+  }
+
   // 1. Try Pin match ("U1.1")
-  if (targetTrimmed.includes('.')) {
-    const [refPart, pinPart] = targetTrimmed.split('.');
+  if (targetTrimmed.includes(".")) {
+    const [refPart, pinPart] = targetParts;
     if (refPart && pinPart) {
       const refLower = refPart.toLowerCase();
       const pinLower = pinPart.toLowerCase();
@@ -92,14 +110,17 @@ export async function runExplain(repoRoot: string, target: string): Promise<Expl
       const matchedPin = allPinNets.find(
         (p) =>
           p.ref.toLowerCase() === refLower &&
-          (p.pinNumber.toLowerCase() === pinLower || p.pinName.toLowerCase() === pinLower),
+          (p.pinNumber.toLowerCase() === pinLower ||
+            p.pinName.toLowerCase() === pinLower),
       );
 
       if (matchedPin) {
-        const parentSymbol = symbols.find((s) => s.ref.toLowerCase() === refLower);
+        const parentSymbol = symbols.find(
+          (s) => s.ref.toLowerCase() === refLower,
+        );
         return {
           target,
-          kind: 'pin',
+          kind: "pin",
           pins: [matchedPin],
           symbol: parentSymbol,
         };
@@ -108,13 +129,21 @@ export async function runExplain(repoRoot: string, target: string): Promise<Expl
   }
 
   // 2. Try Refdes match ("U1")
-  const matchedSymbol = symbols.find((s) => s.ref.toLowerCase() === targetLower);
+  const matchedSymbol = symbols.find(
+    (s) => s.ref.toLowerCase() === targetLower,
+  );
   if (matchedSymbol) {
-    const symbolPins = allPinNets.filter((p) => p.ref.toLowerCase() === targetLower);
-    const bomRationale = await tryReadBomRationale(repoRoot, config.docs, matchedSymbol.ref);
+    const symbolPins = allPinNets.filter(
+      (p) => p.ref.toLowerCase() === targetLower,
+    );
+    const bomRationale = await tryReadBomRationale(
+      repoRoot,
+      config.docs,
+      matchedSymbol.ref,
+    );
     return {
       target,
-      kind: 'refdes',
+      kind: "refdes",
       symbol: matchedSymbol,
       pins: symbolPins,
       bomRationale,
@@ -123,12 +152,15 @@ export async function runExplain(repoRoot: string, target: string): Promise<Expl
 
   // 3. Try Net match ("GND")
   const isKnownNet = allNets.some((n) => n.toLowerCase() === targetLower);
-  const netPins = allPinNets.filter((p) => p.net && p.net.toLowerCase() === targetLower);
+  const netPins = allPinNets.filter(
+    (p) => p.net && p.net.toLowerCase() === targetLower,
+  );
   if (isKnownNet || netPins.length > 0) {
-    const canonicalNet = allNets.find((n) => n.toLowerCase() === targetLower) ?? targetTrimmed;
+    const canonicalNet =
+      allNets.find((n) => n.toLowerCase() === targetLower) ?? targetTrimmed;
     return {
       target,
-      kind: 'net',
+      kind: "net",
       net: canonicalNet,
       pins: netPins,
     };
@@ -138,12 +170,12 @@ export async function runExplain(repoRoot: string, target: string): Promise<Expl
 }
 
 export function formatExplainReport(res: ExplainResult): string {
-  if (res.kind === 'refdes') {
+  if (res.kind === "refdes") {
     const lines = [
       `Symbol ${res.symbol.ref}:`,
       `  Value: ${res.symbol.value}`,
       `  Lib: ${res.symbol.libId}`,
-      `  Footprint: ${res.symbol.footprint || '(none)'}`,
+      `  Footprint: ${res.symbol.footprint || "(none)"}`,
       `  Sheet: ${res.symbol.sheet}`,
     ];
 
@@ -154,24 +186,26 @@ export function formatExplainReport(res: ExplainResult): string {
     if (res.pins.length > 0) {
       lines.push(`  Pins (${res.pins.length}):`);
       for (const p of res.pins) {
-        lines.push(`    ${p.pinNumber} (${p.pinName}): ${p.net || '(unconnected)'}`);
+        lines.push(
+          `    ${p.pinNumber} (${p.pinName}): ${p.net || "(unconnected)"}`,
+        );
       }
     }
 
-    return lines.join('\n');
-  } else if (res.kind === 'pin') {
+    return lines.join("\n");
+  } else if (res.kind === "pin") {
     const [p] = res.pins;
 
     const lines = [
       `Pin ${p.ref}.${p.pinNumber} (${p.pinName}):`,
-      `  Net: ${p.net || '(unconnected)'}`,
+      `  Net: ${p.net || "(unconnected)"}`,
     ];
 
     if (res.symbol) {
       lines.push(`  Symbol: ${res.symbol.value} (${res.symbol.libId})`);
     }
 
-    return lines.join('\n');
+    return lines.join("\n");
   } else {
     // res.kind === 'net'
     const lines = [`Net ${res.net}:`];
@@ -182,9 +216,9 @@ export function formatExplainReport(res: ExplainResult): string {
         lines.push(`    ${p.ref}.${p.pinNumber} (${p.pinName})`);
       }
     } else {
-      lines.push('  No connected component pins found.');
+      lines.push("  No connected component pins found.");
     }
 
-    return lines.join('\n');
+    return lines.join("\n");
   }
 }

@@ -88,6 +88,7 @@ Spec-gated in, verification-gated out: the design can't drift from its requireme
 copperhead init [--path hardware/]   # scaffold docs/ from an existing schematic; idempotent
 copperhead do "<change request>"     # the core loop: propose, edit, verify, propagate, commit
 copperhead check                     # ERC + DRC + doc-drift + spec validation; no LLM calls (alias: verify)
+copperhead explain <refdes|net|pin>  # explain a symbol, net, or pin from the schematic
 copperhead sync [--dry-run]          # verify the whole design state, resolve drift
 copperhead create --brief brief.md   # brief → full output package
 copperhead export bom --supplier jlcpcb   # supplier-ready ordering file from docs/BOM.md

@@ -5,6 +5,7 @@ import path from 'node:path';
 import { runExplain, formatExplainReport, ExplainError } from '../src/commands/explain.js';
 import { runInit } from '../src/memory/scaffold.js';
 import { tempFixtureRepo } from './helpers.js';
+import { execa } from 'execa';
 
 async function fixtureRepo(): Promise<{ repo: string; cleanup: () => Promise<void> }> {
   const t = await tempFixtureRepo();
@@ -33,6 +34,57 @@ describe('copperhead explain (minimal v1)', () => {
     expect(formatted).toContain(
       'BOM Rationale: extracted from schematic by copperhead init',
     );
+  } finally {
+    await cleanup();
+  }
+});
+
+it('invokes the explain CLI (formatted, json, and ExplainError)', async () => {
+  const { repo, cleanup } = await fixtureRepo();
+
+  try {
+    // formatted output
+    const formatted = await execa('node', [
+      'dist/cli.js',
+      '--repo',
+      repo,
+      'explain',
+      'GND',
+    ]);
+
+    expect(formatted.stdout).toContain('Net GND:');
+
+    // json output
+    const json = await execa('node', [
+      'dist/cli.js',
+      '--repo',
+      repo,
+      'explain',
+      'GND',
+      '--json',
+    ]);
+
+    const parsed = JSON.parse(json.stdout);
+    expect(parsed.kind).toBe('net');
+    expect(parsed.net).toBe('GND');
+
+    // ExplainError -> exit code 1
+    const failure = await execa(
+      'node',
+      [
+        'dist/cli.js',
+        '--repo',
+        repo,
+        'explain',
+        'DOES_NOT_EXIST',
+      ],
+      {
+        reject: false,
+      },
+    );
+
+    expect(failure.exitCode).toBe(1);
+    expect(failure.stderr).toContain('DOES_NOT_EXIST');
   } finally {
     await cleanup();
   }
@@ -81,6 +133,18 @@ it('explains a net (copperhead explain GND)', async () => {
     try {
       await expect(runExplain(repo, 'NONEXISTENT999')).rejects.toThrow(ExplainError);
       await expect(runExplain(repo, 'NONEXISTENT999')).rejects.toThrow(/not found in schematic/);
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it('throws an ExplainError for an invalid pin target', async () => {
+    const { repo, cleanup } = await fixtureRepo();
+    try {
+      await expect(runExplain(repo, 'U1.1.2')).rejects.toThrow(ExplainError);
+      await expect(runExplain(repo, 'U1.1.2')).rejects.toThrow(
+        /invalid pin target/,
+      );
     } finally {
       await cleanup();
     }

@@ -40,16 +40,19 @@ async function runCheck(
   const sub = kind === 'erc' ? ['sch', 'erc'] : ['pcb', 'drc'];
   try {
     const res = await execa(
-      'kicad-cli',
-      [...sub, '--format', 'json', '--exit-code-violations', '--output', out, ...extraArgs, filePath],
-      { reject: false },
+      "kicad-cli",
+      [...sub, "--format", "json", "--exit-code-violations", "--output", out, ...extraArgs, filePath],
+      {
+        reject: false,
+        stdin: "ignore",
+      },
     );
     if (res.failed && (res as unknown as ExecaError).code === 'ENOENT') {
       throw new KicadCliMissingError();
     }
     let raw: unknown;
     try {
-      raw = JSON.parse(await readFile(out, 'utf8'));
+      raw = JSON.parse(await readFile(out, "utf8"));
     } catch {
       // No report on disk means kicad-cli bailed before checking — usually the
       // design file itself failed to load (syntax/schema corruption). The
