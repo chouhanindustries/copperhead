@@ -86,6 +86,7 @@ export class CursorProvider implements Provider {
     let outputTokens = 0;
     let text: string | null = null;
     try {
+      opts.raw?.({ kind: 'request', data: { prompt, systemPrompt, model: this.model, resume } });
       const result = await this.runFn({
         prompt,
         systemPrompt,
@@ -95,10 +96,15 @@ export class CursorProvider implements Provider {
         signal: aborter.signal,
         env: subprocessEnv(),
       });
+      opts.raw?.({ kind: 'response', data: result });
       text = result.text;
       if (this.sessionResume && result.sessionId) this.sessionId = result.sessionId;
       inputTokens = result.usage.inputTokens;
       outputTokens = result.usage.outputTokens;
+      // The CLI answers in one shot, so this is the whole turn arriving at once
+      // rather than a stream — the loop still gets to print it before the turn
+      // is folded into the transcript.
+      opts.onText?.(text);
       opts.onStream?.(text.length);
     } catch (err) {
       if (isAuthError(err)) throw new Error(authHint((err as Error).message));

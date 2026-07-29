@@ -66,7 +66,7 @@ export class CodexProvider implements Provider {
     this.client = options.client;
   }
 
-  async chat(messages: Msg[], tools: ToolSchema[], _opts: ChatOpts = {}): Promise<Turn> {
+  async chat(messages: Msg[], tools: ToolSchema[], opts: ChatOpts = {}): Promise<Turn> {
     const workingDirectory = await this.ensureWorkingDirectory();
     if (!this.thread) {
       this.thread = this.client.startThread({
@@ -84,7 +84,10 @@ export class CodexProvider implements Provider {
     const schema = turnSchema(tools);
     const toolCatalog = new Map(tools.map((tool) => [tool.name, tool]));
     const attempts: CodexTurnLike[] = [];
-    let result = await this.runThread(renderTurnPrompt(messages, cursor, tools), schema);
+    const prompt = renderTurnPrompt(messages, cursor, tools);
+    opts.raw?.({ kind: 'request', data: { prompt, outputSchema: schema } });
+    let result = await this.runThread(prompt, schema);
+    opts.raw?.({ kind: 'response', data: result });
     attempts.push(result);
 
     let parsed: ReturnType<typeof parseStructuredTurn>;
@@ -92,7 +95,10 @@ export class CodexProvider implements Provider {
       parsed = parseStructuredTurn(result.finalResponse, toolCatalog);
     } catch (err) {
       const validationError = (err as Error).message;
-      result = await this.runThread(renderCorrectionPrompt(tools, validationError), schema);
+      const correction = renderCorrectionPrompt(tools, validationError);
+      opts.raw?.({ kind: 'request-correction', data: { prompt: correction, error: validationError } });
+      result = await this.runThread(correction, schema);
+      opts.raw?.({ kind: 'response', data: result });
       attempts.push(result);
       parsed = parseStructuredTurn(result.finalResponse, toolCatalog);
     }

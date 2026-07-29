@@ -9,10 +9,32 @@ export interface OpenAIProviderOptions {
   apiKeyEnv?: string | undefined;
 }
 
+/** The slice of a chat completion this provider reads. */
+interface CompletionLike {
+  choices: { message: { content?: string | null; tool_calls?: unknown[] } }[];
+  usage?: { prompt_tokens?: number; completion_tokens?: number } | null;
+}
+
+/**
+ * True for the errors a non-streaming endpoint answers with. Compat targets
+ * (Groq, OpenRouter, a local Ollama, someone's vLLM) are OpenAI-shaped but not
+ * OpenAI: a few reject `stream` or `stream_options` outright, and an
+ * unverified OpenAI org is refused streaming by name. Those all mean "ask for
+ * the whole answer at once", not "the run is broken".
+ */
+function refusesStreaming(err: unknown): boolean {
+  const status = (err as { status?: number }).status;
+  const message = (err as Error).message ?? '';
+  if (status !== undefined && status !== 400 && status !== 403 && status !== 404 && status !== 422) return false;
+  return /stream/i.test(message);
+}
+
 export class OpenAIProvider implements Provider {
   readonly name: string;
   private readonly apiKey: string | undefined;
   private readonly baseURL: string | undefined;
+  /** Latched once an endpoint refuses to stream, so it is asked exactly once. */
+  private streamingRefused = false;
 
   constructor(
     private readonly model = 'gpt-5',
@@ -47,7 +69,7 @@ export class OpenAIProvider implements Provider {
       apiKey: this.apiKey ?? 'no-key-required',
       ...(this.baseURL ? { baseURL: this.baseURL } : {}),
     });
-    const res = await client.chat.completions.create({
+    const body = {
       model: this.model,
       max_completion_tokens: opts.maxTokens ?? 8192,
       messages: messages.map((m) => {
@@ -78,7 +100,11 @@ export class OpenAIProvider implements Provider {
             })),
           }
         : {}),
-    });
+    };
+    opts.raw?.({ kind: 'request', data: body });
+    const { res, streamed } = await complete(client as never, body, opts, !this.streamingRefused);
+    if (!streamed) this.streamingRefused = true;
+    opts.raw?.({ kind: 'response', data: res });
     const choice = res.choices[0];
     // Capture any non-standard properties returned by the API (e.g. Gemini thought
     // signatures) so they can be echoed back on subsequent turns. Dropping them
@@ -93,6 +119,60 @@ export class OpenAIProvider implements Provider {
       },
     };
   }
+}
+
+/**
+ * Run one completion, streaming when the endpoint allows it (design: a turn
+ * that takes two minutes should print as it arrives, not all at once when it
+ * ends). `stream_options.include_usage` is what keeps token accounting honest
+ * on the streamed path — without it the final chunk carries no usage and every
+ * turn would report zero tokens.
+ */
+async function complete(
+  client: {
+    chat: {
+      completions: {
+        create(body: unknown): Promise<unknown>;
+        stream(body: unknown): {
+          on(event: 'content', cb: (delta: string) => void): unknown;
+          finalChatCompletion(): Promise<unknown>;
+        };
+      };
+    };
+  },
+  body: Record<string, unknown>,
+  opts: ChatOpts,
+  canStream: boolean,
+): Promise<{ res: CompletionLike; streamed: boolean }> {
+  if (canStream) {
+    try {
+      const stream = client.chat.completions.stream({ ...body, stream_options: { include_usage: true } });
+      let chars = 0;
+      stream.on('content', (delta: string) => {
+        chars += delta.length;
+        opts.onText?.(delta);
+        opts.onStream?.(chars);
+      });
+      try {
+        return { res: (await stream.finalChatCompletion()) as CompletionLike, streamed: true };
+      } catch (err) {
+        // A stream that carried no completion at all is the streamed spelling
+        // of the empty-response case the caller already tolerates (the loop
+        // nudges an empty turn and fails only on three in a row), so it is
+        // reported rather than thrown — but it lands in raw.log, because the
+        // other way to get here is a connection that died mid-request.
+        if (/without producing a ChatCompletion|without sending any chunks/i.test((err as Error).message)) {
+          opts.raw?.({ kind: 'stream-empty', data: (err as Error).message });
+          return { res: { choices: [] }, streamed: true };
+        }
+        throw err;
+      }
+    } catch (err) {
+      if (!refusesStreaming(err)) throw err;
+      opts.raw?.({ kind: 'stream-refused', data: (err as Error).message });
+    }
+  }
+  return { res: (await client.chat.completions.create(body)) as CompletionLike, streamed: false };
 }
 
 function safeParse(s: string): Record<string, unknown> {

@@ -189,12 +189,14 @@ export class ClaudeCodeProvider implements Provider {
           maxTurns: 1,
         },
       })) {
+        opts.raw?.({ kind: 'sdk-message', data: msg });
         if (msg.type === 'assistant') {
           for (const block of msg.message?.content ?? []) {
             if (block.type === 'text' && block.text) {
               text = (text ?? '') + block.text;
               // Report progress so the loop's heartbeat shows this turn is alive
               // and streaming, not hung, during a multi-minute large-output turn.
+              opts.onText?.(block.text);
               opts.onStream?.(text.length);
             } else if (block.type === 'tool_use') {
               // Load-bearing invariant (D1): the SDK must execute nothing, so it

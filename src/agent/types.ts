@@ -1,3 +1,7 @@
+import type { RawSink } from './rawlog.js';
+
+export type { RawSink };
+
 export interface ToolSchema {
   name: string;
   description: string;
@@ -42,6 +46,20 @@ export interface ChatOpts {
    * for billing — real token usage is reported once, on the returned Turn.
    */
   onStream?: (streamedChars: number) => void;
+  /**
+   * The assistant text itself, delta by delta, so the loop can print a turn as
+   * it is generated instead of in one block when it ends. Separate from
+   * `onStream` because that one only needs a length: a provider that can report
+   * progress but not content (a CLI that prints a spinner) implements one and
+   * not the other.
+   */
+  onText?: (delta: string) => void;
+  /**
+   * Verbatim traffic sink for the run's `raw.log`: request and response
+   * payloads for the API providers, stdout/stderr for the CLI-backed ones.
+   * Absent outside a run (tests, one-off provider calls).
+   */
+  raw?: RawSink;
 }
 
 export interface Provider {

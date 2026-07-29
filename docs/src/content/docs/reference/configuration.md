@@ -147,7 +147,7 @@ If `agent` is not on `PATH`, set `COPPERHEAD_CURSOR_PATH`. A rate-limited `curso
 | `.copperhead/config.json` | Yes | Configuration. |
 | `.copperhead/constraints.json` | Yes | Constraint registry. |
 | `.copperhead/README.md` | Yes | Self-describing docs for the above. |
-| `.copperhead/runs/<ts>/` | No | JSONL transcript plus a human-readable `summary.md`. Gitignored. |
+| `.copperhead/runs/<ts>/` | No | Per-run artifacts: `transcript.jsonl` (structured events), `raw.log` (verbatim provider traffic), `console.log` (what the run printed, no ANSI), `summary.md` (human-readable). Gitignored. |
 
 ## Cross-run memory
 

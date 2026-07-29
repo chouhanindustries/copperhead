@@ -16,7 +16,7 @@ import {
   type CopperheadConfig,
   DEFAULTS,
 } from '../src/config.js';
-import { tempFixtureRepo } from './helpers.js';
+import { chatCompletionSse, tempFixtureRepo } from './helpers.js';
 
 const base: CopperheadConfig = { schematic: null, board: null, ...DEFAULTS };
 
@@ -121,10 +121,11 @@ describe('OpenAIProvider — compatible endpoints', () => {
         seen.url = req.url;
         seen.auth = req.headers.authorization;
         seen.body = JSON.parse(raw) as Record<string, unknown>;
-        res.writeHead(200, { 'content-type': 'application/json' });
+        res.writeHead(200, { 'content-type': 'text/event-stream' });
         res.end(
-          JSON.stringify({
-            choices: [{ message: { content: 'pong', tool_calls: [] } }],
+          chatCompletionSse({
+            model: 'qwen-3-coder',
+            choices: [{ message: { content: 'pong' } }],
             usage: { prompt_tokens: 7, completion_tokens: 3 },
           }),
         );
@@ -156,8 +157,8 @@ describe('OpenAIProvider — compatible endpoints', () => {
       let raw = '';
       req.on('data', (c) => (raw += c));
       req.on('end', () => {
-        res.writeHead(200, { 'content-type': 'application/json' });
-        res.end(JSON.stringify({ choices: [{ message: { content: 'ok' } }], usage: {} }));
+        res.writeHead(200, { 'content-type': 'text/event-stream' });
+        res.end(chatCompletionSse({ model: 'llama3', choices: [{ message: { content: 'ok' } }] }));
       });
     });
     await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
@@ -315,9 +316,9 @@ describe('config.json baseURL reaches a real do run (offline, no injected provid
         seen.auth = req.headers.authorization;
         const body = JSON.parse(raw) as { model?: unknown };
         seen.model = body.model;
-        res.writeHead(200, { 'content-type': 'application/json' });
+        res.writeHead(200, { 'content-type': 'text/event-stream' });
         res.end(
-          JSON.stringify({
+          chatCompletionSse({
             choices: [
               {
                 message: {

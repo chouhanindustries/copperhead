@@ -408,13 +408,21 @@ describe('batching guidance in the system prompt (AC-15.5)', () => {
 
 describe('Anthropic prompt caching (AC-15.14, AC-15.15)', () => {
   it('marks three cache_control breakpoints and counts cached tokens', async () => {
-    const create = vi.fn().mockResolvedValue({
-      content: [{ type: 'text', text: 'ok' }],
-      usage: { input_tokens: 10, output_tokens: 2, cache_read_input_tokens: 90, cache_creation_input_tokens: 5 },
+    // The provider streams (so a long turn prints as it is generated), so the
+    // stub is the SDK's stream helper: text deltas over `on('text')`, the
+    // assembled Message from `finalMessage()`.
+    const stream = vi.fn().mockReturnValue({
+      on: (event: string, cb: (delta: string) => void) => {
+        if (event === 'text') cb('ok');
+      },
+      finalMessage: async () => ({
+        content: [{ type: 'text', text: 'ok' }],
+        usage: { input_tokens: 10, output_tokens: 2, cache_read_input_tokens: 90, cache_creation_input_tokens: 5 },
+      }),
     });
     vi.doMock('@anthropic-ai/sdk', () => ({
       default: class {
-        messages = { create };
+        messages = { stream };
       },
     }));
     try {
@@ -430,9 +438,11 @@ describe('Anthropic prompt caching (AC-15.14, AC-15.15)', () => {
         { role: 'assistant', content: null, toolCalls: [{ id: 't1', name: 'a', args: {} }] },
         { role: 'tool', toolCallId: 't1', content: 'result' },
       ];
-      const turn = await provider.chat(messages, tools);
+      const deltas: string[] = [];
+      const turn = await provider.chat(messages, tools, { onText: (d) => deltas.push(d) });
+      expect(deltas.join('')).toBe('ok');
 
-      const req = create.mock.calls[0]![0] as {
+      const req = stream.mock.calls[0]![0] as {
         system: { cache_control?: unknown }[];
         tools: { name: string; cache_control?: unknown }[];
         messages: { content: { cache_control?: unknown }[] }[];

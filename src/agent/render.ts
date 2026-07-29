@@ -63,6 +63,47 @@ export function plainRenderer(log: (line: string) => void): ProgressRenderer {
   };
 }
 
+/**
+ * Wrap a renderer so every durable line it prints is also handed to `sink`,
+ * which is how a run mirrors its console output to a file (`console.log` beside
+ * the transcript). Transient state (the status line, the heartbeat's in-place
+ * redraw) is not mirrored: a file wants the record, not the animation.
+ */
+export function teeRenderer(base: ProgressRenderer, sink: (line: string) => void): ProgressRenderer {
+  const tee = (line: string): void => {
+    try {
+      sink(line);
+    } catch {
+      // mirroring must never be the thing that breaks a run's output
+    }
+  };
+  return {
+    log: (line) => {
+      tee(line);
+      base.log(line);
+    },
+    turnStart: (turn, maxTurns, tokensIn, tokensOut) => {
+      tee(turnMarker(turn, maxTurns, tokensIn, tokensOut));
+      base.turnStart(turn, maxTurns, tokensIn, tokensOut);
+    },
+    toolResult: (name, firstLine) => {
+      tee(`  [${name}] ${firstLine}`);
+      base.toolResult(name, firstLine);
+    },
+    status: (text) => base.status(text),
+    heartbeat: (info) => {
+      // Kept in the mirror: when a run is later reported as "it just hung",
+      // these lines are the evidence of what it was doing and for how long.
+      tee(`  … still working — ${fmtDuration(info.elapsedMs)} elapsed, ${info.streamedChars} chars streamed`);
+      base.heartbeat(info);
+    },
+    finish: (line) => {
+      tee(line);
+      base.finish(line);
+    },
+  };
+}
+
 const FRAMES = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
 const HIDE_CURSOR = '\x1b[?25l';
 const SHOW_CURSOR = '\x1b[?25h';
