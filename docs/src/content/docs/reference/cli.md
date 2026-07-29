@@ -103,6 +103,19 @@ copperhead do "<change request>" [options]
 
 Exits 1 if the run ends in failure, 0 otherwise.
 
+### Uncommitted changes
+
+A rollback hard-resets to the pre-run snapshot, so a run will not start on a dirty tree unless it can protect what is there. On a terminal, `do`, `sync`, and the shell list the uncommitted files and offer four ways forward:
+
+| Choice | What happens |
+| --- | --- |
+| commit | The changes are committed (`chore: save work in progress before a copperhead run`), so a rollback returns to them instead of discarding them. |
+| stash | `git stash push -u` sets them aside; `git stash pop` brings them back. |
+| run anyway | Equivalent to `--allow-dirty`: the snapshot keeps them and a rollback restores them. |
+| cancel | Nothing changes, and the run stops with the usual refusal. |
+
+Without a terminal (CI, pipes, `--json`) there is nobody to ask, so the run refuses exactly as before. Pass `--allow-dirty` to skip the question entirely.
+
 ## `copperhead check`
 
 Alias: `copperhead verify`.
@@ -176,12 +189,14 @@ Exit code 2 is the important one. A requirement violation means the as-built des
 The full pipeline from a product brief to the output package.
 
 ```bash
+copperhead create "<brief text>" [--model <model>] [--interactive]
 copperhead create --brief brief.md [--model <model>] [--interactive]
 ```
 
 | Option | Description |
 | --- | --- |
-| `--brief <file>` | **Required.** The product brief, in markdown. |
+| `[brief]` | The brief as text, or the path to a brief markdown file. Text is written to `brief.md` in the repo (or the next free `brief-N.md`, never overwriting an existing one) so the run stays resumable. |
+| `--brief <file>` | The product brief, in markdown. Equivalent to passing the path positionally. |
 | `--model <model>` | `codex`, `cursor`, `gpt-5`, `claude`, or `claude-code` (saved-login; no model API key for those three). |
 | `--interactive` | Re-enable the human gates: spec approval, and a pause before export. |
 
@@ -203,6 +218,12 @@ Each stage is a full `do` loop with its own prompt and gate. Stage completion is
 | 8 | `devplan` | `docs/DEVPLAN.md` |
 
 Stages build on each other's uncommitted state, so `create` runs them as if `--allow-dirty` were set.
+
+### Git setup
+
+`create` is usually the first command run in a brand-new directory, so it sets git up itself rather than refusing: if there is no repository it runs `git init`, writes a baseline `.gitignore` (`.env`, `.copperhead/runs/`, `.history/`), and makes the initial commit that stage rollbacks snapshot against. When no git identity is configured it writes a repo-local one (`copperhead <copperhead@localhost>`); override it with `git config user.name` / `git config user.email`. In a repository that already has commits, nothing is initialized and only the brief is committed, so a stage rollback (`git reset --hard` + `git clean -fd`) cannot delete it.
+
+`do` and `sync` keep the strict preflight: those edit a repository you already own, where an implicit initial commit would be a surprise.
 
 ## Repo scripts
 

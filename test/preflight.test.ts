@@ -1,12 +1,11 @@
 import { describe, it, expect } from 'vitest';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { execa } from 'execa';
 import { runAgentLoop } from '../src/agent/loop.js';
-import { runCreate } from '../src/commands/create.js';
-import { gitPreflight } from '../src/util/git.js';
+import { dirtyFiles, gitPreflight, isDirty } from '../src/util/git.js';
 import { PreflightError, isNotFoundError } from '../src/util/preflight.js';
 import { KicadCliMissingError } from '../src/kicad/cli.js';
 import { tempFixtureRepo } from './helpers.js';
@@ -101,35 +100,10 @@ describe('git preflight (unborn HEAD, AC-3.8)', () => {
   });
 });
 
-describe('copperhead create without a git setup (bug-report path)', () => {
-  const createOpts = (repoRoot: string) => ({
-    repoRoot,
-    briefPath: path.join(repoRoot, 'brief.md'),
-    model: 'gpt-5',
-    log: () => {},
-  });
-
-  it('unborn HEAD: create fails with the no-commits message instead of crashing in spec-seed', async () => {
-    const { dir, cleanup } = await tempDir();
-    try {
-      await writeFile(path.join(dir, 'brief.md'), 'A tiny USB macro keypad', 'utf8');
-      await execa('git', ['init', '-q'], { cwd: dir });
-      await expect(runCreate(createOpts(dir))).rejects.toThrow(/repository has no commits/);
-    } finally {
-      await cleanup();
-    }
-  });
-
-  it('non-git directory: create fails with the not-a-repository message', async () => {
-    const { dir, cleanup } = await tempDir();
-    try {
-      await writeFile(path.join(dir, 'brief.md'), 'A tiny USB macro keypad', 'utf8');
-      await expect(runCreate(createOpts(dir))).rejects.toThrow(/not a git repository/);
-    } finally {
-      await cleanup();
-    }
-  });
-});
+// `create` no longer refuses over these two states — it sets git up itself, so
+// a new user's first command works in a directory they just made. The
+// behaviour that replaced the refusals is covered in create-setup.test.ts;
+// what stays asserted here is that the strict gates still apply to `do`.
 
 describe('preflight failures explain why and how to fix', () => {
   async function preflightError(dir: string, allowDirty = false): Promise<PreflightError> {
@@ -176,6 +150,37 @@ describe('preflight failures explain why and how to fix', () => {
       expect(err.message).toMatch(/--allow-dirty/);
       // the offered flag actually works
       await expect(gitPreflight(repo, { allowDirty: true })).resolves.toBeUndefined();
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it('copperhead\'s own run artifacts never trip the gate, even unignored', async () => {
+    // Regression: in a repo the user set up by hand (git init && git commit, no
+    // copperhead .gitignore), the REPL opens its session log under
+    // .copperhead/runs/ before the first turn. git status then reports
+    // "?? .copperhead/" and the gate refused the run over a file copperhead had
+    // just written — telling the user to commit or stash work that was not
+    // theirs. The audit trail survives rollback by design, so it is not the
+    // user's uncommitted work and must not count as dirty.
+    const { repo, cleanup } = await tempFixtureRepo();
+    try {
+      await rm(path.join(repo, '.gitignore'), { force: true });
+      await execa('git', ['add', '-A'], { cwd: repo });
+      await execa('git', ['commit', '-q', '--allow-empty', '-m', 'no copperhead ignores'], { cwd: repo });
+
+      await mkdir(path.join(repo, '.copperhead', 'runs'), { recursive: true });
+      await writeFile(path.join(repo, '.copperhead', 'runs', 'repl-2026-01-01.log'), 'session', 'utf8');
+      expect((await execa('git', ['status', '--porcelain'], { cwd: repo })).stdout).toContain('.copperhead/');
+
+      await expect(gitPreflight(repo)).resolves.toBeUndefined();
+      expect(await dirtyFiles(repo)).toEqual([]);
+      expect(await isDirty(repo)).toBe(false);
+
+      // The user's own uncommitted work still stops the run.
+      await writeFile(path.join(repo, 'junk.txt'), 'dirty', 'utf8');
+      expect(await dirtyFiles(repo)).toEqual(['junk.txt']);
+      await expect(gitPreflight(repo)).rejects.toThrow(/working tree is dirty/);
     } finally {
       await cleanup();
     }

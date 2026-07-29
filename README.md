@@ -74,7 +74,14 @@ copperhead do "add reverse-polarity protection on VIN"
 copperhead check               # ERC + DRC + doc drift; no LLM, CI-safe
 ```
 
-Starting from nothing instead? Write a product brief and run `copperhead create --brief brief.md`. The [examples/](examples/) directory has ready-made briefs sorted by difficulty, plus a note on which one is designed to fail.
+Starting from nothing instead? In an empty directory, describe the board and copperhead does the rest:
+
+```bash
+mkdir keypad && cd keypad
+copperhead create "a 4-key USB-C macro keypad, RP2040, per-key RGB"
+```
+
+The text is saved as `brief.md`, and git is set up for you (init, baseline `.gitignore`, initial commit) so the run has something to snapshot and roll back to. Already have a brief written? `copperhead create --brief brief.md`. The [examples/](examples/) directory has ready-made briefs sorted by difficulty, plus a note on which one is designed to fail.
 
 ### Use your existing Codex login
 
@@ -118,7 +125,7 @@ copperhead do "<change request>"     # the core loop: propose, edit, verify, pro
 copperhead check                     # ERC + DRC + doc-drift + spec validation; no LLM calls (alias: verify)
 copperhead doctor                    # env preflight: kicad-cli, git, node, provider credential; no LLM/network
 copperhead sync [--dry-run]          # verify the whole design state, resolve drift
-copperhead create --brief brief.md   # brief → full output package
+copperhead create "<brief text>"     # brief → full output package (or --brief brief.md)
 copperhead export bom --supplier jlcpcb   # supplier-ready ordering file from docs/BOM.md
 ```
 

@@ -124,8 +124,10 @@ their-board/
 ### Inputs (Mode A)
 
 ```
-copperhead create --brief brief.md
+copperhead create "<brief text>"     # or: copperhead create --brief brief.md
 ```
+
+The brief may be given as literal text or as a file. Text is materialized into a markdown file in the repo (`brief.md`, or the next free `brief-N.md`; an existing file is never overwritten, and one with identical content is reused) so both forms produce the same resumable, hashable artifact. `create` also prepares git rather than refusing over it: `git init`, the baseline `.gitignore`, and the initial commit when any is missing (§7).
 
 `brief.md` — the product brief, free-form markdown:
 
@@ -255,7 +257,8 @@ copperhead demo [--tour] [--model …] [--dir <path>]
     `demo-runs/usb-c-breakout/` and run the create pipeline against the
     packaged USB-C power breakout brief (same as `npm run demo:simple`).
 
-copperhead create --brief brief.md   # Mode A: full pipeline (§2.5)
+copperhead create "<brief text>"     # Mode A: full pipeline (§2.5)
+copperhead create --brief brief.md   # same, from a brief file
 copperhead init [--path hardware/]
     Detect .kicad_sch/.kicad_pcb, parse symbols/footprints/nets,
     generate docs/ skeleton pre-filled with the real BOM and pinout
@@ -402,10 +405,13 @@ Acceptance: type "add a second RGB LED on an RTC-capable pin" → watch schemati
 
 ## 7. Safety rails
 
+- `create` prepares git instead of refusing over it: with no repository it runs `git init`, writes the baseline `.gitignore` (`.env`, `.copperhead/runs/`, `.history/`), and makes the initial commit that stage rollbacks snapshot against; with no configured git identity it writes a repo-local fallback. It never touches a repository that already has commits beyond committing the brief (so a rollback's `git clean -fd` cannot delete it) and the idempotent `.gitignore` top-up. `do`, `repl`, and `sync` keep the strict preflight below: those edit a repo the user already owns, where an implicit initial commit would be a surprise
+- An attended run (TTY, no `--json`) that meets the dirty-tree gate is offered the fixes rather than only told about them: commit the changes, stash them, run anyway (`--allow-dirty` semantics), or cancel. Cancel, a failed prompt, and every unattended run fall through to the refusal below unchanged, so the protection is identical wherever there is nobody to ask
 - Refuse to run `do` or `repl` on a dirty git tree (offer `--allow-dirty`, whose snapshot pairs a `git stash create` object for tracked changes with a tree object for untracked files, so the rollback restores both rather than letting `git clean` delete what the stash never captured). An untracked file that exists but cannot be read refuses the run by name: it cannot be snapshotted, and the rollback would delete it regardless, so proceeding would break exactly the promise `--allow-dirty` makes. Untracked paths that vanish before the snapshot is taken are skipped rather than refused
+- The dirty-tree gate counts only what the user wrote. `.copperhead/runs/` is excluded by path, not by consulting `.gitignore`: the REPL opens its session log there before the first turn, so in a repository the user initialized by hand the gate would otherwise refuse a run over a file copperhead had just written. The exclusion costs nothing, because the audit trail is deliberately carried across a rollback rather than reset with the rest of the tree. Every copperhead commit tops the `.copperhead/runs/` ignore entry up (AC-4.3), so the trail never reaches project history
 - All file tools sandboxed to repo root; no network tools in Phase 1
 - `.env` in `.gitignore` from first commit; keys only via env vars — never written to any file, transcript, or commit
-- Transcripts in `.copperhead/runs/` redact anything matching `sk-[A-Za-z0-9_-]+`
+- Everything written under `.copperhead/runs/` redacts anything matching `sk-[A-Za-z0-9_-]+` at write time: the transcript and the summary
 - The Codex CLI's native read access and `~/.codex/sessions/` logs are outside Copperhead's enforcement/redaction boundary; the Codex path documents this host-local exposure explicitly
 - The agent never invents MPNs: any new part must come with a datasheet-verifiable justification in BOM.md, flagged `UNVERIFIED` for human review
 
@@ -447,7 +453,7 @@ Format: Given / When / Then. "Fixture" = the open-telegraph repo (or the tiny te
 - **AC-3.5 (repair loop)** Given an edit that first produces an ERC violation, the transcript shows: violation parsed → targeted fix → re-run → pass, within `maxRepairCycles`.
 - **AC-3.6 (rollback)** If violations persist after `maxRepairCycles`, working tree equals the pre-run state (`git status` clean, files byte-identical), exit non-zero, transcript path printed.
 - **AC-3.7 (surgical edits)** For every run above: the `.kicad_sch` diff touches only the s-expressions relevant to the change — file not regenerated (assert: < 5% of lines changed for AC-3.1).
-- **AC-3.8 (dirty tree)** With uncommitted changes and no `--allow-dirty`: refuses to start. Holds for `repl` as well as `do`, since `repl` is the default command. With `--allow-dirty`, a rollback restores both the tracked modifications and the untracked files that were present before the run.
+- **AC-3.8 (dirty tree)** With uncommitted changes and no `--allow-dirty`: refuses to start whenever the run is unattended (no TTY, or `--json`), or when the user declines the attended prompt described in §7; choosing commit or stash at that prompt leaves a clean tree and the run proceeds, and choosing "run anyway" proceeds under `--allow-dirty` semantics. Holds for `repl` as well as `do`, since `repl` is the default command. With `--allow-dirty`, a rollback restores both the tracked modifications and the untracked files that were present before the run. "Uncommitted changes" means the user's: a repository whose only uncommitted path is copperhead's own `.copperhead/runs/` counts as clean and starts without a prompt, even when `.gitignore` does not yet list it.
 - **AC-3.9 (dry run)** `--dry-run` prints the proposed diff and writes nothing.
 - **AC-3.10 (provider parity)** AC-3.1 passes with `--model codex`, `--model gpt-5`, `--model claude`, `--model claude-code`, `--model cursor`, and `--model compat:<id>` when each provider is configured.
 - **AC-3.11 (saved login)** With `--model claude-code`, a logged-in Claude Code (`CLAUDE_CODE_OAUTH_TOKEN` set) and **no** `ANTHROPIC_API_KEY`/`OPENAI_API_KEY`, a `do` run completes through the normal verify/commit path; copperhead reads no credential store; and no key material appears in the transcript, summary, or tree (AC-4.1 holds). A missing optional dependency or an unauthenticated install fails through the rollback path with an actionable error, not a raw stack trace.
@@ -465,7 +471,7 @@ Format: Given / When / Then. "Fixture" = the open-telegraph repo (or the tiny te
 
 - **AC-4.1** No file in the repo, transcript, or any commit ever contains a string matching `sk-[A-Za-z0-9_-]{20,}` (grep the whole tree + `.copperhead/runs/` after all tests).
 - **AC-4.2** A tool call with a path outside the repo root (e.g. `../../etc/hosts`) is rejected.
-- **AC-4.3** `.gitignore` includes `.env` and `.copperhead/runs/` in the very first commit of the repo.
+- **AC-4.3** `.gitignore` includes `.env` and `.copperhead/runs/` in the very first commit of the repo. This holds for the repository `create` initializes itself: the baseline ignore file is written before that initial commit.
 
 ### AC-7 · `copperhead sync` — full-state consistency
 

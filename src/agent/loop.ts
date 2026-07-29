@@ -22,6 +22,7 @@ import { plainRenderer, fmtDuration, fmtTokens, type ProgressRenderer } from './
 import { styleHeaderLines } from './theme.js';
 import { ObligationsLedger } from './ledger.js';
 import { gitPreflight, isDirty, snapshot, restore, commitAll, changedFiles, preserveFailedRun } from '../util/git.js';
+import { resolveDirtyTree, type DirtyChooser } from '../util/dirty.js';
 import { withRetry, isRateLimit, sessionLimit } from '../util/retry.js';
 import { openspecArchive } from '../openspec/cli.js';
 import { existsSync } from 'node:fs';
@@ -57,6 +58,12 @@ export interface RunOptions {
    * grant (0 fails the run as before). Absent means non-interactive: fail.
    */
   onBudgetExhausted?: (stats: BudgetExhaustedStats) => Promise<number>;
+  /**
+   * Called when the dirty-tree gate would refuse the run, to pick a way
+   * through it (commit, stash, run anyway, cancel). Absent means
+   * non-interactive: refuse as before.
+   */
+  onDirtyTree?: DirtyChooser;
   /** Extra prompt appended for pipeline stages (Mode A). */
   stagePrompt?: string;
   /** Test seam: bypass makeProvider. */
@@ -235,7 +242,14 @@ async function runWithMemory(
   const config = await loadConfig(repoRoot);
   const maxTurns = opts.maxTurns ?? config.maxTurns;
 
-  await gitPreflight(repoRoot, { allowDirty: opts.allowDirty ?? false });
+  // Dirty tree: an attended run is offered the fixes the refusal message would
+  // otherwise only describe (commit / stash / run anyway). No chooser means
+  // unattended, so the gate refuses exactly as before (AC-3.8).
+  let allowDirty = opts.allowDirty ?? false;
+  if (!allowDirty && opts.onDirtyTree) {
+    ({ allowDirty } = await resolveDirtyTree(repoRoot, opts.onDirtyTree, log));
+  }
+  await gitPreflight(repoRoot, { allowDirty });
   const snap = await snapshot(repoRoot);
 
   const transcript = new Transcript(repoRoot);
