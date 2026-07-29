@@ -2,7 +2,16 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
-import { DEFAULTS, loadConfig, resolveModel, type CopperheadConfig } from '../config.js';
+import {
+  DEFAULTS,
+  DEFAULT_API_KEY_ENV,
+  isLocalEndpoint,
+  loadConfig,
+  resolveCompatSettings,
+  resolveModel,
+  type CompatSettings,
+  type CopperheadConfig,
+} from '../config.js';
 import { kicadCliVersion } from '../kicad/cli.js';
 import { redactSecrets } from '../util/redact.js';
 
@@ -15,7 +24,7 @@ const execFileP = promisify(execFile);
  * at the model provider). Each probe fails soft: a missing tool is a reported
  * `fail`, never a thrown error, so `doctor` still prints the rest of the report.
  */
-export type DoctorStatus = 'ok' | 'fail' | 'info';
+export type DoctorStatus = 'ok' | 'fail' | 'warn' | 'info';
 
 export interface DoctorCheck {
   name: string;
@@ -97,7 +106,139 @@ async function gitCheck(probe: () => Promise<string>): Promise<DoctorCheck> {
  * Saved-login providers (codex, claude-code) need no key and can't be verified
  * offline, so they report `info` (which does not block `ok`).
  */
-export function checkCredential(model: string, env: NodeJS.ProcessEnv): DoctorCheck {
+export function checkCredential(
+  model: string,
+  env: NodeJS.ProcessEnv,
+  compat?: CompatSettings | undefined,
+): DoctorCheck {
+  // OpenAI-compatible endpoint: the credential lives in a variable the user
+  // names, and the endpoint is worth showing because it is the whole point of
+  // the route. A loopback endpoint (Ollama) needs no key at all (design D4).
+  if (model === 'compat' || model.startsWith('compat:')) {
+    const shownModel = redactSecrets(model);
+    const compatModel = model.startsWith('compat:') ? model.slice('compat:'.length) : undefined;
+    // Mirrors makeProvider (agent/loop.ts): bare `compat` has no valid default
+    // model, so it must fail here too, or doctor reports "ready" for a run
+    // that would fail on its very first turn.
+    if (!compatModel) {
+      return {
+        name: 'provider',
+        status: 'fail',
+        detail: `${shownModel} -> compat: ${model === 'compat:' ? 'empty' : 'missing'} model id`,
+        hint: 'use "compat:<model-id>"; a compatible endpoint has no default model to assume.',
+      };
+    }
+    const settings = compat ?? { apiKeyEnv: DEFAULT_API_KEY_ENV };
+    // Display only: some endpoints embed a credential in the URL itself (a
+    // query param, userinfo) — Gemini's compat endpoint does this with
+    // ?key=..., in a format redactSecrets' key-shape patterns don't cover.
+    // Drop the query and userinfo entirely rather than pattern-matching, so
+    // this holds regardless of what a given provider's key looks like.
+    // isLocalEndpoint() below still runs against the raw settings.baseURL,
+    // never this.
+    const where = (() => {
+      if (!settings.baseURL) return '(no baseURL configured)';
+      try {
+        const u = new URL(settings.baseURL);
+        return `${u.origin}${u.pathname}`;
+      } catch {
+        return redactSecrets(settings.baseURL);
+      }
+    })();
+    if (!settings.baseURL) {
+      return {
+        name: 'provider',
+        status: 'fail',
+        detail: `${shownModel} -> compat: no endpoint configured`,
+        hint: 'set COPPERHEAD_BASE_URL, or "baseURL" in .copperhead/config.json.',
+      };
+    }
+    if (isLocalEndpoint(settings.baseURL)) {
+      return {
+        name: 'provider',
+        status: 'ok',
+        detail: `${shownModel} -> compat: ${where} (local endpoint, no key required)`,
+      };
+    }
+    return env[settings.apiKeyEnv]
+      ? { name: 'provider', status: 'ok', detail: `${shownModel} -> compat: ${where} (${settings.apiKeyEnv} set)` }
+      : {
+          name: 'provider',
+          status: 'fail',
+          detail: `${shownModel} -> compat: ${where} (${settings.apiKeyEnv} not set)`,
+          hint: `export ${settings.apiKeyEnv}=... for that endpoint.`,
+        };
+  }
+  return checkKeyedCredential(model, env);
+}
+
+/**
+ * Hosts whose free tier may train on submitted prompts. Keyed on hostname
+ * rather than model name: hostnames are stable, model and tier names rot in
+ * months, so the tier detail belongs in docs (design D5). Never `fail` — a
+ * contributor deliberately using a free tier on a non-proprietary board is not
+ * misconfigured, so this must not make `doctor` exit non-zero.
+ */
+const TRAINING_RISK_HOSTS: Record<string, string> = {
+  'generativelanguage.googleapis.com': "Gemini's free tier may train on submitted prompts",
+  'openrouter.ai': 'OpenRouter `:free` models may route to providers that train on prompts',
+};
+
+/**
+ * True loopback only — unlike `isLocalEndpoint` (config.ts), this excludes
+ * `.local`/mDNS hostnames. `isLocalEndpoint`'s broader definition is correct
+ * for "does this need a credential" (many LAN-hosted servers skip auth), but
+ * wrong for the privacy bypass below: a request to `nas.local` genuinely
+ * leaves the machine onto the LAN to a different physical device, so "nothing
+ * leaves the machine" does not hold the way it does for real loopback.
+ */
+function isLoopbackHost(baseURL: string): boolean {
+  try {
+    const h = new URL(baseURL).hostname.toLowerCase();
+    return h === 'localhost' || h === '127.0.0.1' || h === '::1' || h === '[::1]';
+  } catch {
+    return false;
+  }
+}
+
+/** A `warn` line when the configured endpoint's host is a documented training risk. */
+export function checkPromptPrivacy(model: string, compat?: CompatSettings | undefined): DoctorCheck | null {
+  if (model !== 'compat' && !model.startsWith('compat:')) return null;
+  if (!compat?.baseURL) return null;
+  // A true loopback endpoint has no third party to have a policy about:
+  // nothing leaves the machine, so "check the provider's terms" would be
+  // nonsensical. A LAN host (including .local) does not get this bypass.
+  if (isLoopbackHost(compat.baseURL)) return null;
+  let host: string;
+  try {
+    host = new URL(compat.baseURL).hostname.toLowerCase();
+  } catch {
+    return null;
+  }
+  const noPolicyOnRecord = (): DoctorCheck => ({
+    name: 'privacy',
+    status: 'info',
+    detail: `${host}: no known training-on-prompts policy on record (copperhead cannot verify this; check the provider's terms)`,
+  });
+  const risk = Object.entries(TRAINING_RISK_HOSTS).find(([h]) => host === h || host.endsWith(`.${h}`));
+  if (!risk) return noPolicyOnRecord();
+  // OpenRouter's documented risk is specific to its `:free`-suffixed models
+  // (their own wording), not the host as a whole. Warning on a fully paid
+  // OpenRouter model would be a false positive that undermines trust in the
+  // other, host-wide warnings (Gemini's applies to its whole free tier).
+  if (risk[0] === 'openrouter.ai') {
+    const compatModel = model.startsWith('compat:') ? model.slice('compat:'.length) : '';
+    if (!compatModel.endsWith(':free')) return noPolicyOnRecord();
+  }
+  return {
+    name: 'privacy',
+    status: 'warn',
+    detail: `${host}: ${risk[1]}`,
+    hint: 'PCB designs are often proprietary. Use a paid tier or a local endpoint for confidential work.',
+  };
+}
+
+function checkKeyedCredential(model: string, env: NodeJS.ProcessEnv): DoctorCheck {
   // A pasted API key can end up as the model value (--model sk-..., a stray
   // COPPERHEAD_MODEL); redact it before it reaches the report, same policy as
   // transcripts (AC-4.1). Routing below still uses the raw value.
@@ -152,16 +293,20 @@ function providerCheck(
 ): DoctorCheck {
   try {
     const { model } = resolveModel(flag, config, env);
-    return checkCredential(model, env);
+    return checkCredential(model, env, resolveCompatSettings(config, env));
   } catch (err) {
-    // resolveModel throws only when nothing selects a model at all. Its message
-    // starts with "no model configured: " — already this check's detail line —
-    // so keep only the remedy part for the hint.
+    // resolveModel throws for two distinct reasons: nothing selects a model at
+    // all ("no model configured: ..."), or two-plus credentials are present
+    // with nothing to break the tie ("ambiguous: ..."). Strip whichever prefix
+    // matched for the hint, and reflect which case it was in the detail so an
+    // ambiguous setup does not misreport as "nothing configured".
+    const message = (err as Error).message;
+    const ambiguous = message.startsWith('ambiguous:');
     return {
       name: 'provider',
       status: 'fail',
-      detail: 'no model configured',
-      hint: (err as Error).message.replace(/^no model configured:\s*/, ''),
+      detail: ambiguous ? 'ambiguous: multiple credentials, no model selected' : 'no model configured',
+      hint: message.replace(/^(no model configured|ambiguous):\s*/, ''),
     };
   }
 }
@@ -222,17 +367,31 @@ export async function runDoctor(opts: RunDoctorOptions): Promise<DoctorReport> {
             hint: 'check that it is a regular file (not a directory) and that you have permission to read it.',
           };
   }
+  // Resolving the model can fail (nothing configured); providerCheck reports
+  // that, and the compat-only checks simply do not apply in that case.
+  const compat = resolveCompatSettings(config, deps.env);
+  let resolvedModel: string | null = null;
+  try {
+    resolvedModel = resolveModel(opts.model, config, deps.env).model;
+  } catch {
+    resolvedModel = null;
+  }
   const checks: DoctorCheck[] = [
     nodeCheck(deps.nodeVersion),
     await kicadCheck(deps.kicadVersion),
     await gitCheck(deps.gitVersion),
     providerCheck(opts.model, config, deps.env),
-    configError ?? projectCheck(config, opts.repoRoot),
   ];
+  if (resolvedModel) {
+    const privacy = checkPromptPrivacy(resolvedModel, compat);
+    if (privacy) checks.push(privacy);
+  }
+  checks.push(configError ?? projectCheck(config, opts.repoRoot));
+  // `warn` and `info` never block: only a hard failure means "not ready".
   return { ok: checks.every((c) => c.status !== 'fail'), checks };
 }
 
-const TAG: Record<DoctorStatus, string> = { ok: '[ok]', fail: '[FAIL]', info: '[info]' };
+const TAG: Record<DoctorStatus, string> = { ok: '[ok]', fail: '[FAIL]', warn: '[warn]', info: '[info]' };
 const TAG_COL = 2; // leading indent
 const NAME_COL = TAG_COL + 7; // widest tag "[FAIL]" + one space
 const DETAIL_COL = NAME_COL + 10; // widest name "kicad-cli" + one space
@@ -242,7 +401,7 @@ const DETAIL_COL = NAME_COL + 10; // widest name "kicad-cli" + one space
 // tests see plain text. Colored text is padded before painting — escape codes
 // have zero display width but nonzero string length, so painting first would
 // break the column math.
-const ANSI: Record<DoctorStatus, string> = { ok: '32', fail: '31', info: '36' };
+const ANSI: Record<DoctorStatus, string> = { ok: '32', fail: '31', warn: '33', info: '36' };
 const DIM = '2';
 function paint(text: string, code: string, on: boolean): string {
   return on ? `\u001b[${code}m${text}\u001b[0m` : text;

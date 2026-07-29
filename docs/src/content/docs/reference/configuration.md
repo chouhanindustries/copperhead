@@ -32,6 +32,8 @@ Written by `copperhead init`. Every key is optional; the defaults below apply wh
 | `maxTurns` | `40` | Turn budget per run. |
 | `maxRepairCycles` | `5` | ERC/DRC repair attempts before the run rolls back to the git snapshot. |
 | `budgets` | `{}` | Free-form hard constraints, surfaced verbatim into every run's system prompt. |
+| `baseURL` | unset | Base URL of an OpenAI-compatible endpoint. Read **only** by the `compat` model route. |
+| `apiKeyEnv` | `OPENAI_API_KEY` | Name of the environment variable holding that endpoint's key. The name, never the key itself. |
 
 There is also a `generatedHashes` key, maintained by copperhead. It records content hashes of the generated docs so `init` can tell an untouched file from a hand-edited one. Do not edit it by hand.
 
@@ -64,6 +66,8 @@ The constraint registry: machine-readable counterparts to the constraints stated
 | `COPPERHEAD_MODEL` | Default model. Overrides config, overridden by `--model`. |
 | `COPPERHEAD_CODEX_PATH` | Optional path to a `codex` executable. Defaults to `codex` on `PATH`; the SDK-bundled launcher is a fallback. |
 | `COPPERHEAD_CURSOR_PATH` | Optional path to the Cursor Agent CLI (`agent` / `cursor-agent`). Defaults to `agent` on `PATH`. |
+| `COPPERHEAD_BASE_URL` | Optional. Overrides `baseURL`. Only the `compat` route reads it, so it never redirects a `gpt-5` run. |
+| `COPPERHEAD_API_KEY_ENV` | Optional. Overrides `apiKeyEnv`, e.g. `GROQ_API_KEY`. |
 | `NO_COLOR` | Optional. Disables ANSI colors in `doctor` output; colors are also skipped automatically when stdout is not a terminal. |
 | `SYNAP_API_KEY` | Optional. Enables cross-run memory. Absent, copperhead behaves exactly as before and makes no Synap calls. |
 | `SYNAP_USER_ID` | Optional memory scope. Defaults to your `git config user.email`. |
@@ -98,10 +102,22 @@ Accepted model values (routing is by prefix; `makeProvider` checks `codex`, then
 | `codex` / `codex:<id>` | Codex CLI, saved login | none (local Codex login) |
 | `claude-code` / `claude-code:<id>` | Claude Code, saved login | none (uses `CLAUDE_CODE_OAUTH_TOKEN` / your logged-in CLI) |
 | `cursor` / `cursor:<id>` | Cursor Agent CLI, saved login | none (`agent login`) |
+| `compat:<id>` | Any OpenAI-compatible endpoint (Groq, OpenRouter, Gemini, Ollama) | the variable named by `apiKeyEnv`; none for a local endpoint |
 | `claude` / `claude-<id>` | Anthropic API | `ANTHROPIC_API_KEY` |
 | `gpt-5` / anything else | OpenAI API | `OPENAI_API_KEY` |
 
 `claude-code` is matched before the `claude` prefix, so it is never captured by the Anthropic API route. Cursor runs report 0 token usage (CLI JSON has no usage fields).
+
+For `compat:<id>`, set `baseURL` and `apiKeyEnv` together — either as `COPPERHEAD_BASE_URL`/`COPPERHEAD_API_KEY_ENV`, or as `baseURL`/`apiKeyEnv` in `.copperhead/config.json`:
+
+```bash
+export COPPERHEAD_BASE_URL=https://openrouter.ai/api/v1
+export COPPERHEAD_API_KEY_ENV=OPENROUTER_API_KEY
+export OPENROUTER_API_KEY=sk-or-v1-...
+copperhead do "..." --model compat:<model-id>
+```
+
+A local endpoint (Ollama) needs no key: `COPPERHEAD_BASE_URL=http://localhost:11434/v1` and no `apiKeyEnv` at all. Only the `compat` route reads `baseURL`, so leaving these set does not affect `gpt-5` or any other model.
 
 ### Saved login (Claude Code)
 

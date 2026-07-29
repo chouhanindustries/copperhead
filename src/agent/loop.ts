@@ -7,7 +7,15 @@ import { CachingProvider } from './response-cache.js';
 import { withTimeout, TurnTimeoutError } from './recovery.js';
 import { buildSystemPrompt } from './prompts.js';
 import { loadConstraints, reopenDeferredAffects } from '../memory/constraints.js';
-import { loadConfig, CONFIG_DIR, type CopperheadConfig } from '../config.js';
+import {
+  loadConfig,
+  CONFIG_DIR,
+  DEFAULT_API_KEY_ENV,
+  resolveCompatSettings,
+  isCompatModel,
+  type CompatSettings,
+  type CopperheadConfig,
+} from '../config.js';
 import { Transcript, type ExitPath, type RunStats } from './transcript.js';
 import { collectRunMeta, renderCliHeader, type RunMeta, type RunMetaInput } from './runmeta.js';
 import { plainRenderer, fmtDuration, fmtTokens, type ProgressRenderer } from './render.js';
@@ -74,7 +82,43 @@ export interface RunResult {
   cacheHits: number;
 }
 
-export async function makeProvider(model: string, sessionResume = false): Promise<Provider> {
+export async function makeProvider(
+  model: string,
+  sessionResume = false,
+  compat?: CompatSettings | undefined,
+): Promise<Provider> {
+  // OpenAI-compatible endpoint (Groq, OpenRouter, Gemini compat, local
+  // Ollama). An explicit `compat` prefix is the opt-in: nothing else
+  // consults baseURL, so a stray COPPERHEAD_BASE_URL cannot redirect a keyed
+  // `gpt-5` run to a third party (design D2).
+  if (isCompatModel(model)) {
+    const compatModel = model.startsWith('compat:') ? model.slice('compat:'.length) : undefined;
+    if (compatModel === '') {
+      throw new Error('compat model override cannot be empty; use "compat:<model-id>"');
+    }
+    const settings = compat ?? { apiKeyEnv: DEFAULT_API_KEY_ENV };
+    // Bare `compat` (no id) has no valid default: unlike gpt-5/claude, a
+    // compatible endpoint serves whatever models its host chooses, so there is
+    // no id that is ever correct to assume. Falling through here would build a
+    // provider that silently sends the literal string "gpt-5" (OpenAIProvider's
+    // own default) to a host that almost certainly does not serve it.
+    if (!compatModel) {
+      throw new Error(
+        settings.baseURL
+          ? `compat requires a model id; use "compat:<model-id>" (endpoint ${settings.baseURL} is configured, but has no default model)`
+          : 'compat requires a model id and an endpoint; use "compat:<model-id>" and set baseURL (COPPERHEAD_BASE_URL or .copperhead/config.json)',
+      );
+    }
+    if (!settings.baseURL) {
+      throw new Error(
+        `compat:${compatModel} requires an endpoint; set baseURL (COPPERHEAD_BASE_URL or "baseURL" in .copperhead/config.json) — without one this would silently fall back to the real OpenAI API.`,
+      );
+    }
+    return new OpenAIProvider(compatModel, {
+      baseURL: settings.baseURL,
+      apiKeyEnv: settings.apiKeyEnv,
+    });
+  }
   if (model === 'codex' || model.startsWith('codex:')) {
     const codexModel = model.startsWith('codex:') ? model.slice('codex:'.length) : undefined;
     if (codexModel === '') throw new Error('codex model override cannot be empty; use "codex" or "codex:<model-id>"');
@@ -220,12 +264,24 @@ async function runWithMemory(
   // it only when the env flag is set AND config.llmCache is disabled — the same
   // condition under which we skip the CachingProvider wrap below.
   const sessionResume = process.env.COPPERHEAD_CC_SESSION_RESUME === '1' && !config.llmCache;
-  let provider = opts.provider ?? (await makeProvider(opts.model, sessionResume));
+  const compatSettings = resolveCompatSettings(config);
+  let provider = opts.provider ?? (await makeProvider(opts.model, sessionResume, compatSettings));
   // Cache every turn's response so a retried/restarted stage replays what it
   // already paid for instead of re-calling the model (repo-scoped, cross-run).
   // Skip an injected provider (tests drive scripted providers directly).
   if (config.llmCache && !opts.provider) {
-    provider = new CachingProvider(provider, path.join(repoRoot, CONFIG_DIR, 'llm-cache'), log, opts.model);
+    // Mirrors makeProvider's own gate above (D2/AC-3.16): COPPERHEAD_BASE_URL
+    // is consulted only for the explicit `compat:` route, so a gpt-5/claude
+    // run's cache key must not vary with a variable that run never reads —
+    // otherwise every non-compat cache entry gets orphaned each time the
+    // endpoint used for compat testing changes.
+    provider = new CachingProvider(
+      provider,
+      path.join(repoRoot, CONFIG_DIR, 'llm-cache'),
+      log,
+      opts.model,
+      isCompatModel(opts.model) ? compatSettings.baseURL : undefined,
+    );
   }
   providers.add(provider);
   // Held separately from `provider` (which is reassigned on failover) so the
