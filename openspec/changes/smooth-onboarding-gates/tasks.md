@@ -33,7 +33,7 @@
 - [x] 5.3 `test/dirty-tree.test.ts`: each choice's effect on the tree and history, a thrown prompt reading as cancel, a clean tree never asking, the repo/unborn-HEAD gates never prompting, the file-list cap, plus in-loop coverage (no chooser refuses, cancel refuses, commit proceeds, `--allow-dirty` never asks)
 - [x] 5.4 Remove the two obsolete `create` refusal cases from `test/preflight.test.ts`; the `do`-path gates there stay untouched
 - [x] 5.5 `test/preflight.test.ts`: a hand-initialized repo with no copperhead ignores and a written session log passes the gate, while the user's own uncommitted file still refuses and is the only path named
-- [x] 5.6 `test/dirty-tree.test.ts`: `dirtyFiles` names paths in full for every porcelain status column (` M`, `??`, staged rename)
+- [x] 5.6 `test/dirty-tree.test.ts`: `dirtyFiles` names paths in full for every porcelain status column (an unstaged modification, whose column is a leading space, plus untracked and staged-rename)
 - [x] 5.7 `test/repl.test.ts`: the two session-log tests wait on the turn starting instead of a fixed 30ms sleep, which the new pre-turn git probe made too tight
 
 ## 6. Docs
