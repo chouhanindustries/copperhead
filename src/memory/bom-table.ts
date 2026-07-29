@@ -10,6 +10,25 @@ export interface TableRow {
   }
   
   /**
+   * Split one row into trimmed cells. The outer pipes are optional, because they
+   * are optional in GitHub-flavored markdown: `Refdes | Pin | Net` renders as a
+   * table exactly like `| Refdes | Pin | Net |` does, and a hand- or LLM-authored
+   * doc may legitimately be written either way.
+   */
+  function splitRow(line: string): string[] {
+    return line
+      .replace(/^\|/, '')
+      .replace(/\|$/, '')
+      .split('|')
+      .map((c) => c.trim());
+  }
+
+  /** `|---|:--:|` and friends: the row separating a header from its data. */
+  function isSeparatorRow(cells: string[]): boolean {
+    return cells.length > 0 && cells.every((c) => /^:?-+:?$/.test(c));
+  }
+
+  /**
    * Parses every markdown pipe-table row out of a document, across however
    * many tables the file contains, skipping separator rows (e.g. `|---|---|`).
    * Malformed lines (stray `|` outside a real table) just become a row with
@@ -67,28 +86,50 @@ export interface TableRow {
    * it loops on finish forever. Resolving by header name fixes that.
    */
   export function parseCanonicalTables(md: string): Array<{ header: TableRow; rows: TableRow[] }> {
-    const groups: TableRow[][] = [];
-    let current: TableRow[] | null = null;
+    type Line = { cells: string[]; separator: boolean };
+    const groups: Line[][] = [];
+    let current: Line[] | null = null;
+    let width = 0; // column count of the open group, set by its first line
     for (const line of md.split('\n')) {
       const t = line.trim();
-      if (!t.startsWith('|')) {
+      if (!t.includes('|')) {
         current = null; // a blank or prose line terminates the current table
         continue;
       }
-      const cells = t
-        .split('|')
-        .slice(1, -1)
-        .map((c) => c.trim());
-      if (cells.every((c) => /^:?-+:?$/.test(c))) continue; // separator row: stays within the table
+      const cells = splitRow(t);
+      // Outer pipes make a line unambiguously a table row. Without them, a
+      // pipe-bearing prose line (`Legend: A | B`) is indistinguishable from a
+      // row by shape alone, so the column count decides: matching the open
+      // table's width keeps it as a row, a mismatch ends the table there rather
+      // than reading the prose as a part/pin. The line still opens a new group,
+      // in case it is itself the header of an un-piped table.
+      if (current && !t.startsWith('|') && cells.length !== width) current = null;
       if (!current) {
         current = [];
+        width = cells.length;
         groups.push(current);
       }
-      current.push({ cells });
+      // The separator row stays in the group so the header can be located
+      // relative to it; it is dropped from the rows returned below.
+      current.push({ cells, separator: isSeparatorRow(cells) });
     }
     const tables: Array<{ header: TableRow; rows: TableRow[] }> = [];
     for (const g of groups) {
-      if (g.length && isHeader(g[0]!)) tables.push({ header: g[0]!, rows: g.slice(1) });
+      // The header is the row directly above the separator. Falling back to the
+      // first row keeps a table that omits the separator working, and anchoring
+      // on the separator means a stray pipe-bearing prose line immediately above
+      // a table no longer hides it.
+      const sep = g.findIndex((l) => l.separator);
+      const headerIdx = sep > 0 ? sep - 1 : 0;
+      const header = g[headerIdx];
+      if (!header || header.separator || !isHeader({ cells: header.cells })) continue;
+      tables.push({
+        header: { cells: header.cells },
+        rows: g
+          .slice(headerIdx + 1)
+          .filter((l) => !l.separator)
+          .map((l) => ({ cells: l.cells })),
+      });
     }
     return tables;
   }

@@ -55,7 +55,7 @@ async function main() {
   const readmeContent = await readFile(readmePath, 'utf8');
 
   // Verify and update status line version
-  const statusLineRegex = /(>\s+\*\*Status:\s+([A-Za-z0-9_-]+)\s+\(v)[^)]+(\)\.\*\*)/;
+  const statusLineRegex = /(>\s+\*\*Status:\s+([A-Za-z0-9_-]+)\s+\(v)([^)]+)(\)\.\*\*)/;
   const currentStatusLineMatch = readmeContent.match(statusLineRegex);
 
   let newReadme = readmeContent;
@@ -75,7 +75,7 @@ async function main() {
       process.exit(1);
     }
   } else {
-    const currentVersion = currentStatusLineMatch[0].match(/v([^)]+)/)?.[1];
+    const currentVersion = currentStatusLineMatch[3];
     if (currentVersion !== version) {
       const statusText = currentStatusLineMatch[2];
       const expectedStatusLine = `> **Status: ${statusText} (v${version}).**`;

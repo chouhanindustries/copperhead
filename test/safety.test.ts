@@ -51,6 +51,44 @@ describe('secret redaction (AC-4.1)', () => {
     expect(out).toBe('[REDACTED] [REDACTED] [REDACTED]');
   });
 
+  it('redacts a base64 bearer token whole, leaving no tail', () => {
+    // Synthetic token: correct shape, never valid. Standard base64 uses +, /
+    // and =; a charset that stops at the first one writes the rest to disk.
+    const input = 'Bearer ABCDEFGHIJKLMNOP+SECRETTAILabcdef/MORESECRET=';
+    const out = redactSecrets(input);
+
+    expect(out).toBe('[REDACTED]');
+    expect(out).not.toContain('SECRETTAIL');
+    expect(out).not.toContain('MORESECRET');
+  });
+
+  it('redacts bearer tokens regardless of scheme casing', () => {
+    // HTTP auth schemes are case-insensitive (RFC 7235 §2.1).
+    for (const scheme of ['Bearer', 'bearer', 'BEARER', 'BeArEr']) {
+      const out = redactSecrets(`authorization: ${scheme} abcdefghijklmnopqrst`);
+      expect(out, scheme).toBe('authorization: [REDACTED]');
+    }
+  });
+
+  it('redacts npm tokens that contain dashes', () => {
+    // npm also issues UUID-shaped tokens. Synthetic, never valid.
+    const out = redactSecrets('npm_0123456789abcdef-0123-4567-89ab-cdef01234567');
+    expect(out).toBe('[REDACTED]');
+  });
+
+  it('leaves ordinary prose alone', () => {
+    // The patterns are deliberately broad, but not so broad that a run summary
+    // loses readable text.
+    for (const text of [
+      'the bearer of this note',
+      'Bearer token missing',
+      'a npm_ package name',
+      'see the github_pat docs',
+    ]) {
+      expect(redactSecrets(text), text).toBe(text);
+    }
+  });
+
   it('transcript and summary are redacted at write time', async () => {
     const dir = await mkdtemp(path.join(tmpdir(), 'ch-'));
     const t = new Transcript(dir);

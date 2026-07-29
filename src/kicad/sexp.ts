@@ -224,15 +224,33 @@ function symbolsOf(sheet: ParsedSheet): { node: SexpNode[]; sym: SchematicSymbol
   return out;
 }
 
-const isPowerSymbol = (libId: string): boolean => libId.startsWith('power:');
+function collectPowerSymbols(sheets: ParsedSheet[]): Set<string> {
+  const set = new Set<string>();
+  for (const sheet of sheets) {
+    const libs = child(sheet.root, 'lib_symbols');
+    if (!libs) continue;
+    for (const sym of children(libs, 'symbol')) {
+      const name = atomAt(sym, 1);
+      const p = child(sym, 'power');
+      if (name && p !== undefined && atomAt(p, 1) !== 'no') {
+        set.add(name);
+      }
+    }
+  }
+  return set;
+}
+
+const isPowerSymbol = (libId: string, powerSyms: Set<string>): boolean =>
+  libId.startsWith('power:') || powerSyms.has(libId);
 
 /** One row per real component (power symbols excluded), across all sheets. */
 export async function listSymbols(rootSch: string): Promise<SchematicSymbol[]> {
   const sheets = await loadSheets(rootSch);
+  const powerSyms = collectPowerSymbols(sheets);
   const out: SchematicSymbol[] = [];
   for (const sheet of sheets) {
     for (const { sym } of symbolsOf(sheet)) {
-      if (!isPowerSymbol(sym.libId)) out.push(sym);
+      if (!isPowerSymbol(sym.libId, powerSyms)) out.push(sym);
     }
   }
   return out.sort((a, b) => a.ref.localeCompare(b.ref, undefined, { numeric: true }));
@@ -241,6 +259,7 @@ export async function listSymbols(rootSch: string): Promise<SchematicSymbol[]> {
 /** All net names visible via labels and power symbols, across all sheets. */
 export async function listNets(rootSch: string): Promise<string[]> {
   const sheets = await loadSheets(rootSch);
+  const powerSyms = collectPowerSymbols(sheets);
   const names = new Set<string>();
   for (const sheet of sheets) {
     for (const kind of ['label', 'global_label', 'hierarchical_label']) {
@@ -250,7 +269,7 @@ export async function listNets(rootSch: string): Promise<string[]> {
       }
     }
     for (const { sym } of symbolsOf(sheet)) {
-      if (isPowerSymbol(sym.libId)) names.add(sym.value);
+      if (isPowerSymbol(sym.libId, powerSyms)) names.add(sym.value);
     }
   }
   return [...names].sort();
@@ -271,6 +290,7 @@ export interface PinNet {
  */
 export async function pinNets(rootSch: string): Promise<PinNet[]> {
   const sheets = await loadSheets(rootSch);
+  const powerSyms = collectPowerSymbols(sheets);
   const out: PinNet[] = [];
   for (const sheet of sheets) {
     const pinDefs = libPinDefs(sheet.root);
@@ -304,7 +324,7 @@ export async function pinNets(rootSch: string): Promise<PinNet[]> {
         const abs = pinAbsolute(sym.at, mirror, pin);
         const k = key(abs.x, abs.y);
         uf.find(k);
-        if (isPowerSymbol(sym.libId)) {
+        if (isPowerSymbol(sym.libId, powerSyms)) {
           netNameAt.set(k, sym.value);
         } else {
           symPins.push({ sym, pin, k });

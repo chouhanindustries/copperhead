@@ -25,3 +25,5 @@ They may not hit the network, use `Date.now()` / `Math.random()` / wall-clock, o
 ## Finding format
 
 Every finding states: a one-sentence claim, the file and line, a concrete failure scenario (the inputs or state that lead to wrong behavior), and a concrete fix, either a one-line change or a failing test that reproduces it.
+
+Those four fields are also what the report's fix prompt is built from (see `fix-prompt.md`), so write them to stand alone: a finding that leans on surrounding narration cannot be handed to another agent.

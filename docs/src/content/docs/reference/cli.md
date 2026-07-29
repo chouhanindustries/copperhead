@@ -128,19 +128,24 @@ With `--json`, prints a result object with `ok` plus per-check detail for `erc`,
 copperhead doctor [--model <model>]
 ```
 
-Environment preflight: checks whether this machine can actually run a copperhead command, **before** you start one. Unlike `check`, it looks at the model provider, the one thing `check` cannot, since `check` is contractually LLM-free. Makes **no LLM calls and no network requests**; the credential check is presence-only (it verifies a required API key is set, not that it authenticates).
+Environment preflight: checks whether this machine can actually run a copperhead command, **before** you start one. Unlike `check`, it looks at the model provider, the one thing `check` cannot, since `check` is contractually LLM-free. Makes **no LLM calls and no network requests**; the credential check is presence-only (it verifies a required API key is set, not that it authenticates). If a compat endpoint or key is actually wrong, the real run surfaces that directly.
 
 Checks, in order:
 
 - **node** — at least the version copperhead requires.
 - **kicad-cli** — present on PATH (a missing binary is reported, not thrown).
 - **git** — present on PATH (copperhead snapshots and commits its work).
-- **provider** — resolves the model the same way a run does (`--model` > `COPPERHEAD_MODEL` > config > available key) and checks its credential. Saved-login providers (`codex`, `cursor`, `claude-code`) need no key and report `info`.
+- **provider** — resolves the model the same way a run does (`--model` > `COPPERHEAD_MODEL` > config > available key) and checks its credential. Saved-login providers (`codex`, `cursor`, `claude-code`) need no key and report `info`. For `compat:<id>` it checks the variable named by `apiKeyEnv`; a local endpoint needs no key.
+- **privacy** — `compat` only. `[warn]` when the endpoint's host is documented as training on submitted prompts; `[info]` naming the host when a remote endpoint has no known policy on record. Neither ever fails the check. A true loopback endpoint (`localhost`/`127.0.0.1`/`::1`) skips this line entirely; a `.local`/LAN host does not, since that traffic still leaves the machine.
 - **project** — informational: whether `.copperhead/config.json` exists and what it wires. Never blocks.
+
+| Option | Description |
+| --- | --- |
+| `--model <model>` | Check the credential for this model instead of the resolved default. |
 
 | Exit code | Meaning |
 | --- | --- |
-| `0` | Ready — no critical check failed. |
+| `0` | Ready — no critical check failed. `[warn]` and `[info]` do not block. |
 | `1` | Not ready — a `[FAIL]` item needs fixing. |
 
 With `--json`, prints `{ ok, checks: [{ name, status, detail, hint? }] }`.
