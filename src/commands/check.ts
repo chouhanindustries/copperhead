@@ -55,10 +55,8 @@ export async function runCheck(repoRoot: string, log: (s: string) => void): Prom
   let openspec: { ok: boolean; detail: string } | null = null;
   if (existsSync(path.join(repoRoot, 'openspec', 'config.yaml'))) {
    const res = await openspecValidate(repoRoot);
-
-    const nothingToValidate =
-      !res.ok && res.output.includes('Nothing to validate');
-
+    const lines = res.output.trim().split("\n");
+    const nothingToValidate = !res.ok && lines[0] === "Nothing to validate. Try one of:";
     openspec = {
       ok: res.ok || nothingToValidate,
       detail: res.output,
