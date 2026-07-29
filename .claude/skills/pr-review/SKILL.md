@@ -5,7 +5,7 @@ allowed-tools: AskUserQuestion, Bash(gh:*), Bash(git:*), Bash(node:*), Bash(open
 compatibility: Requires the gh CLI, authenticated against chouhanindustries/copperhead.
 metadata:
   author: copperhead
-  version: "2.0"
+  version: "2.1"
 ---
 
 Review a pull request for this repository. Present the findings report to the user, and also post it to the PR automatically as a comment (`gh pr comment <n>`) so the review is recorded on GitHub. Do NOT submit a formal review (`gh pr review --approve` / `--request-changes`) unless the user explicitly asks: those affect merge gating, whereas a plain comment does not.
@@ -40,7 +40,9 @@ Review a pull request for this repository. Present the findings report to the us
 
 **Output**
 
-A short verdict first (approve / approve with nits / request changes), then the **metrics block** pasted from the script's output (template and metric definitions in `references/metrics.md`), then findings ranked by severity in the checklist's finding format. For a confirmed correctness bug prefer the repro test, mirroring the repo's regression-test habit. Note explicitly which invariant checks were performed and passed, so a clean report is distinguishable from an unexamined one. State the method for each metric and report unmeasured ones explicitly (a silent omission reads as "clean"); the uncovered-lines entry must reconcile with the untested-surface findings below it.
+A short verdict first (approve / approve with nits / request changes), then the **metrics block** pasted from the script's output (template and metric definitions in `references/metrics.md`), then findings ranked by severity in the checklist's finding format, then the **fix prompt** (below). For a confirmed correctness bug prefer the repro test, mirroring the repo's regression-test habit. Note explicitly which invariant checks were performed and passed, so a clean report is distinguishable from an unexamined one. State the method for each metric and report unmeasured ones explicitly (a silent omission reads as "clean"); the uncovered-lines entry must reconcile with the untested-surface findings below it.
+
+**Fix prompt** (last section of the report, in-session and in the posted comment): a single copy-pasteable block, headed `## Fix prompt` with the line "Paste this into your coding agent to resolve the findings above." It restates every surviving finding in full so the author's agent needs nothing but the block, and it carries the repo invariants and the verification commands with it. Build it from the template and rules in `references/fix-prompt.md`. Emit it whenever at least one finding survived, including a nits-only report; on a clean report write one line saying there are no findings and therefore no fix prompt. Never let it disagree with the findings list above it: same findings, same severities, same order, wording carried over rather than re-summarized.
 
 **Severity rubric** (apply it consistently so a level means the same thing across runs):
 

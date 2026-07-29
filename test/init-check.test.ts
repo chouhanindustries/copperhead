@@ -228,6 +228,24 @@ describe('model selection precedence (task 4.6)', () => {
     });
     expect(() => resolveModel(undefined, config, {})).toThrow(/no model configured/);
   });
+
+  it('refuses to guess when two or more credentials are present (no silent favorite)', () => {
+    // A single key is a safe guess (nothing to guess wrong). Two keys is not:
+    // silently favoring OPENAI_API_KEY over an also-present ANTHROPIC_API_KEY
+    // (or vice versa) can route a request to the wrong provider — including a
+    // paid one — with no signal that a choice was even made.
+    expect(() => resolveModel(undefined, config, { OPENAI_API_KEY: 'x', ANTHROPIC_API_KEY: 'y' })).toThrow(
+      /ambiguous: 2 credentials found \(OPENAI_API_KEY, ANTHROPIC_API_KEY\)/,
+    );
+    // --model, COPPERHEAD_MODEL, and config.model all still break the tie explicitly.
+    expect(resolveModel('claude', config, { OPENAI_API_KEY: 'x', ANTHROPIC_API_KEY: 'y' })).toEqual({
+      model: 'claude',
+      source: 'flag',
+    });
+    expect(
+      resolveModel(undefined, config, { COPPERHEAD_MODEL: 'gpt-5', OPENAI_API_KEY: 'x', ANTHROPIC_API_KEY: 'y' }),
+    ).toEqual({ model: 'gpt-5', source: 'env' });
+  });
 });
 
 describe('config loading', () => {
