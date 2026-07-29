@@ -3,6 +3,7 @@ import type { AddressInfo } from 'node:net';
 import { describe, it, expect, afterEach } from 'vitest';
 import { OpenAIProvider, serializeToolCall, parseToolCall } from '../src/agent/providers/openai.js';
 import type { Msg, ToolSchema } from '../src/agent/types.js';
+import { chatCompletionSse } from './helpers.js';
 
 /**
  * The OpenAI provider talks to a real SDK, so the thing worth pinning is the
@@ -31,9 +32,17 @@ async function withStubApi(
     let raw = '';
     req.on('data', (c) => (raw += c));
     req.on('end', () => {
-      seen = { path: req.url ?? '', auth: req.headers.authorization, body: JSON.parse(raw) };
-      res.setHeader('content-type', 'application/json');
-      res.end(JSON.stringify(reply));
+      const body = JSON.parse(raw);
+      seen = { path: req.url ?? '', auth: req.headers.authorization, body };
+      // The provider streams by default; answer in the shape it asked for so
+      // both paths stay exercised by the same fixtures.
+      if (body.stream) {
+        res.setHeader('content-type', 'text/event-stream');
+        res.end(chatCompletionSse(reply as Record<string, any>));
+      } else {
+        res.setHeader('content-type', 'application/json');
+        res.end(JSON.stringify(reply));
+      }
     });
   });
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
@@ -76,13 +85,20 @@ describe('OpenAIProvider — wire contract', () => {
       { role: 'system', content: 'You are copperhead.' },
       { role: 'user', content: 'inspect docs/SPEC.md' },
     ];
+    const deltas: string[] = [];
     const seen = await withStubApi(completion({ role: 'assistant', content: 'ok' }), async (p) => {
-      const turn = await p.chat(messages, tools, { maxTokens: 4096 });
+      const turn = await p.chat(messages, tools, { maxTokens: 4096, onText: (d) => deltas.push(d) });
       expect(turn.text).toBe('ok');
       expect(turn.toolCalls).toEqual([]);
       expect(turn.usage).toEqual({ inputTokens: 11, outputTokens: 7 });
     });
 
+    // Streamed by default, and asking for usage with it: without
+    // stream_options the final chunk carries none and every turn would report
+    // zero tokens, which silently breaks the budget accounting.
+    expect(seen.body.stream).toBe(true);
+    expect(seen.body.stream_options).toEqual({ include_usage: true });
+    expect(deltas.join('')).toBe('ok');
     expect(seen.path).toBe('/v1/chat/completions');
     expect(seen.auth).toBe('Bearer sk-test');
     expect(seen.body.model).toBe('gpt-5');
@@ -157,6 +173,39 @@ describe('OpenAIProvider — wire contract', () => {
       const turn = await p.chat([{ role: 'user', content: 'hi' }], []);
       expect(turn).toEqual({ text: null, toolCalls: [], usage: { inputTokens: 0, outputTokens: 0 } });
     });
+  });
+
+  it('falls back to a single non-streamed request when the endpoint refuses to stream', async () => {
+    // Compat targets are OpenAI-shaped, not OpenAI: some reject `stream` or
+    // `stream_options` outright. That must cost one retry, not the run.
+    const bodies: Record<string, any>[] = [];
+    const server = http.createServer((req, res) => {
+      let raw = '';
+      req.on('data', (c) => (raw += c));
+      req.on('end', () => {
+        const body = JSON.parse(raw);
+        bodies.push(body);
+        if (body.stream) {
+          res.writeHead(400, { 'content-type': 'application/json' });
+          res.end(JSON.stringify({ error: { message: 'stream_options is not supported', type: 'invalid_request_error' } }));
+          return;
+        }
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify(completion({ role: 'assistant', content: 'ok' })));
+      });
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const { port } = server.address() as AddressInfo;
+    process.env.OPENAI_BASE_URL = `http://127.0.0.1:${port}/v1`;
+    try {
+      const p = new OpenAIProvider('gpt-5', undefined, { OPENAI_API_KEY: 'sk-test' });
+      expect((await p.chat([{ role: 'user', content: 'hi' }], [])).text).toBe('ok');
+      // Latched: the second turn does not re-ask an endpoint that already said no.
+      expect((await p.chat([{ role: 'user', content: 'again' }], [])).text).toBe('ok');
+      expect(bodies.map((b) => Boolean(b.stream))).toEqual([true, false, false]);
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
   });
 });
 

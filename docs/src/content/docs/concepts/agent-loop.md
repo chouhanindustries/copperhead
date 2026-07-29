@@ -22,6 +22,21 @@ KiCad files are edited by anchored exact-match text replacement. copperhead incl
 
 ## Run artifacts
 
-Every run writes to `.copperhead/runs/<timestamp>/`: a JSONL transcript of the full agent loop, and a `summary.md` beside it written for a human. Anything matching an API key pattern is redacted at write time.
+Every run writes to `.copperhead/runs/<timestamp>/`. Anything matching an API key pattern is redacted at write time, in all four files:
+
+| File | What it is | When it is written |
+| --- | --- | --- |
+| `transcript.jsonl` | The structured event log: every turn, tool call, and tool result as the loop understood it. | Live, one line per event. |
+| `raw.log` | The verbatim provider traffic: request and response payloads for the API providers, the CLI's own messages for `codex` / `claude-code` / `cursor`. | Live, one JSON object per entry. |
+| `console.log` | Everything the run printed, with the ANSI stripped. | Live, one line at a time. |
+| `summary.md` | The human-readable account of the run: plan, files touched, verification, decisions, run stats. | At the end, when the outcome is known. |
+
+`transcript.jsonl` is what copperhead understood; `raw.log` is what it was actually told. When a run goes wrong in a way the transcript cannot explain, that difference is usually the answer.
+
+## Watching a turn happen
+
+Turns stream. The OpenAI and Anthropic providers request a streaming response and the loop prints assistant text line by line as it is generated, rather than in one block when the turn ends; `claude-code` and `cursor` report their output through the same path. Between turns you get the `[turn k/N · tokens]` marker, and while a provider call is in flight a heartbeat every 30 seconds (`heartbeatMs`) reports elapsed time and how much output has arrived, so a slow turn is distinguishable from a hung one.
+
+An endpoint that refuses to stream is not a failure: the provider retries that turn without streaming, records the refusal in `raw.log`, and stops asking for the rest of the session. This is the common case for OpenAI-compatible endpoints (`compat:<id>`) that implement only part of the API.
 
 `.copperhead/runs/` is gitignored by default. The transcripts are for you, not for your history.

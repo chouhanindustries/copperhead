@@ -18,7 +18,8 @@ import {
 } from '../config.js';
 import { Transcript, type ExitPath, type RunStats } from './transcript.js';
 import { collectRunMeta, renderCliHeader, type RunMeta, type RunMetaInput } from './runmeta.js';
-import { plainRenderer, fmtDuration, fmtTokens, type ProgressRenderer } from './render.js';
+import { plainRenderer, teeRenderer, fmtDuration, fmtTokens, type ProgressRenderer } from './render.js';
+import { RawLog, ConsoleMirror } from './rawlog.js';
 import { styleHeaderLines } from './theme.js';
 import { ObligationsLedger } from './ledger.js';
 import { gitPreflight, isDirty, snapshot, restore, commitAll, changedFiles, preserveFailedRun } from '../util/git.js';
@@ -214,11 +215,18 @@ async function appendChangelog(
  * shutdown in `finally` is what lets the CLI exit; without it the process
  * hangs after a successful run.
  */
+/** The two verbatim logs a run writes; opened once the run dir exists (D12). */
+interface RunLogs {
+  raw?: RawLog;
+  mirror?: ConsoleMirror;
+}
+
 export async function runAgentLoop(opts: RunOptions): Promise<RunResult> {
   const memory = await openSynapMemory({ repoRoot: opts.repoRoot, log: opts.log });
   const providers = new Set<Provider>();
+  const logs: RunLogs = {};
   try {
-    return await runWithMemory(opts, memory, providers);
+    return await runWithMemory(opts, memory, providers, logs);
   } finally {
     for (const provider of providers) {
       try {
@@ -228,6 +236,11 @@ export async function runAgentLoop(opts: RunOptions): Promise<RunResult> {
       }
     }
     await memory?.close();
+    // Both are append-and-forget during the run so a slow disk never stalls a
+    // turn; settle them here so the files are complete before the caller reads
+    // (or reports) them.
+    await logs.raw?.flush();
+    await logs.mirror?.flush();
   }
 }
 
@@ -235,8 +248,13 @@ async function runWithMemory(
   opts: RunOptions,
   memory: SynapMemory | null,
   providers: Set<Provider>,
+  logs: RunLogs,
 ): Promise<RunResult> {
-  const r = opts.renderer ?? plainRenderer(opts.log ?? ((l: string) => console.log(l)));
+  const base = opts.renderer ?? plainRenderer(opts.log ?? ((l: string) => console.log(l)));
+  // The mirror is attached as soon as the run dir exists; lines printed before
+  // that (the dirty-tree prompt) belong to the terminal, not to a run that may
+  // never start.
+  const r = teeRenderer(base, (line) => logs.mirror?.write(line));
   const log = (l: string): void => r.log(l);
   const repoRoot = opts.repoRoot;
   const config = await loadConfig(repoRoot);
@@ -254,6 +272,8 @@ async function runWithMemory(
 
   const transcript = new Transcript(repoRoot);
   await transcript.init();
+  logs.raw = new RawLog(transcript.dir);
+  logs.mirror = new ConsoleMirror(transcript.dir);
   const ctx: RunContext = {
     repoRoot,
     config,
@@ -520,6 +540,25 @@ async function runWithMemory(
     // stay silent; `unref` keeps it from holding the event loop open.
     const turnStartMs = Date.now();
     let streamedChars = 0;
+    // Live assistant text (5.1): a streaming provider hands the turn over a
+    // delta at a time, and the loop prints it line by line as it arrives
+    // instead of dumping the whole turn once it ends. Line-buffered on purpose
+    // — the interactive renderer keeps a pinned status line, so only complete
+    // lines may go above it.
+    let streamedText = '';
+    let partialLine = '';
+    const onText = (delta: string): void => {
+      streamedText += delta;
+      partialLine += delta;
+      for (let nl = partialLine.indexOf('\n'); nl >= 0; nl = partialLine.indexOf('\n')) {
+        log(partialLine.slice(0, nl));
+        partialLine = partialLine.slice(nl + 1);
+      }
+    };
+    const flushPartialLine = (): void => {
+      if (partialLine.trim()) log(partialLine);
+      partialLine = '';
+    };
     const heartbeat =
       config.heartbeatMs > 0
         ? setInterval(
@@ -532,7 +571,12 @@ async function runWithMemory(
       res = await withRetry(
         () =>
           withTimeout(
-            () => provider.chat(messages, tools, { onStream: (chars) => (streamedChars = chars) }),
+            () =>
+              provider.chat(messages, tools, {
+                onStream: (chars) => (streamedChars = chars),
+                onText,
+                ...(logs.raw ? { raw: logs.raw.sink(provider.name) } : {}),
+              }),
             config.turnTimeoutMs,
             () => provider.close?.(),
           ),
@@ -582,6 +626,7 @@ async function runWithMemory(
       return fail(`provider error: ${(err as Error).message}`, 'provider-error');
     } finally {
       if (heartbeat) clearInterval(heartbeat);
+      flushPartialLine();
       r.status(null);
     }
     turnsUsed = turn + 1;
@@ -598,7 +643,9 @@ async function runWithMemory(
 
     if (res.text) {
       if (!plan) plan = res.text;
-      log(res.text);
+      // Already on screen if the provider streamed it; printing again would
+      // double every turn on the streaming path.
+      if (!streamedText) log(res.text);
     }
     messages.push({ role: 'assistant', content: res.text, toolCalls: res.toolCalls });
 

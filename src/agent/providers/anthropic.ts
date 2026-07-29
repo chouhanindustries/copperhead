@@ -69,13 +69,29 @@ export class AnthropicProvider implements Provider {
       ...(i === tools.length - 1 ? { cache_control: { type: 'ephemeral' as const } } : {}),
     }));
 
-    const res = await client.messages.create({
+    const body = {
       model: this.model,
       max_tokens: opts.maxTokens ?? 8192,
-      ...(system ? { system: [{ type: 'text', text: system, cache_control: { type: 'ephemeral' } }] } : {}),
+      ...(system
+        ? { system: [{ type: 'text' as const, text: system, cache_control: { type: 'ephemeral' as const } }] }
+        : {}),
       messages: conv as never,
       ...(tools.length ? { tools: toolDefs as never } : {}),
+    };
+    opts.raw?.({ kind: 'request', data: body });
+    // Streamed, not `messages.create`: a turn that runs for minutes should
+    // print as it is generated. `finalMessage()` returns the same assembled
+    // Message the non-streaming call would have (text, tool_use blocks, and
+    // usage), so nothing below this line changes.
+    const stream = client.messages.stream(body);
+    let chars = 0;
+    stream.on('text', (delta: string) => {
+      chars += delta.length;
+      opts.onText?.(delta);
+      opts.onStream?.(chars);
     });
+    const res = await stream.finalMessage();
+    opts.raw?.({ kind: 'response', data: res });
 
     let text: string | null = null;
     const toolCalls = [];
