@@ -36,13 +36,29 @@ export class CachingProvider implements Provider {
      *  in the cache key so switching model on the same repo does not replay the
      *  other model's cached turns (F6). Falls back to the provider family name. */
     private readonly modelId?: string,
+    /** The compat endpoint's base URL, if any. A model id like `compat:llama-3.1-8b-instant`
+     *  is not unique across hosts (Groq, OpenRouter, etc. all serve overlapping model
+     *  ids), so the endpoint must be part of the key too, or two different hosts
+     *  serving "the same" model id would share cached turns. */
+    private readonly baseURL?: string,
   ) {
     this.name = inner.name;
   }
 
   private keyFor(messages: Msg[], tools: ToolSchema[]): string {
     return createHash('sha256')
-      .update(JSON.stringify({ model: this.modelId ?? this.name, messages, tools: tools.map((t) => t.name) }))
+      .update(
+        JSON.stringify({
+          model: this.modelId ?? this.name,
+          // Omitted rather than `?? null` when unset: a non-compat run's key
+          // must stay byte-identical to what it hashed before baseURL existed
+          // (F6/D2), or every pre-existing cache entry — not just compat ones —
+          // is orphaned on the first run after upgrade.
+          ...(this.baseURL ? { baseURL: this.baseURL } : {}),
+          messages,
+          tools: tools.map((t) => t.name),
+        }),
+      )
       .digest('hex');
   }
 

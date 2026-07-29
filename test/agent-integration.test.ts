@@ -1,10 +1,11 @@
 import { describe, it, expect } from 'vitest';
-import { readFile, writeFile, appendFile } from 'node:fs/promises';
+import { readFile, writeFile, appendFile, readdir, lstat } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import path from 'node:path';
 import { execa } from 'execa';
 import { runAgentLoop } from '../src/agent/loop.js';
 import { runInit } from '../src/memory/scaffold.js';
+import { toolSearch } from '../src/agent/filetools.js';
 import { saveConstraint } from '../src/memory/constraints.js';
 import { tempFixtureRepo } from './helpers.js';
 
@@ -31,6 +32,19 @@ const providers: { model: string; key: string | undefined }[] = [
   {
     model: process.env.COPPERHEAD_TEST_CURSOR_MODEL ?? 'cursor',
     key: process.env.COPPERHEAD_TEST_CURSOR === '1' ? 'saved-cursor-login' : undefined,
+  },
+  // OpenAI-compatible endpoint: Groq, OpenRouter, Gemini's compat endpoint,
+  // or a local Ollama. Runs only when both the
+  // endpoint and its model id are configured, so it stays skipped by default.
+  // This is the gate the documented zero-cost stack has to pass before it can
+  // be recommended: weaker free-tier models are worse at byte-exact anchored
+  // edits, so AC-3.x is where that shows up rather than in review.
+  {
+    model: process.env.COPPERHEAD_TEST_COMPAT_MODEL ?? 'compat',
+    key:
+      process.env.COPPERHEAD_TEST_COMPAT_MODEL && process.env.COPPERHEAD_BASE_URL
+        ? (process.env[process.env.COPPERHEAD_API_KEY_ENV ?? 'OPENAI_API_KEY'] ?? 'local-endpoint-no-key')
+        : undefined,
   },
 ];
 
@@ -158,16 +172,59 @@ for (const { model, key } of providers) {
   });
 }
 
-describe.skipIf(!providers.some((p) => p.key))('safety net', () => {
-  it('AC-4.1: no API key material anywhere in the tree after runs', async () => {
-    const { repo, cleanup } = await tempFixtureRepo();
-    try {
-      const { stdout } = await execa('grep', ['-rE', 'sk-[A-Za-z0-9_-]{20,}', repo], { reject: false });
-      expect(stdout).toBe('');
-    } finally {
-      await cleanup();
+async function scanTreeForSecret(dir: string, pattern: RegExp, root = dir): Promise<string[]> {
+  const matches: string[] = [];
+  const skip = new Set(['.git', 'node_modules']);
+  async function walk(current: string): Promise<void> {
+    for (const entry of await readdir(current)) {
+      if (skip.has(entry)) continue;
+      const abs = path.join(current, entry);
+      const rel = path.relative(root, abs);
+      const st = await lstat(abs);
+      if (st.isSymbolicLink()) continue;
+      if (st.isDirectory()) {
+        await walk(abs);
+      } else {
+        const text = await readFile(abs, 'utf8');
+        if (pattern.test(text)) {
+          matches.push(rel);
+        }
+      }
     }
-  });
+  }
+  await walk(dir);
+  return matches;
+}
+
+describe.skipIf(!providers.some((p) => p.key))('safety net', () => {
+  it(
+    'AC-4.1: no API key material anywhere in the tree after a real run',
+    async () => {
+      // Scanning a freshly created repo that no run ever touched cannot fail
+      // for the reason this test exists — there is nothing in it to leak. Run
+      // one real turn first so the transcript and summary this check is meant
+      // to guard actually exist on disk before the scan.
+      const { model } = providers.find((p) => p.key)!;
+      const { repo, cleanup } = await setupRepo();
+      try {
+        // One turn is enough: edit tools are gated off on the first turn for
+        // every provider (spec-gated-in), so this fails fast and deterministically
+        // while still writing a transcript + summary under .copperhead/runs/.
+        await runAgentLoop({
+          repoRoot: repo,
+          request: 'rename net KEY_DAH to KEY_DASH',
+          model,
+          maxTurns: 1,
+          log: () => {},
+        });
+        const matches = await scanTreeForSecret(repo, /sk-[A-Za-z0-9_-]+/);
+        expect(matches).toEqual([]);
+      } finally {
+        await cleanup();
+      }
+    },
+    600_000,
+  );
 });
 
 function diffLineCount(a: string, b: string): number {

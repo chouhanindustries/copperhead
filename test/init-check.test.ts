@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { readFile, writeFile, rm, mkdtemp } from 'node:fs/promises';
+import { readFile, writeFile, rm, mkdtemp, mkdir } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -137,12 +137,12 @@ describe('copperhead check (AC-2)', () => {
       await execa('git', ['add', '-A'], { cwd: repo });
       // the hook runs `copperhead check`; expose the dev build via PATH shim
       const bin = path.join(repo, '.testbin');
-      await execa('mkdir', ['-p', bin]);
+      await mkdir(bin, { recursive: true });
       const cliPath = path.resolve('dist', 'cli.js');
       await writeFile(path.join(bin, 'copperhead'), `#!/bin/sh\nexec node ${cliPath} "$@"\n`, { mode: 0o755 });
       const result = await execa('git', ['commit', '-q', '-m', 'desync'], {
         cwd: repo,
-        env: { ...process.env, PATH: `${bin}:${process.env.PATH}` },
+        env: { ...process.env, PATH: `${bin}${path.delimiter}${process.env.PATH}` },
         reject: false,
       });
       expect(result.exitCode).not.toBe(0);
@@ -219,6 +219,24 @@ describe('model selection precedence (task 4.6)', () => {
       source: 'env',
     });
     expect(() => resolveModel(undefined, config, {})).toThrow(/no model configured/);
+  });
+
+  it('refuses to guess when two or more credentials are present (no silent favorite)', () => {
+    // A single key is a safe guess (nothing to guess wrong). Two keys is not:
+    // silently favoring OPENAI_API_KEY over an also-present ANTHROPIC_API_KEY
+    // (or vice versa) can route a request to the wrong provider — including a
+    // paid one — with no signal that a choice was even made.
+    expect(() => resolveModel(undefined, config, { OPENAI_API_KEY: 'x', ANTHROPIC_API_KEY: 'y' })).toThrow(
+      /ambiguous: 2 credentials found \(OPENAI_API_KEY, ANTHROPIC_API_KEY\)/,
+    );
+    // --model, COPPERHEAD_MODEL, and config.model all still break the tie explicitly.
+    expect(resolveModel('claude', config, { OPENAI_API_KEY: 'x', ANTHROPIC_API_KEY: 'y' })).toEqual({
+      model: 'claude',
+      source: 'flag',
+    });
+    expect(
+      resolveModel(undefined, config, { COPPERHEAD_MODEL: 'gpt-5', OPENAI_API_KEY: 'x', ANTHROPIC_API_KEY: 'y' }),
+    ).toEqual({ model: 'gpt-5', source: 'env' });
   });
 });
 

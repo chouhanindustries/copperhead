@@ -1,18 +1,52 @@
+import { DEFAULT_API_KEY_ENV, isLocalEndpoint } from '../../config.js';
 import type { ChatOpts, Msg, Provider, ToolSchema, Turn, ToolCall } from '../types.js';
 
+/** Pointing the provider at an OpenAI-compatible endpoint (design D1). */
+export interface OpenAIProviderOptions {
+  /** Endpoint base URL; omitted means the client's own default (OpenAI). */
+  baseURL?: string | undefined;
+  /** Name of the env var holding the key. Never the key itself. */
+  apiKeyEnv?: string | undefined;
+}
+
 export class OpenAIProvider implements Provider {
-  readonly name = 'openai';
+  readonly name: string;
+  private readonly apiKey: string | undefined;
+  private readonly baseURL: string | undefined;
 
   constructor(
     private readonly model = 'gpt-5',
-    private readonly apiKey = process.env.OPENAI_API_KEY,
+    opts: OpenAIProviderOptions = {},
+    env: NodeJS.ProcessEnv = process.env,
   ) {
-    if (!this.apiKey) throw new Error('OPENAI_API_KEY is not set');
+    // Credentials are always resolved through a named env var, never accepted
+    // as a literal value: the one way to supply a key keeps application code
+    // from ever holding one directly (mirrors AC-4.1 elsewhere). Tests inject
+    // fake values through the `env` argument, not through opts.
+    const keyEnv = opts.apiKeyEnv ?? DEFAULT_API_KEY_ENV;
+    this.baseURL = opts.baseURL;
+    // A compat endpoint must be structurally ineligible for the paid
+    // OpenAI/Anthropic failover in otherProvider() (loop.ts) — it is not
+    // OpenAI, and a rate limit there must never silently redirect a run the
+    // user deliberately pointed elsewhere to someone else's paid API.
+    this.name = this.baseURL ? 'openai-compat' : 'openai';
+    this.apiKey = env[keyEnv];
+    // A loopback endpoint (Ollama) serves the same API with no credential, and
+    // it is the one backend that is both free and fully local — requiring a
+    // dummy key there would be a papercut on the most useful config (D4).
+    if (!this.apiKey && !isLocalEndpoint(this.baseURL)) {
+      throw new Error(`${keyEnv} is not set`);
+    }
   }
 
   async chat(messages: Msg[], tools: ToolSchema[], opts: ChatOpts = {}): Promise<Turn> {
     const { default: OpenAI } = await import('openai');
-    const client = new OpenAI({ apiKey: this.apiKey });
+    const client = new OpenAI({
+      // A local endpoint may legitimately have no key, but the client still
+      // wants a non-empty string, so send a placeholder it will never check.
+      apiKey: this.apiKey ?? 'no-key-required',
+      ...(this.baseURL ? { baseURL: this.baseURL } : {}),
+    });
     const res = await client.chat.completions.create({
       model: this.model,
       max_completion_tokens: opts.maxTokens ?? 8192,

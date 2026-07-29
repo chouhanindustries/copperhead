@@ -13,11 +13,23 @@ const mockRunAgentLoop = vi.hoisted(() =>
     const docs = pathMod.join(opts.repoRoot, 'docs');
     await mkdirFs(docs, { recursive: true });
     if (opts.request.includes('spec-seed'))
-      await writeFileFs(pathMod.join(docs, 'SPEC.md'), '# spec\n\n## Budgets\n', 'utf8');
+      await writeFileFs(
+        pathMod.join(docs, 'SPEC.md'),
+        '# spec\n\n## Budgets\n\n- sleep_current_uA: 25\n',
+        'utf8',
+      );
     if (opts.request.includes('architecture'))
-      await writeFileFs(pathMod.join(docs, 'SUBSYSTEMS.md'), '# subsystems\n', 'utf8');
+      await writeFileFs(
+        pathMod.join(docs, 'SUBSYSTEMS.md'),
+        '# subsystems\n\n## Power\n\nLDO regulator 3.3 V, 300 mA.\n',
+        'utf8',
+      );
     if (opts.request.includes('part-selection'))
-      await writeFileFs(pathMod.join(docs, 'BOM.md'), '# bom\n', 'utf8');
+      await writeFileFs(
+        pathMod.join(docs, 'BOM.md'),
+        '# bom\n\n| Refdes | Value | Footprint | MPN | Rationale |\n|---|---|---|---|---|\n| R1 | 10k | R_0603 | RC0603FR-0710KL | bias resistor |\n',
+        'utf8',
+      );
     return {
       outcome: 'success' as const,
       exitPath: 'done' as const,
@@ -102,7 +114,7 @@ describe('create pipeline per-stage turn budgets (AC-15.18, AC-15.19)', () => {
 
       // 5.3: the one command to resume, with the flags, and which stage it stops at.
       expect(out).toContain('stopped at stage 4/8 (schematic)');
-      expect(out).toMatch(/copperhead .*create --brief \S*brief\.md'? --model gpt-5/);
+      expect(out).toMatch(/copperhead .*create --brief ['"]?[^'"]*brief\.md['"]? --model gpt-5/);
       expect(out).toContain('resumes at schematic');
 
       // 5.2: a cost table with a row per stage that ran and a TOTAL.

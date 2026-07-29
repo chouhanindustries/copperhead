@@ -26,6 +26,18 @@ export interface CopperheadConfig {
   /** Cache each turn's LLM response to disk and replay it on identical inputs,
    * so retries/restarts reuse work already paid for. Default on. */
   llmCache: boolean;
+  /**
+   * Base URL of an OpenAI-compatible endpoint (Groq, OpenRouter, Gemini's
+   * compat endpoint, a local Ollama). Consulted only by the `compat`
+   * route (design D2), so a stray value never redirects a plain `gpt-5` run.
+   */
+  baseURL?: string;
+  /**
+   * Name of the environment variable holding the compat endpoint's key, e.g.
+   * `GROQ_API_KEY`. The *name*, never the key itself: credentials stay in the
+   * environment (AC-4.1).
+   */
+  apiKeyEnv?: string;
   /** Content hashes of generated docs, for init idempotency (AC-1.4). */
   generatedHashes?: Record<string, string>;
   /**
@@ -90,13 +102,15 @@ export async function loadConfig(repoRoot: string): Promise<CopperheadConfig> {
         ? (raw.maxStageRetries as number)
         : DEFAULTS.maxStageRetries,
     llmCache: raw.llmCache !== false,
+    ...(typeof raw.baseURL === 'string' && raw.baseURL.trim() ? { baseURL: raw.baseURL.trim() } : {}),
+    ...(typeof raw.apiKeyEnv === 'string' && raw.apiKeyEnv.trim() ? { apiKeyEnv: raw.apiKeyEnv.trim() } : {}),
     ...(raw.generatedHashes ? { generatedHashes: raw.generatedHashes } : {}),
     ...(raw.origin === 'create' || raw.origin === 'init' ? { origin: raw.origin } : {}),
   };
 }
 
 /** Which level of the model-selection precedence chain won. */
-export type ModelSource = 'flag' | 'env' | 'config' | 'openai-key' | 'anthropic-key';
+export type ModelSource = 'flag' | 'env' | 'config' | 'openai-key' | 'anthropic-key' | 'picker';
 
 export interface ResolvedModel {
   model: string;
@@ -140,9 +154,76 @@ export function resolveModel(flag: string | undefined, config: CopperheadConfig,
   if (flag) return { model: flag, source: 'flag' };
   if (env.COPPERHEAD_MODEL) return { model: env.COPPERHEAD_MODEL, source: 'env' };
   if (config.model) return { model: config.model, source: 'config' };
-  if (env.OPENAI_API_KEY) return { model: 'gpt-5', source: 'openai-key' };
-  if (env.ANTHROPIC_API_KEY) return { model: 'claude', source: 'anthropic-key' };
+  // Auto-fallback is only safe when exactly one credential is present: guessing
+  // is a convenience when there is nothing to guess wrong. With two or more
+  // keys set (a common dev setup once a compat endpoint's key sits alongside
+  // OPENAI_API_KEY/ANTHROPIC_API_KEY), silently favoring whichever is checked
+  // first can send a request to the wrong provider with no signal — including
+  // a paid one when a free key was what was actually intended. Refuse instead
+  // of guessing; the compat route itself is never a fallback candidate here,
+  // since it is opt-in only via an explicit `compat:` prefix (design D2).
+  const available: { keyVar: string; model: string; source: ModelSource }[] = [
+    ...(env.OPENAI_API_KEY ? [{ keyVar: 'OPENAI_API_KEY', model: 'gpt-5', source: 'openai-key' as const }] : []),
+    ...(env.ANTHROPIC_API_KEY ? [{ keyVar: 'ANTHROPIC_API_KEY', model: 'claude', source: 'anthropic-key' as const }] : []),
+  ];
+  if (available.length === 1) return { model: available[0]!.model, source: available[0]!.source };
+  if (available.length > 1) {
+    throw new Error(
+      `ambiguous: ${available.length} credentials found (${available.map((a) => a.keyVar).join(', ')}) and no model was ` +
+        'selected; pass --model, set COPPERHEAD_MODEL, or set "model" in .copperhead/config.json.',
+    );
+  }
   throw new Error(
-    'no model configured: pass --model codex, --model claude-code, or --model cursor (saved CLI login), set COPPERHEAD_MODEL, set model in .copperhead/config.json, or provide OPENAI_API_KEY/ANTHROPIC_API_KEY',
+    'no model configured: pass --model, set COPPERHEAD_MODEL, or export an API key; see https://docs.copperhead.sh/reference/configuration/',
   );
+}
+
+/** Where an OpenAI-compatible run points, and which variable holds its key. */
+export interface CompatSettings {
+  /** Endpoint base URL; undefined means the client's own default (OpenAI). */
+  baseURL?: string;
+  /** Name of the env var holding the key. Never the key itself. */
+  apiKeyEnv: string;
+}
+
+/** The credential variable used when nothing else is configured. */
+export const DEFAULT_API_KEY_ENV = 'OPENAI_API_KEY';
+
+/**
+ * Resolve the compatible-endpoint settings: environment wins over config, the
+ * same direction as `resolveModel`'s chain. These are *settings*, not a
+ * provider selector — only the `compat` route reads them (design D1/D2), so an
+ * exported COPPERHEAD_BASE_URL never silently redirects a `gpt-5` run.
+ */
+export function resolveCompatSettings(config: CopperheadConfig, env = process.env): CompatSettings {
+  const baseURL = env.COPPERHEAD_BASE_URL?.trim() || config.baseURL?.trim();
+  const apiKeyEnv = env.COPPERHEAD_API_KEY_ENV?.trim() || config.apiKeyEnv?.trim() || DEFAULT_API_KEY_ENV;
+  return { ...(baseURL ? { baseURL } : {}), apiKeyEnv };
+}
+
+/**
+ * True when a resolved model id routes through the `compat` provider (D1/D2).
+ * The single source of truth for that gate: `makeProvider` uses it to decide
+ * whether to consult `CompatSettings` at all, and the response cache (loop.ts)
+ * uses it to decide whether a run's cache key may depend on `baseURL` — a
+ * non-compat run (gpt-5, claude, ...) never reads COPPERHEAD_BASE_URL, so its
+ * cache key must not vary with it either, or every entry gets orphaned each
+ * time the endpoint used for unrelated compat testing changes.
+ */
+export function isCompatModel(model: string): boolean {
+  return model === 'compat' || model.startsWith('compat:');
+}
+
+/**
+ * True when the endpoint is loopback, i.e. a local server such as Ollama.
+ * Those need no credential (design D4); a remote endpoint always does.
+ */
+export function isLocalEndpoint(baseURL: string | undefined): boolean {
+  if (!baseURL) return false;
+  try {
+    const h = new URL(baseURL).hostname.toLowerCase();
+    return h === 'localhost' || h === '127.0.0.1' || h === '::1' || h === '[::1]' || h.endsWith('.local');
+  } catch {
+    return false; // an unparseable URL is not a local endpoint; the run fails later with a clearer error
+  }
 }
