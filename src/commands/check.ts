@@ -54,9 +54,21 @@ export async function runCheck(repoRoot: string, log: (s: string) => void): Prom
 
   let openspec: { ok: boolean; detail: string } | null = null;
   if (existsSync(path.join(repoRoot, 'openspec', 'config.yaml'))) {
-    const res = await openspecValidate(repoRoot);
-    openspec = { ok: res.ok, detail: res.output };
-    log(res.ok ? 'openspec ✓' : `openspec: ${res.output}`);
+   const res = await openspecValidate(repoRoot);
+
+    const nothingToValidate =
+      !res.ok && res.output.includes('Nothing to validate');
+
+    openspec = {
+      ok: res.ok || nothingToValidate,
+      detail: res.output,
+    };
+
+    if (res.ok || nothingToValidate) {
+      log('openspec ✓');
+    } else {
+      log(`openspec: ${res.output}`);
+    }
   }
 
   let constraintViolations: ConstraintViolation[] = [];
