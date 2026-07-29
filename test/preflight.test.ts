@@ -7,7 +7,7 @@ import { execa } from 'execa';
 import { runAgentLoop } from '../src/agent/loop.js';
 import { runCreate } from '../src/commands/create.js';
 import { gitPreflight } from '../src/util/git.js';
-import { PreflightError } from '../src/util/preflight.js';
+import { PreflightError, isNotFoundError } from '../src/util/preflight.js';
 import { KicadCliMissingError } from '../src/kicad/cli.js';
 import { tempFixtureRepo } from './helpers.js';
 
@@ -214,5 +214,55 @@ describe('preflight failures explain why and how to fix', () => {
     } finally {
       await cleanup();
     }
+  });
+});
+
+describe('isNotFoundError helper', () => {
+  const originalPlatform = process.platform;
+
+  it('identifies ENOENT as not found on any platform', () => {
+    expect(isNotFoundError({ code: 'ENOENT' })).toBe(true);
+    expect(isNotFoundError({ code: 'EACCES' })).toBe(false);
+    expect(isNotFoundError(null)).toBe(false);
+  });
+
+  it('identifies Windows command missing errors under win32 platform override', () => {
+    Object.defineProperty(process, 'platform', { value: 'win32' });
+    try {
+      expect(isNotFoundError({
+        exitCode: 9009,
+        stderr: "'kicad-cli' is not recognized as an internal or external command"
+      })).toBe(true);
+
+
+
+      expect(isNotFoundError({
+        exitCode: 1,
+        stderr: "'openspec' is not recognized as an internal or external command, operable program or batch file."
+      })).toBe(true);
+
+      // Negative cases
+      expect(isNotFoundError({
+        exitCode: 1,
+        stderr: "ERC violations found"
+      })).toBe(false);
+
+      expect(isNotFoundError({
+        exitCode: 2,
+        stderr: "some random error"
+      })).toBe(false);
+    } finally {
+      Object.defineProperty(process, 'platform', { value: originalPlatform });
+    }
+  });
+
+  it('classifies a real execa spawn failure as not-found', async () => {
+    const err = await execa('copperhead-does-not-exist', []).catch((e) => e);
+    expect(isNotFoundError(err)).toBe(true);
+  });
+
+  it('classifies a non-rejecting execa failure result as not-found', async () => {
+    const res = await execa('copperhead-does-not-exist', [], { reject: false });
+    expect(isNotFoundError(res)).toBe(true);
   });
 });

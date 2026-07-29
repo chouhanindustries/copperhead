@@ -1,31 +1,30 @@
 ---
 name: pr-review
 description: Review a copperhead pull request against the repo's invariants and spec workflow. Use when the user asks to review a PR, e.g. /pr-review 28 or /pr-review <url>.
-allowed-tools: Bash(gh:*), Bash(git:*), Bash(openspec:*), Bash(npm:*), Bash(npx:*)
+allowed-tools: AskUserQuestion, Bash(gh:*), Bash(git:*), Bash(node:*), Bash(openspec:*), Bash(npm:*), Bash(npx:*)
 compatibility: Requires the gh CLI, authenticated against chouhanindustries/copperhead.
 metadata:
   author: copperhead
-  version: "1.2"
+  version: "2.1"
 ---
 
 Review a pull request for this repository. Present the findings report to the user, and also post it to the PR automatically as a comment (`gh pr comment <n>`) so the review is recorded on GitHub. Do NOT submit a formal review (`gh pr review --approve` / `--request-changes`) unless the user explicitly asks: those affect merge gating, whereas a plain comment does not.
 
-**Input**: a PR number or URL. If omitted, run `gh pr list --json number,title,author,headRefName` and either auto-select the single open PR or use the AskUserQuestion tool to let the user pick. Always announce which PR is being reviewed.
+**Input**: a PR number or URL. If omitted, run `gh pr list --json number,title,author,headRefName` and either auto-select the single open PR or use the AskUserQuestion tool to let the user pick. Always announce which PR is being reviewed. If the PR is a draft, still review it, but present the report in-session only and do not post the comment unless the user explicitly asked for a draft to be reviewed (draft comments go stale immediately).
 
 **Steps**
 
 1. **Gather the change**
-   - `gh pr view <n> --json title,body,author,baseRefName,headRefName,files,additions,deletions,mergeable,isDraft`, plus `gh pr checks <n>` for CI state. Surface both in the report: a `mergeable` that is not `MERGEABLE` (behind base or conflicting) and a red or pending CI run each go in the metrics block, and a failing required check is at least a medium finding.
-   - `gh pr diff <n>` for the full diff. For large PRs, read the diff per file. Skip generated and vendored files (`package-lock.json`, `dist/`, `*.snap`, build output): note that they changed, but do not read them line by line or raise findings inside them.
-   - Read the surrounding context of every changed hunk in the working tree (or via `gh api`) so findings are grounded in real code, not diff fragments.
-   - **Prior passes and authorship**: check the PR's existing comments for an earlier automated pr-review pass. If one exists, reference it and report only what changed since (new commits, findings now resolved or still open), not a duplicate full report. If you (the reviewer) authored any commit under review, disclose it up front and treat those findings as self-review, which warrants more skepticism, not less.
+   - `gh pr view <n> --json title,body,author,baseRefName,headRefName,files,additions,deletions,mergeable,isDraft,comments`, plus `gh pr checks <n>` for CI state. A `mergeable` that is not `MERGEABLE` and a red or pending CI run each go in the metrics block, and a failing required check is at least a medium finding.
+   - `gh pr checkout <n>` so tests and coverage can run (the metrics script degrades gracefully if checkout is impossible, but prefer it).
+   - `gh pr diff <n>` for the full diff; for large PRs, read it per file. Skip generated and vendored files (`package-lock.json`, `dist/`, `*.snap`, build output): note that they changed, but do not read them line by line or raise findings inside them.
+   - **Prior passes and authorship**: check the fetched comments for an earlier automated pr-review pass. If one exists, reference it and report only what changed since (new commits, findings now resolved or still open), not a duplicate full report. If you (the reviewer) authored any commit under review, disclose it up front and treat those findings as self-review, which warrants more skepticism, not less.
 
-2. **General review**: correctness, edge cases, error handling, test coverage for new behavior, and whether the PR does what its description claims. Flag scope creep (changes unrelated to the stated purpose). In particular:
-   - **Format- and protocol-handling code gets adversarial inputs.** Any code that parses or serializes model output or structured text (tool-call parsers, the s-expression reader, BOM/table parsers, JSON or markdown extractors) must be checked against hostile-but-realistic payloads, not only the tidy happy path: embedded or nested delimiters (the format inside the format, e.g. a fenced code block appearing inside content that is itself delimited by fences), the empty / one / many cases, very large content, unicode, and malformed input. Construct the payload and trace the code by hand; a passing mock test with clean inputs is not evidence this class works. This is where real defects hide.
-   - **Mock-only runtime code is flagged.** If provider, subprocess, or integration code is exercised only through injected fakes, say so plainly: the real path (SDK, CLI, or network message shapes) is unverified by the suite. Recommend a bounded live smoke where one is feasible.
-   - **New tests must be deterministic and must assert.** They may not hit the network, use `Date.now()` / `Math.random()` / wall-clock, or depend on execution order, and a test that runs without asserting anything is not coverage. Flag any that break these.
+2. **Metrics, scripted**: start `node .claude/skills/pr-review/scripts/metrics.mjs <n>` in the background now and collect it before writing the report. It computes the entire metrics block deterministically: area-split change size, new-vs-net surface, suite pass/skip/fail, diff coverage with the uncovered `file:line` list, dependency changes, and the CI check state (pass/fail/pending counts plus failing required checks, via `gh pr checks`), each with its method stated. Add `--base-tests` only when the base suite result matters and base CI does not already report it; never check out the base branch in the working tree. If the script fails, fall back to the manual method in `references/metrics.md`. Never emit a number you did not derive; report unmeasured metrics as "not measured" with the reason.
 
-3. **Repo invariant checks** (each is a hard requirement from SPEC.md; violations are high severity):
+3. **General review**: follow `references/review-checklist.md` (adversarial inputs for parser and protocol code, mock-only runtime code, test determinism and assertions, scope creep, description accuracy).
+
+4. **Repo invariant checks** (each is a hard requirement from SPEC.md; violations are high severity):
    - **Spec-gated in**: `edit_file`/`write_file` must remain structurally absent from the agent tool list until an OpenSpec proposal validates. Reject any change that exposes mutation tools unconditionally or gates them by prompt text instead of by omission.
    - **Verification-gated out**: mutations must still end in ERC (and DRC when the board changed) passing, with repair up to `maxRepairCycles` then rollback to the git snapshot. Watch for paths that skip verification or mark a run done early.
    - **`check`/`verify` stays LLM-free and network-free**: no change may make `src/commands/check` (or anything it imports) touch a provider, an API key, or the network.
@@ -33,40 +32,23 @@ Review a pull request for this repository. Present the findings report to the us
    - **Sync-obligations ledger**: post-tool-call hooks must keep feeding the ledger, and commit must keep refusing while obligations are open.
    - **Secrets**: transcripts and summaries redact `sk-[A-Za-z0-9_-]+` at write time; keys live only in env vars; `.gitignore` keeps `.env` and `.copperhead/runs/`.
 
-4. **Spec coherence**: if the PR changes spec-level behavior, `openspec/specs/SPEC.md` and the active change artifacts (`proposal.md`, `design.md`, delta specs, `tasks.md`) must move together. Run `openspec validate build-copperhead-phase-1` when planning artifacts changed. A code-only PR that silently diverges from SPEC.md is a finding.
+   **Scaling**: when the diff exceeds ~400 changed src lines (the script prints this as "fan-out threshold input"), run steps 3 and 4 as two parallel subagents instead of inline. Give each the PR number, tell it to read the diff and surrounding code itself, point the general-review agent at `references/review-checklist.md` and give the invariants agent the bullet list above verbatim, and require findings in the checklist's finding format. Their findings feed step 6 like any other candidate.
 
-5. **Coverage and change metrics**: quantify the change and how much of the *new* code is actually exercised. Report measured numbers, never impressions, and always say how each was obtained. Compute against the merge base, `BASE=$(git merge-base origin/<baseRef> <headRef>)`, so a stale branch is not scored against the wrong point.
-   - **Change size**: total additions, deletions, and *net* (additions minus deletions) across the touched files, from `gh pr view <n> --json additions,deletions,files` or `git diff --stat $BASE...<head>`. Split it by area (`src/` source vs `test/` vs docs vs `openspec/`) with `git diff --numstat $BASE...<head>` so a docs-heavy diff is not mistaken for a code-heavy one.
-   - **New vs net code**: distinguish brand-new code (added files and added lines: net-new behavior that needs its own tests) from edits to existing code (modified lines, covered by existing plus updated tests). Per changed `src/` file, report added/removed line counts (`--numstat`) and flag added files (`--diff-filter=A`). "New" is what carries the most unreviewed risk; call it out separately from the net figure.
-   - **Test-to-code ratio and suite delta**: added test lines vs added source lines, and the change in test count. Run `npm test` on the PR branch and on `$BASE` (or read the reported totals) and report `pass/skip/fail` before and after. A source change that adds zero test lines is a coverage flag unless it is untestable plumbing.
-   - **Diff coverage (which changed lines are exercised)**, the headline metric, reported for *new/changed `src/` lines*, not whole-repo coverage:
-     - Preferred (measured): if `@vitest/coverage-v8` resolves (or after a throwaway `npm i -D @vitest/coverage-v8`), run `npx vitest run --coverage --coverage.reporter=json`, then intersect the per-line coverage with the changed `src/` lines from the diff. Report the percentage of changed source lines covered and name the uncovered ones with `file:line`.
-     - Fallback (manual, when coverage cannot run): map every new exported symbol, new branch (`if`/`else`/`catch`/`case`/`? :`), and new error path in the diff to the test that exercises it; the covered fraction is `mapped / total`. Cite the test names. Never emit a percentage you did not actually derive; if neither path is possible, say "diff coverage: not measured" and explain why.
-   - **Untested-surface list**: enumerate the new exported symbols, new branches, and new error/early-return paths in `src/` that no test reaches. These are the highest-value findings, and each belongs in the findings list, not just the metrics block.
-   - **Other signals worth a line when present**: new runtime dependencies and the `npm audit` advisory delta (base vs head) for any `package.json` change; the largest single changed file or function (a hotspot for defects); and net public-API surface change (new exported functions/types/CLI flags). Skip any that do not apply rather than padding.
+5. **Spec coherence**: if the PR changes spec-level behavior, `openspec/specs/SPEC.md` and the active change artifacts (`proposal.md`, `design.md`, delta specs, `tasks.md`) must move together. Run `openspec validate build-copperhead-phase-1` when planning artifacts changed. A code-only PR that silently diverges from SPEC.md is a finding.
 
-6. **Verify before reporting**: for each candidate finding, re-read the code and try to refute it. Drop anything speculative or already handled elsewhere. If the PR touches build or tests, run `npm test` locally on the PR branch when feasible and report actual results, never assumed ones. Pay special attention to the untested-surface list from step 5: an uncovered new branch or error path is exactly where a real defect hides, so trace each one by hand before concluding it is fine.
+6. **Verify before reporting**: for each candidate finding, read the surrounding code in the working tree and try to refute it; this is the stage where hunk context gets read in depth, so on large PRs spend the context reads here, on candidates, rather than on every hunk up front. Drop anything speculative or already handled elsewhere. Then work the script's uncovered-lines list, using the full per-file list printed in its detail output (the metrics block line truncates at 40 files): an uncovered new branch or error path is exactly where a real defect hides, so trace each one by hand before concluding it is fine, and enumerate the new exported symbols, branches, and error paths no test reaches as findings (the untested-surface list). The suite result comes from the script's actual run, never from assumption.
 
 **Output**
 
-A short verdict first (approve / approve with nits / request changes), then a compact **metrics block**, then findings ranked by severity. Each finding states: a one-sentence claim, the file and line, a concrete failure scenario (the inputs or state that lead to wrong behavior), and a concrete fix, either a one-line change or a failing test that reproduces it. For a confirmed correctness bug prefer the repro test, mirroring the repo's regression-test habit. Note explicitly which invariant checks were performed and passed, so a clean report is distinguishable from an unexamined one.
+A short verdict first (approve / approve with nits / request changes), then the **metrics block** pasted from the script's output (template and metric definitions in `references/metrics.md`), then findings ranked by severity in the checklist's finding format, then the **fix prompt** (below). For a confirmed correctness bug prefer the repro test, mirroring the repo's regression-test habit. Note explicitly which invariant checks were performed and passed, so a clean report is distinguishable from an unexamined one. State the method for each metric and report unmeasured ones explicitly (a silent omission reads as "clean"); the uncovered-lines entry must reconcile with the untested-surface findings below it.
+
+**Fix prompt** (last section of the report, in-session and in the posted comment): a single copy-pasteable block, headed `## Fix prompt` with the line "Paste this into your coding agent to resolve the findings above." It restates every surviving finding in full so the author's agent needs nothing but the block, and it carries the repo invariants and the verification commands with it. Build it from the template and rules in `references/fix-prompt.md`. Emit it whenever at least one finding survived, including a nits-only report; on a clean report write one line saying there are no findings and therefore no fix prompt. Never let it disagree with the findings list above it: same findings, same severities, same order, wording carried over rather than re-summarized.
 
 **Severity rubric** (apply it consistently so a level means the same thing across runs):
-- **high**: a repo-invariant violation (step 3), data loss or an unrecoverable run, a secret leak, or a correctness bug on the default path.
+
+- **high**: a repo-invariant violation (step 4), data loss or an unrecoverable run, a secret leak, or a correctness bug on the default path.
 - **medium**: a correctness bug on a reachable non-default path, a skipped or weakened verification, or a failing required CI check.
 - **low**: an edge case, a coverage gap, a doc or naming issue, or style.
-
-The metrics block gives the shape of the change at a glance (from step 5). Keep it to a few lines, for example:
-
-```
-lines: +A / -D (net N) across F files  ·  src +A1/-D1, test +A2/-D2, docs +A3, spec +A4
-new vs net: X new files, Y modified; Z new src lines (the net-new surface)
-tests: +K test lines; suite P/S/F -> P'/S'/F' (pass/skip/fail, base -> head)
-diff coverage: C% of changed src lines exercised (measured | manual); uncovered: file:line, ...
-deps/audit: <only if package.json changed> +dep(s); audit advisories base -> head
-```
-
-State the method for each number and, if a metric could not be measured, say so explicitly rather than omitting it (a silent omission reads as "clean"). The uncovered-lines entry must reconcile with the untested-surface findings below it.
 
 After presenting the report to the user, post the same report to the PR automatically with `gh pr comment <n> --body <report>`, opening it with a line that marks it as an automated pr-review pass (so a human review is not implied). Announce that you posted it and link the comment. Only if the user then explicitly asks to submit a formal review, use `gh pr review <n>` with the appropriate `--approve` / `--request-changes` / `--comment` flag and the findings as body.
 

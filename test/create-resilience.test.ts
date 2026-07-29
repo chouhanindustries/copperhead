@@ -54,9 +54,16 @@ function ok(): RunResult {
 async function writeStageDoc(repoRoot: string, request: string): Promise<void> {
   const docs = path.join(repoRoot, 'docs');
   await mkdir(docs, { recursive: true });
-  if (request.includes('spec-seed')) await writeFile(path.join(docs, 'SPEC.md'), '# s\n\n## Budgets\n', 'utf8');
-  else if (request.includes('architecture')) await writeFile(path.join(docs, 'SUBSYSTEMS.md'), '# s\n', 'utf8');
-  else if (request.includes('part-selection')) await writeFile(path.join(docs, 'BOM.md'), '# b\n', 'utf8');
+  if (request.includes('spec-seed'))
+    await writeFile(path.join(docs, 'SPEC.md'), '# s\n\n## Budgets\n\n- sleep_current_uA: 25\n', 'utf8');
+  else if (request.includes('architecture'))
+    await writeFile(path.join(docs, 'SUBSYSTEMS.md'), '# s\n\n## Power\n\nLDO regulator.\n', 'utf8');
+  else if (request.includes('part-selection'))
+    await writeFile(
+      path.join(docs, 'BOM.md'),
+      '# b\n\n| Refdes | Value | Footprint | MPN | Rationale |\n|---|---|---|---|---|\n| R1 | 10k | R_0603 | RC0603FR-0710KL | bias |\n',
+      'utf8',
+    );
 }
 
 // diagnose() constructs a provider (via makeProvider) before the mocked
@@ -145,9 +152,13 @@ describe('create pipeline resilience (review F3)', () => {
       // (managed paths) — the resume-after-hard-kill situation.
       const docs = path.join(repo, 'docs');
       await mkdir(docs, { recursive: true });
-      await writeFile(path.join(docs, 'SPEC.md'), '# s\n\n## Budgets\n', 'utf8');
-      await writeFile(path.join(docs, 'SUBSYSTEMS.md'), '# s\n', 'utf8');
-      await writeFile(path.join(docs, 'BOM.md'), '# b\n', 'utf8');
+      await writeFile(path.join(docs, 'SPEC.md'), '# s\n\n## Budgets\n\n- sleep_current_uA: 25\n', 'utf8');
+      await writeFile(path.join(docs, 'SUBSYSTEMS.md'), '# s\n\n## Power\n\nLDO regulator.\n', 'utf8');
+      await writeFile(
+        path.join(docs, 'BOM.md'),
+        '# b\n\n| Refdes | Value | Footprint | MPN | Rationale |\n|---|---|---|---|---|\n| R1 | 10k | R_0603 | RC0603FR-0710KL | bias |\n',
+        'utf8',
+      );
 
       mockRunAgentLoop.mockImplementation(async () => ok()); // schematic still halts
 
@@ -171,7 +182,7 @@ describe('create pipeline resilience (review F3)', () => {
 
       const docs = path.join(repo, 'docs');
       await mkdir(docs, { recursive: true });
-      await writeFile(path.join(docs, 'SPEC.md'), '# s\n\n## Budgets\n', 'utf8');
+      await writeFile(path.join(docs, 'SPEC.md'), '# s\n\n## Budgets\n\n- sleep_current_uA: 25\n', 'utf8');
       // A user's own uncommitted file, unrelated to copperhead's managed paths.
       await writeFile(path.join(repo, 'my-notes.txt'), 'do not touch\n', 'utf8');
 

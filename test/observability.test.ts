@@ -5,6 +5,7 @@ import { execa } from 'execa';
 import { runAgentLoop, type RunOptions } from '../src/agent/loop.js';
 import type { ChatOpts, Provider, Turn } from '../src/agent/types.js';
 import { InteractiveRenderer, makeRenderer, plainRenderer } from '../src/agent/render.js';
+import { isColorEnabled, setColorEnabled, stageLine, toolLine } from '../src/agent/theme.js';
 import { tempFixtureRepo } from './helpers.js';
 
 /** Replays a fixed script of turns; the last turn repeats forever. */
@@ -349,5 +350,46 @@ describe('--json routes progress to stderr (AC-2.4/8.9)', () => {
       err.mockRestore();
       log.mockRestore();
     }
+  });
+});
+
+describe('interactive chrome theme (AC-8.8/8.9)', () => {
+  it('plain helpers emit zero SGR when color is off', () => {
+    setColorEnabled(false);
+    expect(toolLine('run_erc', 'clean')).toBe('  ✓ run_erc  clean');
+    expect(toolLine('edit_file', 'replaced 1 region')).toBe('  ▸ edit_file  replaced 1 region');
+    expect(stageLine('spec-seed', 'running')).toBe('stage spec-seed: running');
+    expect(toolLine('run_erc', 'clean')).not.toContain('\x1b');
+  });
+
+  it('interactive tool lines pick ✓ for clean results when color is on', () => {
+    setColorEnabled(true);
+    try {
+      const line = toolLine('run_erc', 'ERC clean');
+      expect(line).toContain('run_erc');
+      expect(line).toContain('✓');
+      expect(line).toContain('\x1b');
+    } finally {
+      setColorEnabled(false);
+    }
+  });
+
+  it('makeRenderer(--plain) disables color so later stage lines stay zero-ANSI', () => {
+    setColorEnabled(true);
+    makeRenderer({ json: false, plain: true });
+    expect(isColorEnabled()).toBe(false);
+    expect(stageLine('layout', 'running')).toBe('stage layout: running');
+  });
+
+  it('interactive renderer toolResult uses the glyph form', () => {
+    setColorEnabled(false);
+    let written = '';
+    const fake = { write: (c: string) => (written += c), columns: 120 };
+    const r = new InteractiveRenderer(fake);
+    r.turnStart(1, 10, 0, 0);
+    r.toolResult('edit_file', 'replaced 1 region');
+    expect(written).toContain('▸ edit_file');
+    expect(written).not.toContain('[edit_file]');
+    r.finish('done');
   });
 });

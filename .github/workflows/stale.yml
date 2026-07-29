@@ -1,0 +1,46 @@
+name: Stale
+
+# Nudges issues and PRs that have gone quiet, then closes them if nobody
+# responds. Anything labeled bounty, good first issue, or help wanted is
+# left alone: those are meant to sit open until someone picks them up.
+on:
+  schedule:
+    - cron: '17 3 * * *'
+  workflow_dispatch:
+
+permissions:
+  issues: write
+  pull-requests: write
+
+jobs:
+  stale:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/stale@v9
+        with:
+          days-before-issue-stale: 60
+          days-before-issue-close: 14
+          days-before-pr-stale: 45
+          days-before-pr-close: 14
+          stale-issue-label: stale
+          stale-pr-label: stale
+          exempt-issue-labels: 'bounty,good first issue,help wanted'
+          exempt-pr-labels: 'bounty'
+          stale-issue-message: >
+            This one has been quiet for a couple of months. Is it still a
+            problem on the latest release? A quick comment keeps it open,
+            otherwise it will be closed in two weeks. Closed issues can
+            always be reopened.
+          close-issue-message: >
+            Closing this for now since there was no follow-up. If it is
+            still biting you, leave a comment or open a new issue with
+            fresh details and we will pick it back up.
+          stale-pr-message: >
+            Looks like this PR stalled. If you are still working on it,
+            a comment or a push will keep it open. Otherwise it will be
+            closed in two weeks. No hard feelings either way, it can be
+            reopened whenever you have time again.
+          close-pr-message: >
+            Closing this since it has been inactive for a while. Thanks
+            for the work that went into it. If you want to pick it back
+            up later, reopen it or start a fresh branch from main.

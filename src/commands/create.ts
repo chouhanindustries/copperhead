@@ -1,19 +1,20 @@
 import path from 'node:path';
 import { existsSync } from 'node:fs';
-import { readFile, mkdir, writeFile } from 'node:fs/promises';
+import { readFile, mkdir, writeFile, readdir } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
-import { loadConfig } from '../config.js';
+import { loadConfig, resolveCompatSettings } from '../config.js';
 import { bootstrapKicadProject } from '../kicad/bootstrap.js';
 import { exportSvg, runErc } from '../kicad/cli.js';
 import { listSymbols } from '../kicad/sexp.js';
 import { isDirty, commitAll, changedFiles } from '../util/git.js';
-import type { CopperheadConfig } from '../config.js';
+import type { CompatSettings, CopperheadConfig } from '../config.js';
 import { checkDrift } from '../memory/drift.js';
 import { runAgentLoop, makeProvider, type BudgetExhaustedStats } from '../agent/loop.js';
 import { diagnoseStageFailure, transcriptExcerpt, withTimeout, type StageDiagnosis } from '../agent/recovery.js';
 import type { Provider } from '../agent/types.js';
 import type { RunMetaInput } from '../agent/runmeta.js';
 import { fmtDuration, fmtTokens, type ProgressRenderer } from '../agent/render.js';
+import { copper, dim, ok, stageLine, warn } from '../agent/theme.js';
 import { openspecInit } from '../openspec/cli.js';
 import { sweepStaleTempDirs, pruneHistoryDir } from '../util/tmp.js';
 import { assertDiskSpace, DEFAULT_MIN_FREE_BYTES } from '../util/preflight.js';
@@ -54,22 +55,98 @@ async function docHasHeading(repoRoot: string, rel: string, word: string): Promi
   return re.test(await readFile(p, 'utf8'));
 }
 
+/**
+ * Returns true when a directory exists and contains at least one file
+ * matching the optional glob-style extension list (case-insensitive).
+ * No extension list = any file.
+ */
+async function dirHasFiles(dirPath: string, exts?: string[]): Promise<boolean> {
+  if (!existsSync(dirPath)) return false;
+  async function walk(dir: string): Promise<boolean> {
+    for (const entry of await readdir(dir, { withFileTypes: true })) {
+      if (entry.isDirectory()) {
+        if (await walk(path.join(dir, entry.name))) return true;
+      } else if (!exts || exts.some((e) => entry.name.toLowerCase().endsWith(e))) {
+        return true;
+      }
+    }
+    return false;
+  }
+  return walk(dirPath);
+}
+
 export const STAGES: Stage[] = [
   {
     name: 'spec-seed',
-    isComplete: (root, docs) => docHasHeading(root, path.join(docs, 'SPEC.md'), 'Budgets?'),
+    isComplete: async (root, docs) => {
+      // The init scaffold writes SPEC.md with a "## Budgets" heading and an
+      // HTML comment placeholder — that alone must not count as complete.
+      // Require the heading AND at least one non-comment, non-blank line
+      // of real budget content beneath it (a filled section vs. an empty placeholder).
+      const p = path.join(root, docs, 'SPEC.md');
+      if (!existsSync(p)) return false;
+      const text = await readFile(p, 'utf8');
+      const budgetsMatch = /^#{1,6}\s.*\bBudgets?\b/im.test(text);
+      if (!budgetsMatch) return false;
+      // Find the Budgets section and strip HTML comments (single or multi-line)
+      const afterBudgets = text.split(/^#{1,6}\s.*\bBudgets?\b/im)[1] ?? '';
+      const firstNewline = afterBudgets.indexOf('\n');
+      const afterHeadingLine = firstNewline >= 0 ? afterBudgets.slice(firstNewline + 1) : '';
+      const nextSection = afterHeadingLine.search(/^#{1,6}\s/m);
+      const section = nextSection >= 0 ? afterHeadingLine.slice(0, nextSection) : afterHeadingLine;
+      const cleanSection = section.replace(/<!--[\s\S]*?-->/g, '');
+      const realLines = cleanSection.split('\n').filter((l) => l.trim().length > 0);
+      return realLines.length > 0;
+    },
     prompt: (brief) =>
       `Stage 1 of the create pipeline: seed the requirements. From the product brief below, write docs/SPEC.md (what the device is, top-level constraints and budgets). Every budget you state must also be recorded with record_constraint. Anything the brief does not state: propose a sensible default and flag it ASSUMED. If an openspec/ workspace exists, also seed openspec/specs/ with per-capability requirements using Given/When/Then scenarios.\n\nBrief:\n${brief}`,
   },
   {
     name: 'architecture',
-    isComplete: (root, docs) => docExists(root, path.join(docs, 'SUBSYSTEMS.md')),
+    isComplete: async (root, docs) => {
+      // init scaffolds SUBSYSTEMS.md with boilerplate description text and auto-generated
+      // "## Sheet X" headings containing "- Ref: Value" symbol bullets.
+      // Require at least one level-2+ heading (## section) AND at least one real prose
+      // line beneath it (excluding boilerplate and auto-generated symbol bullets).
+      const p = path.join(root, docs, 'SUBSYSTEMS.md');
+      if (!existsSync(p)) return false;
+      const text = await readFile(p, 'utf8');
+      // Must have at least one level-2+ (##) section heading
+      if (!/^#{2,6}\s/m.test(text)) return false;
+      // Filter out headings, scaffold description, and auto-generated symbol bullets (- Ref: Value or - Ref?: Value)
+      const contentLines = text.split('\n').filter((l) => {
+        const trimmed = l.trim();
+        if (!trimmed || trimmed.startsWith('#')) return false;
+        if (trimmed.includes('Per-sheet values and reasoning')) return false;
+        if (/^-\s+(?:[A-Za-z]+\d+[A-Za-z]*|[A-Za-z]*\?):/.test(trimmed)) return false; // auto-generated refdes symbol bullet (e.g. - R1: 10k, - U?: ESP32, - ?: 10k)
+        return true;
+      });
+      return contentLines.length > 0;
+    },
     prompt: () =>
       'Stage 2: architecture. Write docs/SUBSYSTEMS.md: the block diagram in prose, one section per subsystem (power, MCU, connectivity, UI, ...), with the reasoning and key values for each. Respect every budget in SPEC.md.',
   },
   {
     name: 'part-selection',
-    isComplete: (root, docs) => docExists(root, path.join(docs, 'BOM.md')),
+    isComplete: async (root, docs) => {
+      // init scaffolds BOM.md with a table pre-filled with UNVERIFIED MPNs
+      // extracted from the schematic. Require at least one row whose MPN
+      // column is NOT the UNVERIFIED placeholder — i.e. a real part was chosen.
+      const p = path.join(root, docs, 'BOM.md');
+      if (!existsSync(p)) return false;
+      const text = await readFile(p, 'utf8');
+      // Find table rows (lines starting with |) that are not the header or separator
+      const rows = text.split('\n').filter(
+        (l) => l.startsWith('|') && !l.includes('---') && !l.toLowerCase().includes('refdes'),
+      );
+      if (!rows.length) return false;
+      // At least one row must have a non-UNVERIFIED MPN (4th column)
+      return rows.some((row) => {
+        const cols = row.split('|').map((c) => c.trim());
+        const mpn = cols[4] ?? ''; // 0=empty, 1=Refdes, 2=Value, 3=Footprint, 4=MPN
+        return mpn && !mpn.toUpperCase().startsWith('UNVERIFIED');
+      });
+    },
     prompt: () =>
       'Stage 3: part selection. Write docs/BOM.md with the fixed table format (| Refdes | Value | Footprint | MPN | Rationale |). Every MPN you introduce is flagged UNVERIFIED with a datasheet-verifiable justification. Check leakage/quiescent current of every part against the power budget. Run check_drift before finishing.',
   },
@@ -121,19 +198,37 @@ export const STAGES: Stage[] = [
   },
   {
     name: 'outputs',
-    isComplete: (root) => existsSync(path.join(root, 'outputs')),
+    isComplete: async (root) => {
+      // An empty outputs/ dir (e.g. from a failed export run) must not count
+      // as complete. Require at least one Gerber file (any .gbr variant).
+      return dirHasFiles(path.join(root, 'outputs'), ['.gbr', '.gtl', '.gbl', '.gbs', '.gbo', '.gbp', '.gbd', '.gto', '.gts', '.gml']);
+    },
     prompt: () =>
       'Stage 6: outputs package. Export into outputs/: gerbers+drill (JLC profile), DXF and STEP outline, SVG renders (export_svg), and an ordering BOM.csv generated from BOM.md (refdes, MPN, qty). Every export must succeed.',
   },
   {
     name: 'firmware',
-    isComplete: (root) => existsSync(path.join(root, 'firmware')),
+    isComplete: async (root) => {
+      // An empty firmware/ dir must not count. Require at least one source file.
+      return dirHasFiles(path.join(root, 'firmware'), ['.c', '.h', '.cpp', '.hpp', '.py', '.rs', '.ino', '.s']);
+    },
     prompt: () =>
       'Stage 7: firmware scaffold. Generate firmware/ for the chosen MCU HAL: pins.h generated from PINOUT.md (single source of truth), driver stubs, and one working happy path. If the vendor toolchain is available, the build must pass; if not, note "not compiled here" explicitly in DEVPLAN.md.',
   },
   {
     name: 'devplan',
-    isComplete: (root, docs) => docExists(root, path.join(docs, 'DEVPLAN.md')),
+    isComplete: async (root, docs) => {
+      // init does NOT scaffold DEVPLAN.md, but a blank file must not count.
+      // Require at least one ## section heading AND at least one content line.
+      const p = path.join(root, docs, 'DEVPLAN.md');
+      if (!existsSync(p)) return false;
+      const text = await readFile(p, 'utf8');
+      if (!/^#{1,6}\s/m.test(text)) return false;
+      const contentLines = text.split('\n').filter(
+        (l) => l.trim() && !l.trim().startsWith('#'),
+      );
+      return contentLines.length > 0;
+    },
     prompt: () =>
       'Stage 8: DEVPLAN.md. Write docs/DEVPLAN.md: bring-up steps in order, test points and what to meter first, risk list, and the prototype order plan.',
   },
@@ -161,7 +256,7 @@ export interface CreateOptions {
 async function emitJlcpcbAfterOutputs(stageName: string, opts: CreateOptions): Promise<void> {
   if (stageName !== 'outputs') return;
   const out = await emitCreateJlcpcbBom(opts.repoRoot);
-  if (out) opts.log(`stage outputs: emitted ${out} (JLCPCB assembly BOM)`);
+  if (out) opts.log(stageLine('outputs', `emitted ${out} (JLCPCB assembly BOM)`, 'ok'));
 }
 
 /** Stages whose output is a KiCad file worth rendering to an image (5.4). */
@@ -203,16 +298,26 @@ async function commitResumedStage(opts: CreateOptions, config: CopperheadConfig,
   const foreign = dirty.filter((f) => !isManagedPath(f, config));
   if (foreign.length) {
     opts.log(
-      `stage ${stageName}: already-complete work is uncommitted, but the tree also has non-copperhead changes ` +
-        `(${foreign.slice(0, 3).join(', ')}${foreign.length > 3 ? ', …' : ''}); leaving it uncommitted so nothing of yours is swept up`,
+      stageLine(
+        stageName,
+        `already-complete work is uncommitted, but the tree also has non-copperhead changes ` +
+          `(${foreign.slice(0, 3).join(', ')}${foreign.length > 3 ? ', …' : ''}); leaving it uncommitted so nothing of yours is swept up`,
+        'warn',
+      ),
     );
     return;
   }
   try {
     const sha = await commitAll(opts.repoRoot, `copperhead: resume — commit completed stage ${stageName}`);
-    opts.log(`stage ${stageName}: committed already-complete work ${sha.slice(0, 10)} so a later rollback cannot wipe it (2.4)`);
-  } catch (err) {
-    opts.log(`stage ${stageName}: could not commit resumed work (${(err as Error).message})`);
+    opts.log(
+      stageLine(
+        stageName,
+        `committed already-complete work ${sha.slice(0, 10)} so a later rollback cannot wipe it (2.4)`,
+        'ok',
+      ),
+    );
+  } catch (e) {
+    opts.log(stageLine(stageName, `could not commit resumed work (${(e as Error).message})`, 'err'));
   }
 }
 
@@ -243,12 +348,18 @@ async function renderStageArtifacts(opts: CreateOptions, stageName: string, tran
     try {
       await exportSvg(kind, path.join(opts.repoRoot, file), artifactsDir);
       rendered++;
-    } catch (err) {
-      opts.log(`stage ${stageName}: could not render ${kind} SVG (${(err as Error).message})`);
+    } catch (e) {
+      opts.log(stageLine(stageName, `could not render ${kind} SVG (${(e as Error).message})`, 'warn'));
     }
   }
   if (rendered) {
-    opts.log(`stage ${stageName}: rendered ${rendered} SVG artifact(s) into ${path.relative(opts.repoRoot, artifactsDir)}/`);
+    opts.log(
+      stageLine(
+        stageName,
+        `rendered ${rendered} SVG artifact(s) into ${path.relative(opts.repoRoot, artifactsDir)}/`,
+        'ok',
+      ),
+    );
   }
 }
 
@@ -267,10 +378,12 @@ async function diagnose(input: {
   transcriptDir: string;
   attempt: number;
   maxAttempts: number;
+  /** Compatible-endpoint settings, so a `compat` run can diagnose itself. */
+  compat?: CompatSettings | undefined;
 }): Promise<StageDiagnosis> {
   let provider: Provider | undefined;
   try {
-    provider = await makeProvider(input.model);
+    provider = await makeProvider(input.model, false, input.compat);
     const p = provider;
     const excerpt = await transcriptExcerpt(input.transcriptDir);
     return await withTimeout(
@@ -331,10 +444,14 @@ function resumeCommand(opts: CreateOptions): string {
  */
 function logResumePoint(opts: CreateOptions, stage: Stage, index: number): void {
   opts.log('');
-  opts.log(`⏸  stopped at stage ${index + 1}/${STAGES.length} (${stage.name}). To resume from here, run:`);
-  opts.log(`     ${resumeCommand(opts)}`);
   opts.log(
-    `   (${index} stage(s) already complete are detected from repo state and skipped; it resumes at ${stage.name}.)`,
+    warn(`⏸  stopped at stage ${index + 1}/${STAGES.length} (${stage.name}). To resume from here, run:`),
+  );
+  opts.log(copper(`     ${resumeCommand(opts)}`));
+  opts.log(
+    dim(
+      `   (${index} stage(s) already complete are detected from repo state and skipped; it resumes at ${stage.name}.)`,
+    ),
   );
 }
 
@@ -380,14 +497,19 @@ function printCostTable(opts: CreateOptions, costs: StageCost[]): void {
     `  ${r.stage.padEnd(w.stage)}  ${r.wall.padStart(w.wall)}  ${r.turns.padStart(w.turns)}  ${r.out.padStart(w.out)}  ${r.cache.padStart(w.cache)}`;
   const rule = `  ${'-'.repeat(w.stage)}  ${'-'.repeat(w.wall)}  ${'-'.repeat(w.turns)}  ${'-'.repeat(w.out)}  ${'-'.repeat(w.cache)}`;
   opts.log('');
-  opts.log('Per-stage cost summary (5.2):');
-  opts.log(line(header));
-  opts.log(rule);
+  opts.log(copper('Per-stage cost summary'));
+  opts.log(dim(line(header)));
+  opts.log(dim(rule));
   for (const r of rows) opts.log(line(r));
   if (total) {
-    opts.log(rule);
-    opts.log(line(total));
+    opts.log(dim(rule));
+    opts.log(boldTotal(line(total)));
   }
+}
+
+function boldTotal(s: string): string {
+  // TOTAL row: keep digits readable, accent only the label when color is on.
+  return s.replace(/^(\s*)TOTAL/, (_, sp: string) => `${sp}${copper('TOTAL')}`);
 }
 
 /** Sum the cost of the stages that actually ran this invocation (resumed stages
@@ -422,8 +544,10 @@ function logCumulative(opts: CreateOptions, stageCosts: StageCost[]): void {
   const t = ranTotals(stageCosts);
   if (!t.turns && !t.wallMs) return; // nothing has actually run yet (all resumed)
   opts.log(
-    `pipeline so far: ${stageCosts.length}/${STAGES.length} stages · ${fmtDuration(t.wallMs)} · ` +
-      `${fmtTokens(t.tokensOut)} out tokens · ${cachePct(t.cacheHits, t.turns)}% cache hits`,
+    dim(
+      `pipeline so far: ${stageCosts.length}/${STAGES.length} stages · ${fmtDuration(t.wallMs)} · ` +
+        `${fmtTokens(t.tokensOut)} out tokens · ${cachePct(t.cacheHits, t.turns)}% cache hits`,
+    ),
   );
 }
 
@@ -533,11 +657,11 @@ export async function runCreate(opts: CreateOptions): Promise<{ ok: boolean; com
   // so a concurrent run's fresh dirs are never touched; best-effort, so it never
   // blocks a run (I8).
   const swept = await sweepStaleTempDirs(Date.now());
-  if (swept.length) opts.log(`startup: reclaimed ${swept.length} stale temp dir(s) from earlier runs`);
+  if (swept.length) opts.log(dim(`startup: reclaimed ${swept.length} stale temp dir(s) from earlier runs`));
   // Cap the gitignored .history/ so KiCad local history cannot grow unbounded
   // across a long run and fill the disk (4.1, I8). Best-effort; keeps the newest.
   const pruned = await pruneHistoryDir(opts.repoRoot);
-  if (pruned) opts.log(`startup: pruned ${pruned} old .history/ entrie(s) to cap local-history growth`);
+  if (pruned) opts.log(dim(`startup: pruned ${pruned} old .history/ entrie(s) to cap local-history growth`));
   await openspecInit(opts.repoRoot);
   const completed: string[] = [];
   const stageCosts: StageCost[] = [];
@@ -550,10 +674,12 @@ export async function runCreate(opts: CreateOptions): Promise<{ ok: boolean; com
     // contract can eventually be met. No-op once a project exists.
     if (stage.name === 'schematic') {
       const created = await bootstrapKicadProject(opts.repoRoot, brief);
-      if (created) opts.log(`stage schematic: scaffolded empty KiCad project (${created} + board + project), wired into config`);
+      if (created) {
+        opts.log(stageLine('schematic', `scaffolded empty KiCad project (${created} + board + project), wired into config`));
+      }
     }
     if (await stage.isComplete(opts.repoRoot, config.docs)) {
-      opts.log(`stage ${stage.name}: already complete (resuming past it)`);
+      opts.log(stageLine(stage.name, 'already complete (resuming past it)', 'ok'));
       await commitResumedStage(opts, config, stage.name);
       completed.push(stage.name);
       stageCosts.push({ name: stage.name, resumed: true, wallMs: 0, turns: 0, tokensIn: 0, tokensOut: 0, cacheHits: 0 });
@@ -585,9 +711,16 @@ export async function runCreate(opts: CreateOptions): Promise<{ ok: boolean; com
       // whenever the project already exists.
       if (stage.name === 'schematic') {
         const rescaffolded = await bootstrapKicadProject(opts.repoRoot, brief);
-        if (rescaffolded && attempt > 1) opts.log(`stage schematic: re-scaffolded empty KiCad project after rollback, wired into config`);
+        if (rescaffolded && attempt > 1) {
+          opts.log(stageLine('schematic', 're-scaffolded empty KiCad project after rollback, wired into config'));
+        }
       }
-      opts.log(`stage ${stage.name}: running${attempt > 1 ? ` (attempt ${attempt}/${config.maxStageRetries + 1})` : ''}`);
+      opts.log(
+        stageLine(
+          stage.name,
+          `running${attempt > 1 ? ` (attempt ${attempt}/${config.maxStageRetries + 1})` : ''}`,
+        ),
+      );
       const res = await runAgentLoop({
         repoRoot: opts.repoRoot,
         model: opts.model,
@@ -635,15 +768,20 @@ export async function runCreate(opts: CreateOptions): Promise<{ ok: boolean; com
 
       if (attempt > config.maxStageRetries) {
         opts.log(
-          `stage ${stage.name}: ${failure}; exhausted ${config.maxStageRetries} auto-retry(ies). Stopping for a human.`,
+          stageLine(
+            stage.name,
+            `${failure}; exhausted ${config.maxStageRetries} auto-retry(ies). Stopping for a human.`,
+            'err',
+          ),
         );
         break;
       }
 
-      opts.log(`stage ${stage.name}: ${failure}; asking the model whether to retry…`);
+      opts.log(stageLine(stage.name, `${failure}; asking the model whether to retry…`, 'warn'));
       const diagnosis = await diagnose({
         model: opts.model,
         timeoutMs: config.turnTimeoutMs,
+        compat: resolveCompatSettings(config),
         stageName: stage.name,
         stageGoal: basePrompt,
         failure,
@@ -656,9 +794,15 @@ export async function runCreate(opts: CreateOptions): Promise<{ ok: boolean; com
       // not under-report by omitting it.
       cost.tokensIn += diagnosis.usage?.inputTokens ?? 0;
       cost.tokensOut += diagnosis.usage?.outputTokens ?? 0;
-      opts.log(`stage ${stage.name}: diagnosis → ${diagnosis.verdict} — ${diagnosis.reason}`);
+      opts.log(
+        stageLine(
+          stage.name,
+          `diagnosis → ${diagnosis.verdict} — ${diagnosis.reason}`,
+          diagnosis.verdict === 'abort' ? 'err' : 'warn',
+        ),
+      );
       if (diagnosis.verdict === 'abort') {
-        opts.log(`stage ${stage.name}: recovery supervisor recommends stopping for a human.`);
+        opts.log(stageLine(stage.name, 'recovery supervisor recommends stopping for a human.', 'err'));
         break;
       }
       guidance = diagnosis.guidance ?? `The previous attempt failed: ${failure}. ${diagnosis.reason}`;
@@ -680,7 +824,11 @@ export async function runCreate(opts: CreateOptions): Promise<{ ok: boolean; com
   }
 
   const check = await runCheck(opts.repoRoot, opts.log);
-  opts.log(check.ok ? 'create pipeline complete; all checks green' : 'create pipeline complete with check failures');
+  opts.log(
+    check.ok
+      ? ok('create pipeline complete; all checks green')
+      : warn('create pipeline complete with check failures'),
+  );
   printCostTable(opts, stageCosts);
   await writeRunReport(opts, stageCosts);
   return { ok: check.ok, completed };

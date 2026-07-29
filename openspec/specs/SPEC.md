@@ -235,6 +235,26 @@ This kills the last "docs drift" failure mode: requirements (openspec) → budge
 ## 3. CLI surface (Phase 1)
 
 ```
+copperhead [repl] ["<change request>"] [--model …] [--allow-dirty]
+    Interactive agent shell (default when no subcommand is given).
+    Claude Code–style prompt loop on a TTY: each line runs one
+    `do`-equivalent change (same gates, including the AC-3.8 dirty-tree
+    refusal and the same off-by-default `--allow-dirty` escape hatch),
+    then returns to the prompt.
+    Slash commands: /help, /demo, /examples, /status, /check, /parts, /nets,
+    /bom, /sync, /drift, /constraints, /openspec, /config, /git, /runs, /last,
+    /model, /version, /clear, /quit. Inspect commands are verify-only (no LLM
+    resolve / create). An optional first request runs before the loop. Non-TTY
+    without a request refuses and points at `copperhead do`. With no model
+    configured anywhere, a TTY session offers an interactive picker (also
+    reachable later via /model). Session output mirrors to
+    `.copperhead/runs/repl-<ts>.log` with AC-4.1 redaction applied.
+
+copperhead demo [--tour] [--model …] [--dir <path>]
+    Print a short tour of what the agent does (`--tour`), or scaffold
+    `demo-runs/usb-c-breakout/` and run the create pipeline against the
+    packaged USB-C power breakout brief (same as `npm run demo:simple`).
+
 copperhead create --brief brief.md   # Mode A: full pipeline (§2.5)
 copperhead init [--path hardware/]
     Detect .kicad_sch/.kicad_pcb, parse symbols/footprints/nets,
@@ -336,7 +356,8 @@ interface Provider {
 - `codex.ts`: locally installed Codex CLI via the official SDK and saved `codex login` authentication; Codex runs read-only and returns structured Copperhead tool requests
 - `claude-code.ts`: saved-login Claude Code via the Claude Agent SDK: a reasoning-only backend (no SDK tools, built-ins disabled, isolated cwd) mapped onto the single-turn `Provider` seam so the loop stays the driver. Selected by `--model claude-code` / `claude-code:<id>` (routed ahead of the `claude*` prefix); needs no `ANTHROPIC_API_KEY` (uses `CLAUDE_CODE_OAUTH_TOKEN` / the logged-in CLI); never falls back to a keyed provider. `@anthropic-ai/claude-agent-sdk` ships as an `optionalDependency` (its `@anthropic-ai/sdk >=0.93.0` peer is satisfied by copperhead's bumped core SDK), lazily imported and only loaded when `claude-code` is selected.
 - `cursor.ts`: saved-login Cursor Agent CLI subprocess (`agent login`), reasoning-only (plan mode, sandbox, isolated workspace, JSON tool protocol, session resume via `--resume`). Selected by `--model cursor` / `cursor:<id>`; needs no model API keys; never falls back to a keyed provider. Optional `COPPERHEAD_CURSOR_PATH` (default `agent` on PATH).
-- Selection: `--model` flag > `COPPERHEAD_MODEL` env > config.json > default (whichever key is present)
+- `openai.ts` compatible-endpoint mode: `--model compat:<id>` points the same provider at any OpenAI-compatible endpoint (Groq, OpenRouter, Gemini's compat endpoint, a local Ollama) via `baseURL` + `apiKeyEnv` (config, or `COPPERHEAD_BASE_URL` / `COPPERHEAD_API_KEY_ENV`). Only the `compat` route reads `baseURL`, so a stray value never redirects a `gpt-5` run; a loopback endpoint needs no credential.
+- Selection: `--model` flag > `COPPERHEAD_MODEL` env > config.json > the available key, but **only when exactly one of `OPENAI_API_KEY`/`ANTHROPIC_API_KEY` is set**; with two or more present and no explicit selection, resolution refuses with an actionable error rather than silently favoring one (breaking change from "first key wins")
 - All providers must pass the same integration test on the fixture repo
 
 ### 4.5 Budgets & failure modes
@@ -381,7 +402,7 @@ Acceptance: type "add a second RGB LED on an RTC-capable pin" → watch schemati
 
 ## 7. Safety rails
 
-- Refuse to run `do` on a dirty git tree (offer `--allow-dirty` with snapshot via `git stash create`)
+- Refuse to run `do` or `repl` on a dirty git tree (offer `--allow-dirty`, whose snapshot pairs a `git stash create` object for tracked changes with a tree object for untracked files, so the rollback restores both rather than letting `git clean` delete what the stash never captured). An untracked file that exists but cannot be read refuses the run by name: it cannot be snapshotted, and the rollback would delete it regardless, so proceeding would break exactly the promise `--allow-dirty` makes. Untracked paths that vanish before the snapshot is taken are skipped rather than refused
 - All file tools sandboxed to repo root; no network tools in Phase 1
 - `.env` in `.gitignore` from first commit; keys only via env vars — never written to any file, transcript, or commit
 - Transcripts in `.copperhead/runs/` redact anything matching `sk-[A-Za-z0-9_-]+`
@@ -426,11 +447,19 @@ Format: Given / When / Then. "Fixture" = the open-telegraph repo (or the tiny te
 - **AC-3.5 (repair loop)** Given an edit that first produces an ERC violation, the transcript shows: violation parsed → targeted fix → re-run → pass, within `maxRepairCycles`.
 - **AC-3.6 (rollback)** If violations persist after `maxRepairCycles`, working tree equals the pre-run state (`git status` clean, files byte-identical), exit non-zero, transcript path printed.
 - **AC-3.7 (surgical edits)** For every run above: the `.kicad_sch` diff touches only the s-expressions relevant to the change — file not regenerated (assert: < 5% of lines changed for AC-3.1).
-- **AC-3.8 (dirty tree)** With uncommitted changes and no `--allow-dirty`: refuses to start.
+- **AC-3.8 (dirty tree)** With uncommitted changes and no `--allow-dirty`: refuses to start. Holds for `repl` as well as `do`, since `repl` is the default command. With `--allow-dirty`, a rollback restores both the tracked modifications and the untracked files that were present before the run.
 - **AC-3.9 (dry run)** `--dry-run` prints the proposed diff and writes nothing.
-- **AC-3.10 (provider parity)** AC-3.1 passes with `--model codex`, `--model gpt-5`, `--model claude`, `--model claude-code`, and `--model cursor` when each provider is configured.
+- **AC-3.10 (provider parity)** AC-3.1 passes with `--model codex`, `--model gpt-5`, `--model claude`, `--model claude-code`, `--model cursor`, and `--model compat:<id>` when each provider is configured.
 - **AC-3.11 (saved login)** With `--model claude-code`, a logged-in Claude Code (`CLAUDE_CODE_OAUTH_TOKEN` set) and **no** `ANTHROPIC_API_KEY`/`OPENAI_API_KEY`, a `do` run completes through the normal verify/commit path; copperhead reads no credential store; and no key material appears in the transcript, summary, or tree (AC-4.1 holds). A missing optional dependency or an unauthenticated install fails through the rollback path with an actionable error, not a raw stack trace.
 - **AC-3.12 (cursor saved login)** With `--model cursor`, a logged-in Cursor Agent CLI (`agent login`) and **no** model API keys, a `do` run completes through the normal verify/commit path; copperhead never reads Cursor credentials; unauthenticated or missing CLI installs fail with an actionable message and rollback.
+- **AC-3.13 (compat credential resolution)** With `baseURL` and `apiKeyEnv` configured (via `.copperhead/config.json` or `COPPERHEAD_BASE_URL`/`COPPERHEAD_API_KEY_ENV`) and the named variable set, `--model compat:<id>` issues its requests to that endpoint using that credential; a credential present under a different variable name does not satisfy it.
+- **AC-3.14 (compat locality)** A `baseURL` resolving to a loopback host (`localhost`, `127.0.0.1`, `::1`, or a `.local` suffix) requires no credential; a remote `baseURL` without its configured credential fails before any network call, naming the missing variable in the error.
+- **AC-3.15 (compat routing is explicit)** Bare `compat` (no model id) and `compat:` (empty model id) are both rejected with an actionable message naming `compat:<model-id>`; a compatible endpoint has no default model to fall back to, unlike `codex`/`claude-code`/`cursor`.
+- **AC-3.16 (compat endpoint isolation)** An exported `COPPERHEAD_BASE_URL`/`COPPERHEAD_API_KEY_ENV` does not change where a non-`compat` model (`gpt-5`, `claude`, etc.) sends its requests; only the explicit `compat:` prefix consults them.
+- **AC-3.17 (compat prompt-privacy signal)** `doctor` reports a non-blocking `warn` line when the compat endpoint's host is documented as training on submitted prompts, and a non-blocking `info` line naming the host when no policy is on record; neither case fails the command. A true loopback endpoint (`localhost`, `127.0.0.1`, or `::1`, but not a `.local`/LAN host) bypasses this check entirely, since nothing leaves the machine.
+- **AC-3.18 (compat never fails over to a paid key)** A rate limit against a `compat:<id>` endpoint never fails over to `OPENAI_API_KEY`/`ANTHROPIC_API_KEY`, even when one is present in the environment: the compat provider is not `'openai'` by name, so the same isolation that protects `codex`/`claude-code`/`cursor` (AC-3.11, AC-3.12) applies to it too.
+- **AC-3.19 (ambiguous auto-selection refuses)** With no `--model`, no `COPPERHEAD_MODEL`, and no `model` in config, model resolution refuses with an actionable "ambiguous" error naming every credential found when two or more of `OPENAI_API_KEY`/`ANTHROPIC_API_KEY` are set; with exactly one, that provider is selected as before. **Breaking change**: an environment with both keys set that previously auto-selected `OPENAI_API_KEY` now fails `do`/`sync`/`create`/`demo` until a model is chosen explicitly (`repl` degrades gracefully via its interactive picker instead).
+- **AC-3.20 (compat cache is endpoint-scoped)** Re-running a cached `compat:<id>` request against a different `baseURL` calls the new endpoint rather than replaying the previous one's turns: one model id can be served by several hosts, so the id alone no longer identifies the backend. The endpoint enters the cache key only for the `compat` route, so a non-`compat` run's existing cache entries still replay unchanged.
 
 ### AC-4 · Safety
 
@@ -472,7 +501,7 @@ Format: Given / When / Then. "Fixture" = the open-telegraph repo (or the tiny te
 - **AC-8.5 (run-end addenda on every path)** Every terminal branch (success, refusal, turn-budget, repair-cycles, provider error, stall, commit failure) emits a `run-end` event and a `## Run stats` summary section with: exit path (`done`/`refused`/`turn-budget-exhausted`/`repair-cycles-exhausted`/`commit-failed`/`provider-error`/`stalled`), turns used vs budget, repair cycles used vs budget, token totals + per-turn breakdown, and wall-clock duration; the CLI prints one final outcome line (exit path, verification, commit hash if any, duration, tokens).
 - **AC-8.6 (commit failure is an outcome)** When the end-of-run git commit fails (e.g. `git add -A` exits 128 on an embedded repo), the run rolls back per the snapshot contract and ends with `exitPath: commit-failed`; `summary.md` is still written and names the git error; no unhandled stack trace reaches the user.
 - **AC-8.7 (progress with tokens)** In plain mode, each turn's output is prefixed `[turn k/N · <in> in / <out> out]` with cumulative totals (compact `12.3k` formatting); tool results stay one line each.
-- **AC-8.8 (interactive on a TTY)** With stdout a TTY and neither `--json` nor `--plain`: a bottom-pinned status line redraws in place (spinner while a provider call is in flight, elapsed time, turn counter vs budget, cumulative tokens); assistant text and tool results scroll above it; the final outcome line replaces it; cursor and status line are restored/cleared on exit including Ctrl-C. A renderer reused across runs (the `create` pipeline) renders every stage: each outcome line releases the status line and the next stage re-establishes it.
+- **AC-8.8 (interactive on a TTY)** With stdout a TTY and neither `--json` nor `--plain`: a bottom-pinned status line redraws in place (spinner while a provider call is in flight, elapsed time, turn counter vs budget, cumulative tokens); assistant text and tool results scroll above it; the final outcome line replaces it; cursor and status line are restored/cleared on exit including Ctrl-C. A renderer reused across runs (the `create` pipeline) renders every stage: each outcome line releases the status line and the next stage re-establishes it. Interactive chrome may use muted SGR color (copper accent, dim secondary text, green/amber/red for outcome); color is never required for correctness.
 - **AC-8.9 (plain fallback)** With stdout piped, or `--json`, or the global `--plain` flag: output is line-oriented and contains zero ANSI escape sequences. With `--json`, progress lines go to stderr; stdout carries only the machine-readable result.
 - **AC-8.10 (redaction holds)** A string matching `sk-[A-Za-z0-9_-]+` planted in any metadata field appears redacted in both the persisted `run-start` event and `summary.md` (extends AC-4.1 to the new surfaces).
 

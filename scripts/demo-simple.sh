@@ -48,8 +48,20 @@ elif ! git -C "$DEMO_DIR" diff --cached --quiet; then
   git -C "$DEMO_DIR" commit -q -m "demo: update demo scaffolding"
 fi
 
-printf 'copperhead simple demo\n'
-printf 'repo:  %s\n' "$DEMO_DIR"
-printf 'brief: %s\n\n' "$BRIEF"
+# Short paths for the banner — absolute walls of text make the TTY feel noisy.
+short_path() {
+  local p="$1"
+  if [[ "$p" == "$HOME"/* ]]; then
+    printf '~/%s' "${p#"$HOME"/}"
+  elif [[ "$p" == "$ROOT"/* ]]; then
+    printf '%s' "${p#"$ROOT"/}"
+  else
+    printf '%s' "$p"
+  fi
+}
+
+printf 'copperhead · simple demo\n'
+printf 'repo:  %s\n' "$(short_path "$DEMO_DIR")"
+printf 'brief: %s\n\n' "$(short_path "$BRIEF")"
 
 npm run dev -- --repo "$DEMO_DIR" create --brief "$BRIEF" "$@"

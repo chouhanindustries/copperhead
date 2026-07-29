@@ -1,0 +1,34 @@
+name: Greetings
+
+# Says hi to first-time contributors. Kept short and practical on purpose;
+# nobody wants a wall of boilerplate as their first interaction with the repo.
+on:
+  issues:
+    types: [opened]
+  pull_request_target:
+    types: [opened]
+
+permissions:
+  issues: write
+  pull-requests: write
+
+jobs:
+  greeting:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/first-interaction@v1
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+          issue-message: >
+            Hey, thanks for opening your first issue here. Someone will get
+            to it soon. If it is a bug, the output of `copperhead check` and
+            your KiCad version usually save a round trip of questions. And
+            if copperhead is useful to you, a star on the repo helps more
+            people find it.
+          pr-message: >
+            Thanks for the first PR. Two quick things: the CLA bot will ask
+            you to sign once (only takes a minute), and CI runs the full
+            test suite including real `kicad-cli` checks, so give it a few
+            minutes before worrying about red crosses. A maintainer will
+            review after that. If you like the project, consider leaving a
+            star too.
