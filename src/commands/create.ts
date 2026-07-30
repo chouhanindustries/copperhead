@@ -12,6 +12,8 @@ import { checkDrift } from '../memory/drift.js';
 import { runAgentLoop, makeProvider, type BudgetExhaustedStats } from '../agent/loop.js';
 import { diagnoseStageFailure, transcriptExcerpt, withTimeout, type StageDiagnosis } from '../agent/recovery.js';
 import type { Provider } from '../agent/types.js';
+import type { ExitPath } from '../agent/transcript.js';
+import { budgetExtraTurns } from '../util/cli-args.js';
 import type { RunMetaInput } from '../agent/runmeta.js';
 import { fmtDuration, fmtTokens, type ProgressRenderer } from '../agent/render.js';
 import { copper, dim, ok, stageLine, warn } from '../agent/theme.js';
@@ -234,10 +236,45 @@ export const STAGES: Stage[] = [
   },
 ];
 
+/**
+ * Built-in per-stage turn budgets for the stages the global default has been
+ * documented as too small for. `manual-tests/setup.sh` has been setting 100
+ * turns for create sandboxes (with a comment saying 40 is inadequate) since long
+ * before issue #135; these promote that test-only workaround into the product
+ * default so a normally-scaffolded repo is not the only one that walls.
+ */
+export const DEFAULT_STAGE_MAX_TURNS: Record<string, number> = {
+  schematic: 100,
+  'layout-draft': 80,
+};
+
+/**
+ * Turn budget for one stage. Precedence, highest first:
+ *
+ * 1. `stageMaxTurns[stage]` in `.copperhead/config.json` — the most specific
+ *    statement anyone has made about this stage, so a global flag must not
+ *    silently undo per-stage tuning.
+ * 2. `--max-turns` passed to `create`.
+ * 3. `DEFAULT_STAGE_MAX_TURNS[stage]` — the built-in per-stage default.
+ * 4. `maxTurns` from config (the global default).
+ */
+export function resolveStageMaxTurns(
+  stageName: string,
+  config: Pick<CopperheadConfig, 'maxTurns' | 'stageMaxTurns'>,
+  flagMaxTurns?: number,
+): number {
+  const fromConfig = config.stageMaxTurns?.[stageName];
+  if (fromConfig !== undefined) return fromConfig;
+  if (flagMaxTurns !== undefined) return flagMaxTurns;
+  return DEFAULT_STAGE_MAX_TURNS[stageName] ?? config.maxTurns;
+}
+
 export interface CreateOptions {
   repoRoot: string;
   briefPath: string;
   model: string;
+  /** `--max-turns`: per-stage turn budget; `stageMaxTurns` still wins per stage. */
+  maxTurns?: number;
   interactive?: boolean;
   /** Forwarded to each stage's run (attended continue-on-exhaustion prompt). */
   onBudgetExhausted?: (stats: BudgetExhaustedStats) => Promise<number>;
@@ -378,6 +415,11 @@ async function diagnose(input: {
   transcriptDir: string;
   attempt: number;
   maxAttempts: number;
+  /** Structured cause of the failed attempt (issue #135), so budget exhaustion
+   *  is distinguishable from a bad edit without parsing prose. */
+  exitPath: ExitPath;
+  /** Budget already scheduled for the next attempt, when one was raised. */
+  nextAttemptMaxTurns?: number | undefined;
   /** Compatible-endpoint settings, so a `compat` run can diagnose itself. */
   compat?: CompatSettings | undefined;
 }): Promise<StageDiagnosis> {
@@ -395,6 +437,10 @@ async function diagnose(input: {
           excerpt,
           attempt: input.attempt,
           maxAttempts: input.maxAttempts,
+          exitPath: input.exitPath,
+          ...(input.nextAttemptMaxTurns !== undefined
+            ? { nextAttemptMaxTurns: input.nextAttemptMaxTurns }
+            : {}),
         }),
       input.timeoutMs,
       () => p.close?.(),
@@ -432,6 +478,7 @@ function resumeCommand(opts: CreateOptions): string {
   // Absolute --brief so the command resolves the same from any cwd; a relative
   // path would break when resumed from a different directory (F6).
   parts.push('create', '--brief', shellQuote(path.resolve(opts.briefPath)), '--model', shellQuote(opts.model));
+  if (opts.maxTurns !== undefined) parts.push('--max-turns', String(opts.maxTurns));
   if (opts.interactive) parts.push('--interactive');
   return parts.join(' ');
 }
@@ -692,11 +739,31 @@ export async function runCreate(opts: CreateOptions): Promise<{ ok: boolean; com
     // guidance prepended); on "abort", or once the retry budget is spent, it
     // stops and reports for a human — the loop keeps going by itself for the
     // recoverable cases without silently spinning on the dead-end ones.
-    const stageTurns = config.stageMaxTurns?.[stage.name];
+    // The budget this stage was originally granted. Each starved attempt gets
+    // half again as many turns as the one before (the same `budgetExtraTurns`
+    // increment the attended prompt offers), so three attempts on the default
+    // budget read 40 → 60 → 90 (issue #135, design D1).
+    let attemptTurns = resolveStageMaxTurns(stage.name, config, opts.maxTurns);
+    // True while every attempt so far has died of turn starvation, which is the
+    // one failure mode whose remedy is a bigger budget rather than another try.
+    let onlyBudgetExhaustion = true;
     const basePrompt = stage.prompt(brief);
     let guidance = '';
     let stageDone = false;
     let stageTranscriptDir = '';
+    /** Say what actually needs to change when turns, not the model, ran out. */
+    const logBudgetRemedy = (): void => {
+      if (!onlyBudgetExhaustion) return;
+      opts.log(
+        stageLine(
+          stage.name,
+          `every attempt ran out of turns (last budget ${attemptTurns}): this stage needs a larger budget, ` +
+            `not another attempt. Re-run with \`--max-turns <n>\` or set ` +
+            `"stageMaxTurns": {"${stage.name}": <n>} in .copperhead/config.json.`,
+          'err',
+        ),
+      );
+    };
     // Cost accumulates across all attempts of the stage, so a stage that took a
     // retry to complete shows its true total in the summary (5.2).
     const stageStart = Date.now();
@@ -730,7 +797,7 @@ export async function runCreate(opts: CreateOptions): Promise<{ ok: boolean; com
           : basePrompt,
         interactive: opts.interactive ?? false,
         allowDirty: true, // stages build on each other's uncommitted state within the pipeline
-        ...(stageTurns !== undefined ? { maxTurns: stageTurns } : {}),
+        maxTurns: attemptTurns,
         ...(opts.onBudgetExhausted ? { onBudgetExhausted: opts.onBudgetExhausted } : {}),
         log: opts.log,
         ...(opts.renderer ? { renderer: opts.renderer } : {}),
@@ -766,6 +833,9 @@ export async function runCreate(opts: CreateOptions): Promise<{ ok: boolean; com
         break;
       }
 
+      const starved = res.exitPath === 'turn-budget-exhausted';
+      if (!starved) onlyBudgetExhaustion = false;
+
       if (attempt > config.maxStageRetries) {
         opts.log(
           stageLine(
@@ -774,7 +844,23 @@ export async function runCreate(opts: CreateOptions): Promise<{ ok: boolean; com
             'err',
           ),
         );
+        logBudgetRemedy();
         break;
+      }
+
+      // Retrying turn starvation at the same budget is knowably futile: it walls
+      // at the same place and burns a rollback to rediscover it (issue #135).
+      // Deterministic arithmetic, not a supervisor verdict — the supervisor
+      // fails safe to "abort", which is the failure being fixed here.
+      const nextTurns = starved ? attemptTurns + budgetExtraTurns({ maxTurns: attemptTurns }) : attemptTurns;
+      if (starved) {
+        opts.log(
+          stageLine(
+            stage.name,
+            `the attempt ran out of turns; raising the next attempt's budget ${attemptTurns} → ${nextTurns}`,
+            'warn',
+          ),
+        );
       }
 
       opts.log(stageLine(stage.name, `${failure}; asking the model whether to retry…`, 'warn'));
@@ -788,6 +874,8 @@ export async function runCreate(opts: CreateOptions): Promise<{ ok: boolean; com
         transcriptDir: res.transcriptDir,
         attempt,
         maxAttempts: config.maxStageRetries + 1,
+        exitPath: res.exitPath,
+        ...(starved ? { nextAttemptMaxTurns: nextTurns } : {}),
       });
       // Fold the diagnosis call's own tokens into the stage cost (F6): it is a
       // real model call made on behalf of this stage, so the cost table should
@@ -803,8 +891,10 @@ export async function runCreate(opts: CreateOptions): Promise<{ ok: boolean; com
       );
       if (diagnosis.verdict === 'abort') {
         opts.log(stageLine(stage.name, 'recovery supervisor recommends stopping for a human.', 'err'));
+        logBudgetRemedy();
         break;
       }
+      attemptTurns = nextTurns;
       guidance = diagnosis.guidance ?? `The previous attempt failed: ${failure}. ${diagnosis.reason}`;
     }
 

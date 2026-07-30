@@ -97,6 +97,51 @@ describe('diagnoseStageFailure', () => {
     });
     expect(d.verdict).toBe('abort');
   });
+
+  // Issue #135: the supervisor used to see budget exhaustion only as prose, so
+  // it could not tell turn starvation from a bad edit, and it did not know the
+  // pipeline had already scheduled a bigger budget for the next attempt.
+  it('renders the exit path and the scheduled next budget as structured lines', async () => {
+    let seen: Msg[] = [];
+    const provider: Provider = {
+      name: 'fake',
+      async chat(m) {
+        seen = m;
+        return turn('{"verdict":"retry","reason":"more turns will do it"}');
+      },
+    };
+    await diagnoseStageFailure(provider, {
+      stageName: 'schematic',
+      stageGoal: 'build it',
+      failure: 'the run ended as "failure" (turn-budget-exhausted)',
+      excerpt: '',
+      attempt: 1,
+      maxAttempts: 3,
+      exitPath: 'turn-budget-exhausted',
+      nextAttemptMaxTurns: 60,
+    });
+    const user = seen.find((m) => m.role === 'user')?.content ?? '';
+    expect(user).toContain('exitPath: turn-budget-exhausted');
+    expect(user).toContain('larger turn budget of 60 turns');
+    expect(user).toContain('not a reason to abort');
+  });
+
+  it('omits both lines when the caller has no exit path or escalation to report', async () => {
+    let seen: Msg[] = [];
+    const provider: Provider = {
+      name: 'fake',
+      async chat(m) {
+        seen = m;
+        return turn('{"verdict":"abort","reason":"x"}');
+      },
+    };
+    await diagnoseStageFailure(provider, {
+      stageName: 's', stageGoal: 'g', failure: 'f', excerpt: '', attempt: 1, maxAttempts: 2,
+    });
+    const user = seen.find((m) => m.role === 'user')?.content ?? '';
+    expect(user).not.toContain('exitPath:');
+    expect(user).not.toContain('larger turn budget');
+  });
 });
 
 describe('CachingProvider', () => {

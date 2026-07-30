@@ -6,6 +6,7 @@
  */
 
 import path from 'node:path';
+import { createInterface } from 'node:readline/promises';
 import type { BudgetExhaustedStats } from '../agent/loop.js';
 
 /** Resolve `--repo` against the working directory; absolute paths pass through. */
@@ -39,4 +40,45 @@ export function budgetPromptText(stats: BudgetExhaustedStats): string {
     `${stats.filesTouched.length} file(s) touched, ${stats.openObligations} open obligation(s)). ` +
     `Continue with ${budgetExtraTurns(stats)} more turns?`
   );
+}
+
+/**
+ * Ask a yes/no question on a terminal. The output stream is a parameter because
+ * the question must still be visible when stdout is redirected or piped: the
+ * caller then hands us stderr, which `> file` and `| tee` leave alone.
+ */
+export async function confirmTty(
+  question: string,
+  output: NodeJS.WritableStream = process.stdout,
+  input: NodeJS.ReadableStream = process.stdin,
+): Promise<boolean> {
+  const rl = createInterface({ input, output });
+  const answer = await rl.question(`${question} [y/N] `);
+  rl.close();
+  return /^y(es)?$/i.test(answer.trim());
+}
+
+/** The streams `budgetContinuePrompt` reads the answer from and asks on. */
+export interface PromptIo {
+  stdin: NodeJS.ReadableStream & { isTTY?: boolean | undefined };
+  stdout: NodeJS.WritableStream & { isTTY?: boolean | undefined };
+  stderr: NodeJS.WritableStream;
+}
+
+/**
+ * Attended runs get a decision point instead of a rollback when the turn budget
+ * runs out (issue #15). Only stdin needs to be a terminal: that is where the
+ * answer comes from. Gating on stdout as well (as this did originally) silently
+ * removed the escape hatch from every `| tee run.log` run, which is exactly how
+ * a long create pipeline is usually watched (issue #135). When stdout is not a
+ * TTY the question is asked on stderr instead. No stdin TTY at all (CI) still
+ * means no prompt: fail-and-restore, unchanged.
+ */
+export function budgetContinuePrompt(
+  io: PromptIo = process,
+): ((stats: BudgetExhaustedStats) => Promise<number>) | undefined {
+  if (!io.stdin.isTTY) return undefined;
+  const output = io.stdout.isTTY ? io.stdout : io.stderr;
+  return async (stats) =>
+    (await confirmTty(budgetPromptText(stats), output, io.stdin)) ? budgetExtraTurns(stats) : 0;
 }

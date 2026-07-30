@@ -1,7 +1,6 @@
 #!/usr/bin/env node
 import { Command } from 'commander';
 import { createRequire } from 'node:module';
-import { createInterface } from 'node:readline/promises';
 import { loadConfig, resolveModel, type ModelSource } from './config.js';
 import { pickModel } from './util/select.js';
 import { runInit, InitError } from './memory/scaffold.js';
@@ -19,11 +18,11 @@ import {
   ExportError,
 } from './commands/export.js';
 import { DEFAULT_BOARDS, DEFAULT_SPARES } from './kicad/bom-export.js';
-import { runAgentLoop, type BudgetExhaustedStats } from './agent/loop.js';
+import { runAgentLoop } from './agent/loop.js';
 import { makeRenderer } from './agent/render.js';
 import { kicadCliVersion } from './kicad/cli.js';
 import { loadEnvFile } from './util/env.js';
-import { budgetExtraTurns, budgetPromptText, parseMaxTurns, repoOf } from './util/cli-args.js';
+import { budgetContinuePrompt, confirmTty, parseMaxTurns, repoOf } from './util/cli-args.js';
 
 // Read .env from the working directory before any command resolves a model or a
 // provider. Loaded here rather than per-command so `check` behaves identically,
@@ -38,23 +37,6 @@ loadEnvFile(process.cwd());
 const { version } = createRequire(import.meta.url)('../package.json') as { version: string };
 
 const program = new Command();
-
-async function confirmTty(question: string): Promise<boolean> {
-  const rl = createInterface({ input: process.stdin, output: process.stdout });
-  const answer = await rl.question(`${question} [y/N] `);
-  rl.close();
-  return /^y(es)?$/i.test(answer.trim());
-}
-
-/**
- * Attended runs get a decision point instead of a rollback when the turn
- * budget runs out (issue #15). Non-TTY (CI, pipes) keeps fail-and-restore.
- */
-function budgetContinuePrompt(): ((stats: BudgetExhaustedStats) => Promise<number>) | undefined {
-  if (!process.stdin.isTTY || !process.stdout.isTTY) return undefined;
-  return async (stats) =>
-    (await confirmTty(budgetPromptText(stats))) ? budgetExtraTurns(stats) : 0;
-}
 
 program
   .name('copperhead')
@@ -328,10 +310,14 @@ program
   .description('Mode A: full pipeline from a product brief to the output package')
   .requiredOption('--brief <file>', 'product brief (markdown)')
   .option('--model <model>', 'codex | cursor | gpt-5 | claude | claude-code | compat:<id> (or a provider-specific model id)')
+  .option('--max-turns <n>', 'turn budget per stage (a stageMaxTurns config entry still wins for that stage)')
   .option('--interactive', 're-enable the human gates (spec approval, pre-export)')
-  .action(async (opts: { brief: string; model?: string; interactive?: boolean }) => {
+  .action(async (opts: { brief: string; model?: string; maxTurns?: string; interactive?: boolean }) => {
     const repo = repoOf(program.opts());
     try {
+      // Parsed before anything else so a bad budget refuses to start rather than
+      // failing after kicad-cli detection and model resolution have run.
+      const maxTurns = opts.maxTurns ? parseMaxTurns(opts.maxTurns) : undefined;
       const kicadVer = await kicadCliVersion();
       const config = await loadConfig(repo);
       const { model, source } = resolveModel(opts.model, config);
@@ -340,6 +326,7 @@ program
         repoRoot: repo,
         briefPath: opts.brief,
         model,
+        ...(maxTurns !== undefined ? { maxTurns } : {}),
         interactive: opts.interactive ?? false,
         ...(continuePrompt ? { onBudgetExhausted: continuePrompt } : {}),
         log: (s) => console.log(s),

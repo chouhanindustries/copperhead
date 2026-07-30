@@ -255,7 +255,9 @@ copperhead demo [--tour] [--model …] [--dir <path>]
     `demo-runs/usb-c-breakout/` and run the create pipeline against the
     packaged USB-C power breakout brief (same as `npm run demo:simple`).
 
-copperhead create --brief brief.md   # Mode A: full pipeline (§2.5)
+copperhead create --brief brief.md [--max-turns N]   # Mode A: full pipeline (§2.5)
+    --max-turns is the per-stage turn budget; a stageMaxTurns entry in
+    config still wins for the stage it names (§5).
 copperhead init [--path hardware/]
     Detect .kicad_sch/.kicad_pcb, parse symbols/footprints/nets,
     generate docs/ skeleton pre-filled with the real BOM and pinout
@@ -384,7 +386,9 @@ interface Provider {
 }
 ```
 
-`budgets` is free-form; keys are surfaced verbatim into the system prompt so the agent treats them as hard constraints. `stageMaxTurns` is optional: per-stage turn budgets for the create pipeline, keyed by stage name; stages without an entry use `maxTurns`.
+`budgets` is free-form; keys are surfaced verbatim into the system prompt so the agent treats them as hard constraints. `stageMaxTurns` is optional: per-stage turn budgets for the create pipeline, keyed by stage name.
+
+A create stage's turn budget resolves in this order, highest first: `stageMaxTurns[stage]`, then `create --max-turns`, then the built-in per-stage defaults (`schematic: 100`, `layout-draft: 80`), then the global `maxTurns`. The flag sits under the per-stage config entry deliberately: a stage someone has tuned in config must not lose that tuning to a global flag.
 
 ---
 
@@ -492,6 +496,15 @@ Format: Given / When / Then. "Fixture" = the open-telegraph repo (or the tiny te
 - **AC-15.25 / AC-15.26 (drift bootstrap)** Zero-symbol schematics produce no drift mismatches; `check` surfaces a non-failing warning when an empty schematic coexists with a populated BOM.md.
 - **AC-15.27 (consecutive stalls)** Only consecutive tool-less turns count toward the stopped-without-finishing failure; the counter resets on any tool call.
 - **AC-15.28 (load-failure ERC/DRC)** A missing ERC/DRC report raises an error quoting kicad-cli's own output and naming the likely load failure.
+
+### AC-16 · Stage turn-budget escalation (issue #135, change: escalate-stage-turn-budget)
+
+- **AC-16.1 (escalate on starvation only)** A create-stage attempt that exits `turn-budget-exhausted` gives the next attempt `previous + ceil(previous / 2)` turns, so three attempts on the default budget run at 40, 60 and 90; the raise is logged on its own stage line.
+- **AC-16.2 (every other path is unchanged)** An attempt that exits any other way (including a successful run whose completion contract is unmet) retries at the same budget as the one before it.
+- **AC-16.3 (structured cause)** The recovery supervisor's prompt carries `exitPath: <value>` as its own line and, when an escalation is already scheduled, the budget the next attempt will receive plus a statement that the budget alone is not a reason to abort. The verdict set stays `retry`/`abort`; escalation is never a model decision.
+- **AC-16.4 (give-up names the remedy)** When every attempt of a stage exited `turn-budget-exhausted`, the stage's final line says the stage needs a larger budget and names `--max-turns` and `stageMaxTurns`.
+- **AC-16.5 (budget precedence)** A stage's budget resolves as `stageMaxTurns[stage]` > `create --max-turns` > built-in per-stage default (`schematic: 100`, `layout-draft: 80`) > global `maxTurns`; `--max-turns` refuses anything that is not a positive integer, before any provider call.
+- **AC-16.6 (prompt survives a piped stdout)** The attended budget-exhaustion prompt fires whenever stdin is a TTY, asking on stderr when stdout is not, so `| tee run.log` keeps the escape hatch; with no stdin TTY the run fails and restores as before.
 ### AC-8 · Run observability (change: record-run-metadata)
 
 - **AC-8.1 (metadata completeness)** The `run-start` event of any agent-loop run contains: copperhead version + install path, `kicad-cli`/Node/platform versions, model id + provider + selection source (`flag`/`env`/`config`/`openai-key`/`anthropic-key`), run id + ISO timestamp + command, interactive flag, the resolved config snapshot (`schematic`, `board`, `docs`, effective `maxTurns`, `maxRepairCycles`, `budgets`), git commit/branch/dirty + uncommitted count, pre-commit-hook presence, and open-constraint + prior-run counts. The pre-existing `request`/`model`/`provider` fields keep their names. Collection is LLM-free and network-free.
