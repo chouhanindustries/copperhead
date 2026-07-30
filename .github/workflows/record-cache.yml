@@ -24,7 +24,7 @@ jobs:
         env:
           OPENAI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           COPPERHEAD_BASE_URL: "https://generativelanguage.googleapis.com/v1beta/openai/"
-        run: node dist/cli.js create --brief examples/medium/esp32-soil-sensor.md --model gemini-3.5-flash-lite
+        run: node dist/cli.js create --brief examples/medium/esp32-soil-sensor.md --model compat:gemini-3.5-flash-lite
       - name: Commit Cache
         run: |
           git config --global user.name "GitHub Actions"
