@@ -82,26 +82,32 @@ describe('create pipeline: e2e stage contracts (bounty AC)', () => {
     }
   });
 
-  it('outputs isComplete: outputs/ directory exists', async () => {
+  it('outputs isComplete: outputs/ directory exists and contains files', async () => {
     const { repo, cleanup } = await tempFixtureRepo();
     try {
       const s = STAGES[5];
       expect(s.name).toBe('outputs');
       expect(await s.isComplete(repo, 'docs')).toBe(false);
-      await mkdir(path.join(repo, 'outputs'), { recursive: true });
+      const outDir = path.join(repo, 'outputs');
+      await mkdir(outDir, { recursive: true });
+      expect(await s.isComplete(repo, 'docs')).toBe(false); // empty dir is not complete
+      await writeFile(path.join(outDir, 'bom.csv'), 'ref,mpn,qty\n', 'utf8');
       expect(await s.isComplete(repo, 'docs')).toBe(true);
     } finally {
       await cleanup();
     }
   });
 
-  it('firmware isComplete: firmware/ directory exists', async () => {
+  it('firmware isComplete: firmware/ directory exists and contains files', async () => {
     const { repo, cleanup } = await tempFixtureRepo();
     try {
       const s = STAGES[6];
       expect(s.name).toBe('firmware');
       expect(await s.isComplete(repo, 'docs')).toBe(false);
-      await mkdir(path.join(repo, 'firmware'), { recursive: true });
+      const fwDir = path.join(repo, 'firmware');
+      await mkdir(fwDir, { recursive: true });
+      expect(await s.isComplete(repo, 'docs')).toBe(false); // empty dir is not complete
+      await writeFile(path.join(fwDir, 'main.c'), '// firmware\n', 'utf8');
       expect(await s.isComplete(repo, 'docs')).toBe(true);
     } finally {
       await cleanup();

@@ -1,6 +1,6 @@
 import path from 'node:path';
 import { existsSync } from 'node:fs';
-import { readFile, mkdir, writeFile } from 'node:fs/promises';
+import { readFile, mkdir, writeFile, readdir } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { loadConfig, resolveCompatSettings } from '../config.js';
 import { bootstrapKicadProject } from '../kicad/bootstrap.js';
@@ -122,13 +122,31 @@ export const STAGES: Stage[] = [
   },
   {
     name: 'outputs',
-    isComplete: (root) => existsSync(path.join(root, 'outputs')),
+    isComplete: async (root) => {
+      const p = path.join(root, 'outputs');
+      if (!existsSync(p)) return false;
+      try {
+        const files = await readdir(p);
+        return files.length > 0;
+      } catch {
+        return false;
+      }
+    },
     prompt: () =>
       'Stage 6: outputs package. Export into outputs/: gerbers+drill (JLC profile), DXF and STEP outline, SVG renders (export_svg), and an ordering BOM.csv generated from BOM.md (refdes, MPN, qty). Every export must succeed.',
   },
   {
     name: 'firmware',
-    isComplete: (root) => existsSync(path.join(root, 'firmware')),
+    isComplete: async (root) => {
+      const p = path.join(root, 'firmware');
+      if (!existsSync(p)) return false;
+      try {
+        const files = await readdir(p, { recursive: true });
+        return files.length > 0;
+      } catch {
+        return false;
+      }
+    },
     prompt: () =>
       'Stage 7: firmware scaffold. Generate firmware/ for the chosen MCU HAL: pins.h generated from PINOUT.md (single source of truth), driver stubs, and one working happy path. If the vendor toolchain is available, the build must pass; if not, note "not compiled here" explicitly in DEVPLAN.md.',
   },
