@@ -355,6 +355,39 @@ describe('promptWithSlashHints', () => {
     }
   });
 
+  it('does not fire the Escape timer on a paste-end marker split at its ESC byte', async () => {
+    vi.useFakeTimers();
+    try {
+      const input = new PassThrough();
+      (input as unknown as { isTTY: boolean }).isTTY = true;
+      const reader = new KeyReader(input as unknown as NodeJS.ReadStream, 40);
+      const keys: string[] = [];
+      let stop = false;
+      void (async () => {
+        while (!stop) {
+          const k = await reader.next();
+          if (k === null) break;
+          keys.push(k);
+        }
+      })();
+
+      input.write('\x1b[200~hello');
+      await vi.advanceTimersByTimeAsync(1);
+      input.write('\x1b');
+      await vi.advanceTimersByTimeAsync(50);
+      input.write('[201~');
+      input.write('\r');
+      input.write('\x03');
+      await vi.advanceTimersByTimeAsync(50);
+      stop = true;
+
+      expect(keys.join('')).toBe('hello\r\x03');
+      reader.close();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('treats a bracketed paste as literal text, newlines and all', () => {
     const pending = { buf: '' };
     const keys: string[] = [];
@@ -364,11 +397,29 @@ describe('promptWithSlashHints', () => {
     expect(keys).not.toContain('\r');
   });
 
+  it('holds back a paste-end marker split across reads', () => {
+    const pending = { buf: '' };
+    const keys: string[] = [];
+    pushKeys(pending, '\x1b[200~abc', (k) => keys.push(k));
+    expect(keys.join('')).toBe('abc');
+    pushKeys(pending, '\x1b[2', (k) => keys.push(k));
+    expect(keys.join('')).toBe('abc');
+    pushKeys(pending, '01~z', (k) => keys.push(k));
+    expect(keys.join('')).toBe('abcz');
+  });
+
   it('resumes normal key handling after the paste closes', () => {
     const pending = { buf: '' };
     const keys: string[] = [];
     pushKeys(pending, '\x1b[200~hi\x1b[201~\x1b[B\r', (k) => keys.push(k));
     expect(keys).toEqual(['h', 'i', '\x1b[B', '\r']);
+  });
+
+  it('ignores a stray paste-end marker with no paste open', () => {
+    const pending = { buf: '' };
+    const keys: string[] = [];
+    pushKeys(pending, 'a\x1b[201~b', (k) => keys.push(k));
+    expect(keys).toEqual(['a', 'b']);
   });
 
   it('a pasted multi-line request is submitted whole, not at its first newline', async () => {
@@ -436,6 +487,7 @@ describe('session log file', () => {
       expect(text).toContain('do the thing');
       expect(text).toContain('[REDACTED]');
       expect(text).not.toContain('sk-SECRET_KEY_123');
+      expect(text).not.toContain('\x1b[');
     } finally {
       await rm(repo, { recursive: true, force: true });
     }
@@ -480,6 +532,7 @@ describe('session log file', () => {
       for (const s of secrets) expect(text, s).not.toContain(s);
       expect(text).toContain('[REDACTED]');
       expect(text).toContain('trailing');
+      expect(text).not.toContain('\x1b[');
     } finally {
       await rm(repo, { recursive: true, force: true });
     }

@@ -226,11 +226,9 @@ describe('git guard (AC-3.8, AC-3.6)', () => {
 
       await restore(repo, snap);
 
-      expect((await readFile(sch, 'utf8')).replace(/\r\n/g, '\n')).toBe(
-        tracked.replace('KEY_DAH', 'KEY_EDITED').replace(/\r\n/g, '\n')
-      );
-      expect((await readFile(path.join(repo, 'hand-written-notes.md'), 'utf8')).replace(/\r\n/g, '\n')).toBe('do not lose me\n');
-      expect((await readFile(path.join(repo, 'docs', 'new-doc.md'), 'utf8')).replace(/\r\n/g, '\n')).toBe('nested and untracked\n');
+      expect(await readFile(sch, 'utf8')).toBe(tracked.replace('KEY_DAH', 'KEY_EDITED'));
+      expect(await readFile(path.join(repo, 'hand-written-notes.md'), 'utf8')).toBe('do not lose me\n');
+      expect(await readFile(path.join(repo, 'docs', 'new-doc.md'), 'utf8')).toBe('nested and untracked\n');
       expect(existsSync(path.join(repo, 'agent-scratch.txt'))).toBe(false);
     } finally {
       await cleanup();
@@ -255,9 +253,7 @@ describe('git guard (AC-3.8, AC-3.6)', () => {
       expect(warn.mock.calls.map((c) => String(c[0]))).toContainEqual(
         expect.stringContaining('could not restore untracked files after rollback'),
       );
-      expect((await readFile(sch, 'utf8')).replace(/\r\n/g, '\n')).toBe(
-        tracked.replace('KEY_DAH', 'KEY_EDITED').replace(/\r\n/g, '\n')
-      );
+      expect(await readFile(sch, 'utf8')).toBe(tracked.replace('KEY_DAH', 'KEY_EDITED'));
       expect(existsSync(path.join(repo, 'hand-written-notes.md'))).toBe(false);
     } finally {
       warn.mockRestore();
@@ -265,28 +261,26 @@ describe('git guard (AC-3.8, AC-3.6)', () => {
     }
   });
 
-  if (process.platform !== 'win32') {
-    it('refuses the run, naming the file, when an untracked path cannot be read', async () => {
-      const { repo, cleanup } = await tempFixtureRepo();
-      try {
-        await writeFile(path.join(repo, 'tracked-change.txt'), 'x', 'utf8');
-        const locked = path.join(repo, 'unreadable.bin');
-        await writeFile(locked, 'secret\n', 'utf8');
-        await chmod(locked, 0o000);
+  it.skipIf(process.platform === 'win32')('refuses the run, naming the file, when an untracked path cannot be read', async () => {
+    const { repo, cleanup } = await tempFixtureRepo();
+    try {
+      await writeFile(path.join(repo, 'tracked-change.txt'), 'x', 'utf8');
+      const locked = path.join(repo, 'unreadable.bin');
+      await writeFile(locked, 'secret\n', 'utf8');
+      await chmod(locked, 0o000);
 
-        await expect(snapshot(repo)).rejects.toThrow(PreflightError);
-        await expect(snapshot(repo)).rejects.toThrow(/unreadable\.bin/);
-        await expect(snapshot(repo)).rejects.toThrow(/--allow-dirty/);
+      await expect(snapshot(repo)).rejects.toThrow(PreflightError);
+      await expect(snapshot(repo)).rejects.toThrow(/unreadable\.bin/);
+      await expect(snapshot(repo)).rejects.toThrow(/--allow-dirty/);
 
-        await chmod(locked, 0o644);
-        const snap = await snapshot(repo);
-        const tree = await execa('git', ['ls-tree', '-r', '--name-only', snap.untracked!], { cwd: repo });
-        expect(tree.stdout.split('\n')).toContain('unreadable.bin');
-      } finally {
-        await cleanup();
-      }
-    });
-  }
+      await chmod(locked, 0o644);
+      const snap = await snapshot(repo);
+      const tree = await execa('git', ['ls-tree', '-r', '--name-only', snap.untracked!], { cwd: repo });
+      expect(tree.stdout.split('\n')).toContain('unreadable.bin');
+    } finally {
+      await cleanup();
+    }
+  });
 
   it('ignores an untracked file that vanishes between listing and snapshot', async () => {
     const { repo, cleanup } = await tempFixtureRepo();
@@ -338,7 +332,7 @@ describe('git guard (AC-3.8, AC-3.6)', () => {
       expect(await isDirty(repo)).toBe(true);
       await restore(repo, snap);
       expect(await isDirty(repo)).toBe(false);
-      expect((await readFile(sch, 'utf8')).replace(/\r\n/g, '\n')).toBe(before.replace(/\r\n/g, '\n'));
+      expect(await readFile(sch, 'utf8')).toBe(before);
     } finally {
       await cleanup();
     }
@@ -355,7 +349,7 @@ describe('git guard (AC-3.8, AC-3.6)', () => {
 
       await restore(repo, snap);
 
-      expect((await readFile(runFile, 'utf8')).replace(/\r\n/g, '\n')).toBe('{"type":"run-start"}\n');
+      expect(await readFile(runFile, 'utf8')).toBe('{"type":"run-start"}\n');
     } finally {
       await cleanup();
     }
@@ -372,7 +366,7 @@ describe('git guard (AC-3.8, AC-3.6)', () => {
 
       await expect(restore(repo, { ...snap, stash: 'not-a-stash' })).rejects.toThrow();
 
-      expect((await readFile(runFile, 'utf8')).replace(/\r\n/g, '\n')).toBe('{"type":"run-start"}\n');
+      expect(await readFile(runFile, 'utf8')).toBe('{"type":"run-start"}\n');
     } finally {
       await cleanup();
     }
@@ -390,7 +384,7 @@ describe('git guard (AC-3.8, AC-3.6)', () => {
 
       await expect(restore(repo, snap)).resolves.toBeUndefined();
 
-      expect((await readFile(sch, 'utf8')).replace(/\r\n/g, '\n')).toBe(before.replace(/\r\n/g, '\n'));
+      expect(await readFile(sch, 'utf8')).toBe(before);
     } finally {
       process.env.TMPDIR = originalTmpDir;
       await cleanup();

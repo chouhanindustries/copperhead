@@ -181,13 +181,14 @@ describe('fab export (create stage 6 tooling)', () => {
         path.join(repo, 'hardware', 'open-key.kicad_sch'),
         out,
       );
-      for (const artifact of ['gerbers', 'drill', 'outline.dxf', 'board.svg', 'schematic.svg']) {
-        const found = artifact === 'gerbers'
-          ? existsSync(path.join(out, 'gerbers')) || res.produced.some((prod) => prod.includes('gerber'))
-          : res.produced.some((prod) => prod.includes(artifact) || artifact.includes(prod));
-        expect(found, artifact).toBe(true);
-      }
+
+      // Directory existence is the contract for gerbers
       expect(existsSync(path.join(out, 'gerbers'))).toBe(true);
+
+      // Strict exact-match assertions for the file artifacts
+      for (const artifact of ['drill', 'outline.dxf', 'board.svg', 'schematic.svg']) {
+        expect(res.produced).toContain(artifact);
+      }
     } finally {
       await cleanup();
     }

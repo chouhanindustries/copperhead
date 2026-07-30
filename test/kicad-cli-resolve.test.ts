@@ -78,11 +78,7 @@ describe('kicad-cli binary resolution', () => {
     }
   });
 
-  it('falls back to an app-bundle path when PATH has no kicad-cli', async () => {
-    if (process.platform === 'win32') {
-      expect(true).toBe(true);
-      return;
-    }
+  it.skipIf(process.platform === 'win32')('falls back to an app-bundle path when PATH has no kicad-cli', async () => {
     delete process.env.COPPERHEAD_KICAD_CLI;
     const bundle = path.join(dir, 'KiCad.app', 'Contents', 'MacOS', 'kicad-cli');
     await mkdir(path.dirname(bundle), { recursive: true });
@@ -99,38 +95,35 @@ describe('kicad-cli binary resolution', () => {
     }
   });
 
-  if (process.platform !== 'win32') {
-    it('refuses when an override that existed at resolve time disappears mid-session', async () => {
-      const onPath = path.join(dir, 'path-bin');
-      await mkdir(onPath, { recursive: true });
-      const pathBinary = path.join(onPath, 'kicad-cli');
-      await writeFile(pathBinary, '#!/bin/sh\necho "8.0.4"\n', 'utf8');
-      await chmod(pathBinary, 0o755);
+  it.skipIf(process.platform === 'win32')('refuses when an override that existed at resolve time disappears mid-session', async () => {
+    const onPath = path.join(dir, 'path-bin');
+    await mkdir(onPath, { recursive: true });
+    const pathBinary = path.join(onPath, 'kicad-cli');
+    await writeFile(pathBinary, '#!/bin/sh\necho "8.0.4"\n', 'utf8');
+    await chmod(pathBinary, 0o755);
 
-      const override = path.join(dir, 'custom-kicad');
-      await writeFile(override, '#!/bin/sh\necho "9.9.9"\n', 'utf8');
-      await chmod(override, 0o755);
+    const override = path.join(dir, 'custom-kicad');
+    await writeFile(override, '#!/bin/sh\necho "9.9.9"\n', 'utf8');
+    await chmod(override, 0o755);
 
-      setKicadFallbackBinaries([]);
-      const savedPath = process.env.PATH;
-      process.env.PATH = onPath;
-      try {
-        process.env.COPPERHEAD_KICAD_CLI = override;
-        expect(resolveKicadCli()).toBe(override);
-        
-        await rm(override, { force: true });
-        resetKicadCliCache();
+    setKicadFallbackBinaries([]);
+    const savedPath = process.env.PATH;
+    process.env.PATH = onPath;
+    try {
+      process.env.COPPERHEAD_KICAD_CLI = override;
+      expect(resolveKicadCli()).toBe(override);
+      
+      await rm(override, { force: true });
 
-        await expect(kicadCliVersion()).rejects.toBeInstanceOf(KicadCliMissingError);
+      await expect(kicadCliVersion()).rejects.toBeInstanceOf(KicadCliBadOverrideError);
 
-        delete process.env.COPPERHEAD_KICAD_CLI;
-        resetKicadCliCache();
-        expect(await kicadCliVersion()).toBe('8.0.4');
-      } finally {
-        process.env.PATH = savedPath;
-      }
-    });
-  }
+      delete process.env.COPPERHEAD_KICAD_CLI;
+      resetKicadCliCache();
+      expect(await kicadCliVersion()).toBe('8.0.4');
+    } finally {
+      process.env.PATH = savedPath;
+    }
+  });
 
   it('caches the resolved binary until the cache is reset', async () => {
     delete process.env.COPPERHEAD_KICAD_CLI;
