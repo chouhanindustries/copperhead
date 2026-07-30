@@ -27,6 +27,11 @@ jobs:
           sudo apt-get install --yes --no-install-recommends kicad
           kicad-cli --version
 
+      - name: Install OpenSpec
+        run: |
+          npm install --global @fission-ai/openspec
+          openspec --version
+              
       - run: npm ci
       - run: npm run lint:md
       - run: npm run typecheck

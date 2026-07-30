@@ -136,6 +136,7 @@ Resolution order is **pin**, then **refdes**, then **net**. Matching is case-ins
 | --- | --- |
 | `0` | Target found and explained. |
 | `1` | Target not found or the command could not be completed. |
+
 ## `copperhead doctor`
 
 ```bash

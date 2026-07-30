@@ -58,7 +58,7 @@ export function normalizeReport(raw: unknown, source: 'erc' | 'drc'): CheckRepor
   };
   const violations: Violation[] = [];
 
- for (const sheet of r.sheets ?? []) {
+  for (const sheet of r.sheets ?? []) {
     for (const v of sheet.violations ?? [])
       violations.push(normViolation(v, sheet.path));
   }
