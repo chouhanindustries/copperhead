@@ -44,8 +44,9 @@ describe('copperhead explain (minimal v1)', () => {
 
     try {
       // formatted output
-      const formatted = await execa('node', [
-        'dist/cli.js',
+      const formatted = await execa('npx', [
+        'tsx',
+        'src/cli.ts',
         '--repo',
         repo,
         'explain',
@@ -55,8 +56,9 @@ describe('copperhead explain (minimal v1)', () => {
       expect(formatted.stdout).toContain('Net GND:');
 
       // json output
-      const json = await execa('node', [
-        'dist/cli.js',
+      const json = await execa('npx', [
+        'tsx',
+        'src/cli.ts',
         '--repo',
         repo,
         'explain',
@@ -70,9 +72,10 @@ describe('copperhead explain (minimal v1)', () => {
 
       // ExplainError -> exit code 1
       const failure = await execa(
-        'node',
+        'npx',
         [
-          'dist/cli.js',
+          'tsx',
+          'src/cli.ts',
           '--repo',
           repo,
           'explain',
