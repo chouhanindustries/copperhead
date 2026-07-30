@@ -703,10 +703,11 @@ export async function runCreate(opts: CreateOptions): Promise<{ ok: boolean; com
     // Cost accumulates across all attempts of the stage, so a stage that took a
     // retry to complete shows its true total in the summary (5.2).
     const stageStart = Date.now();
-    const cost: StageCost = { name: stage.name, resumed: false, wallMs: 0, turns: 0, tokensIn: 0, tokensOut: 0, cacheHits: 0, status: 'running' };
+    const cost: StageCost = { name: stage.name, resumed: false, wallMs: 0, turns: 0, tokensIn: 0, tokensOut: 0, cacheHits: 0 };
     stageCosts.push(cost);
-    await writeRunReport(opts, stageCosts);
     for (let attempt = 1; ; attempt++) {
+      cost.status = 'running';
+      await writeRunReport(opts, stageCosts);
       // Re-scaffold before every attempt, not just once per stage. A previous
       // attempt that failed at the commit gate rolls the tree back
       // (restore(): `git reset --hard` + `git clean -fd`), which deletes the
@@ -828,6 +829,9 @@ export async function runCreate(opts: CreateOptions): Promise<{ ok: boolean; com
     }
     completed.push(stage.name);
     
+    await writeRunReport(opts, stageCosts);
+    await renderStageArtifacts(opts, stage.name, stageTranscriptDir);
+
     // The successful runAgentLoop created a commit. Amend it to include the run artifacts.
     try {
       if (stageTranscriptDir) {
@@ -838,7 +842,6 @@ export async function runCreate(opts: CreateOptions): Promise<{ ok: boolean; com
       opts.log(`warning: could not amend stage commit with run artifacts (${(err as Error).message})`);
     }
 
-    await renderStageArtifacts(opts, stage.name, stageTranscriptDir);
     await emitJlcpcbAfterOutputs(stage.name, opts);
     logCumulative(opts, stageCosts);
   }

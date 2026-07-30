@@ -1,20 +1,10 @@
-import { mkdtemp, rm, utimes } from 'node:fs/promises';
+import { randomUUID } from 'node:crypto';
+import { mkdtemp, rm, utimes, writeFile, unlink } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { execa } from 'execa';
 import type { ChatOpts, Msg, Provider, ToolSchema, Turn } from '../types.js';
 import { parseToolCalls, renderConversation, renderDelta, renderToolProtocol } from './tool-protocol.js';
-
-/**
- * Saved-login provider: drives the Grok Agent CLI (`agent` / `grok-agent`) with
- * `agent login` authentication. Reasoning-only: plan mode, sandbox, isolated
- * workspace, JSON tool protocol (see `add-grok-cli-provider`).
- *
- * Session resume is opt-in and mutually exclusive with the response cache (same
- * rule as claude-code): the cache can replay turns a resumed CLI session never
- * saw, which desyncs history. `makeProvider` enables resume only when the cache
- * is off.
- */
 
 export interface GrokRunArgs {
   prompt: string;
@@ -67,7 +57,7 @@ export class GrokProvider implements Provider {
      * the cache is off.
      */
     private readonly sessionResume = false,
-  ) {}
+  ) { }
 
   async chat(messages: Msg[], tools: ToolSchema[], opts: ChatOpts = {}): Promise<Turn> {
     const system = messages
@@ -141,12 +131,12 @@ export class GrokProvider implements Provider {
     if (!this.cwdPromise) this.cwdPromise = mkdtemp(path.join(os.tmpdir(), 'copperhead-grok-'));
     const cwd = await this.cwdPromise;
     const now = new Date();
-    await utimes(cwd, now, now).catch(() => {});
+    await utimes(cwd, now, now).catch(() => { });
     return cwd;
   }
 }
 
-/** Minimal env passed to the Grok CLI subprocess (saved login via `agent login`). */
+/** Minimal env passed to the Grok CLI subprocess (saved login via `grok login`). */
 const GROK_SUBPROCESS_ENV_KEYS = [
   'PATH',
   'HOME',
@@ -185,11 +175,12 @@ export function subprocessEnv(): NodeJS.ProcessEnv {
   return env;
 }
 
-/** Parse `--print --output-format json` stdout into assistant text and session id. */
+
 export function parseGrokStdout(stdout: string): GrokRunResult {
   const trimmed = stdout.trim();
   let text = '';
   let sessionId: string | undefined;
+  let usage = { inputTokens: 0, outputTokens: 0 };
   let sawResult = false;
 
   // Prefer a single pretty-printed JSON object (whole buffer) before NDJSON lines.
@@ -201,7 +192,7 @@ export function parseGrokStdout(stdout: string): GrokRunResult {
         return {
           text: extracted.text,
           sessionId: extracted.sessionId,
-          usage: { inputTokens: 0, outputTokens: 0 },
+          usage: extracted.usage ?? usage,
         };
       }
     } catch (err) {
@@ -226,6 +217,9 @@ export function parseGrokStdout(stdout: string): GrokRunResult {
     if (extracted) {
       text = extracted.text;
       sessionId = extracted.sessionId ?? sessionId;
+      if (extracted.usage) {
+        usage = extracted.usage;
+      }
       sawResult = true;
     }
   }
@@ -261,8 +255,24 @@ export function parseGrokStdout(stdout: string): GrokRunResult {
 
 function extractResultFields(
   obj: Record<string, unknown>,
-): { text: string; sessionId?: string } | null {
+): { text: string; sessionId?: string; usage?: { inputTokens: number; outputTokens: number } } | null {
   assertNoNativeMutation(obj);
+
+  if (typeof obj.text === 'string') {
+    let inputTokens = 0;
+    let outputTokens = 0;
+    if (obj.usage && typeof obj.usage === 'object') {
+      const u = obj.usage as Record<string, unknown>;
+      inputTokens = typeof u.prompt_tokens === 'number' ? u.prompt_tokens : (typeof u.inputTokens === 'number' ? u.inputTokens : 0);
+      outputTokens = typeof u.completion_tokens === 'number' ? u.completion_tokens : (typeof u.outputTokens === 'number' ? u.outputTokens : 0);
+    }
+    return {
+      text: obj.text,
+      ...(typeof obj.sessionId === 'string' ? { sessionId: obj.sessionId } : {}),
+      usage: { inputTokens, outputTokens },
+    };
+  }
+
   const type = typeof obj.type === 'string' ? obj.type.toLowerCase() : '';
   if (type === 'result' || typeof obj.result === 'string') {
     if (obj.is_error === true) {
@@ -302,15 +312,14 @@ function assertNoNativeMutation(obj: Record<string, unknown>): void {
   }
 }
 
-/** Default subprocess runner: invokes `agent` (or `COPPERHEAD_GROK_PATH`) in plan mode. */
+/** Default subprocess runner: invokes `grok` (or `COPPERHEAD_GROK_PATH`) in plan mode. */
 export async function defaultGrokRun(args: GrokRunArgs): Promise<GrokRunResult> {
   const bin = process.env.COPPERHEAD_GROK_PATH || 'grok';
   const fullPrompt = [args.systemPrompt, args.prompt].filter(Boolean).join('\n\n---\n\n');
-  
+
   // Create a temporary file for the prompt to avoid stdin/argv limits.
-  const promptFile = path.join(os.tmpdir(), `copperhead-grok-prompt-${Date.now()}.txt`);
-  const fs = await import('node:fs/promises');
-  await fs.writeFile(promptFile, fullPrompt);
+  const promptFile = path.join(os.tmpdir(), `copperhead-grok-prompt-${randomUUID()}.txt`);
+  await writeFile(promptFile, fullPrompt);
 
   const cmdArgs = [
     '--output-format',
@@ -335,7 +344,7 @@ export async function defaultGrokRun(args: GrokRunArgs): Promise<GrokRunResult> 
     });
     stdout = res.stdout;
   } finally {
-    await fs.unlink(promptFile).catch(() => {});
+    await unlink(promptFile).catch(() => { });
   }
   return parseGrokStdout(stdout);
 }
@@ -353,7 +362,7 @@ function isAuthError(err: unknown): boolean {
 
 function authHint(detail: string): string {
   return (
-    'grok is not authenticated: run `agent login` and verify with `agent status`. ' +
+    'grok is not authenticated: run `grok login` and verify with `grok status`. ' +
     `Set COPPERHEAD_GROK_PATH if the CLI is not on PATH (original error: ${detail})`
   );
 }

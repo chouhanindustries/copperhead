@@ -13,7 +13,8 @@ export type ExitPath =
   | 'commit-failed'
   | 'provider-error'
   | 'session-limit'
-  | 'stalled';
+  | 'stalled'
+  | 'running';
 
 /** Post-run addenda recorded at every terminal branch (AC-8.5). */
 export interface RunStats {

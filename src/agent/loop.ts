@@ -28,8 +28,8 @@ import { existsSync } from 'node:fs';
 import { OpenAIProvider } from './providers/openai.js';
 import { AnthropicProvider } from './providers/anthropic.js';
 import { CodexProvider } from './providers/codex.js';
-import { ClaudeCodeProvider } from './providers/claude-code.js';
 import { GrokProvider } from './providers/grok.js';
+import { ClaudeCodeProvider } from './providers/claude-code.js';
 import { CursorProvider } from './providers/cursor.js';
 import { openSynapMemory, type RunRecord, type SynapMemory } from '../memory/synap.js';
 
@@ -139,7 +139,9 @@ export async function makeProvider(
   }
   if (model === 'grok' || model.startsWith('grok:')) {
     const grokModel = model.startsWith('grok:') ? model.slice('grok:'.length) : undefined;
-    if (grokModel === '') throw new Error('grok model override cannot be empty; use "grok" or "grok:<model-id>"');
+    if (grokModel === '') {
+      throw new Error('grok model override cannot be empty; use "grok" or "grok:<model-id>"');
+    }
     return new GrokProvider(grokModel, undefined, sessionResume);
   }
   // Match claude-code before the `claude*` prefix: both `claude-code` and
@@ -387,7 +389,7 @@ async function runWithMemory(
   });
 
   const flushMetrics = async (exitPath?: ExitPath): Promise<void> => {
-    const currentStats = stats(exitPath ?? 'stalled');
+    const currentStats = stats(exitPath ?? 'running');
     const p = path.join(transcript.dir, 'metrics.json');
     const tmp = `${p}.tmp`;
     try {
@@ -455,12 +457,16 @@ async function runWithMemory(
         `failed work preserved: git stash entry "copperhead failed run ${ctx.runId}" (${preserved.slice(0, 10)}); recover with \`git stash apply\`, discard with \`git stash drop\``,
       );
     }
-    try {
-      await execa('git', ['add', '-f', transcript.dir], { cwd: repoRoot });
-      await commitAll(repoRoot, `copperhead: partial run data ${ctx.runId}`);
-      log(`committed partial run data for failed run`);
-    } catch (err) {
-      log(`warning: could not commit partial run data (${(err as Error).message})`);
+    if (!restoreError) {
+      try {
+        await execa('git', ['add', '-f', transcript.dir], { cwd: repoRoot });
+        await execa('git', ['commit', '-m', `copperhead: partial run data ${ctx.runId}`, '--', transcript.dir], { cwd: repoRoot });
+        log(`committed partial run data for failed run`);
+      } catch (err) {
+        log(`warning: could not commit partial run data (${(err as Error).message})`);
+      }
+    } else {
+      log(`skipping partial run data commit because rollback failed and repository state is unverified`);
     }
     log(`transcript: ${transcript.jsonlPath}`);
     log(`summary: ${summaryPath}`);
@@ -640,12 +646,12 @@ async function runWithMemory(
       tokensOut: res.usage.outputTokens,
       cacheRead: 0,
       cacheWrite: 0,
-      cacheHit: (res as any).cacheHit ?? false,
+      cacheHit: res.cacheHit ?? false,
       latencyMs: Date.now() - turnStartMs,
       startedAt: turnStartAtIso,
       finishedAt: callFinishedAt,
-      stopReason: (res as any).stopReason ?? 'unknown',
-      toolCalls: res.toolCalls.map((c: any) => c.name),
+      stopReason: res.stopReason ?? 'unknown',
+      toolCalls: res.toolCalls.map((c) => c.name),
       error: null
     });
     await flushMetrics();
