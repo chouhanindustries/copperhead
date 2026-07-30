@@ -256,9 +256,13 @@ vi.mock('../src/kicad/cli.js', () => ({
   resolveKicadCli: vi.fn(() => 'kicad-cli'),
 }));
 
-vi.mock('../src/kicad/sexp.js', async (importOriginal) => ({
-  ...(await importOriginal<object>()),
-}));
+vi.mock('../src/kicad/sexp.js', async (importOriginal) => {
+  const original = await importOriginal<typeof import('../src/kicad/sexp.js')>();
+  return {
+    ...original,
+    listSymbols: vi.fn(original.listSymbols),
+  };
+});
 
 vi.mock('../src/memory/drift.js', async (importOriginal) => ({
   ...(await importOriginal<object>()),
@@ -368,13 +372,10 @@ describe('create pipeline — end-to-end (mocked provider)', () => {
       const briefPath = path.join(repo, 'brief.md');
       await writeFile(briefPath, '# A tiny device\n\nA USB-C power breakout board.\n', 'utf8');
 
-      // Override mock to return empty symbols — simulating a false-green ERC
-      // on a schematic that has no real content
-      const listSymbolsModule = await import('../src/kicad/sexp.js');
-      const origListSymbols = listSymbolsModule.listSymbols;
-      vi.mocked(origListSymbols).mockImplementationOnce(
-        async (): Promise<SchematicSymbol[]> => [],
-      );
+    // Override mock to return empty symbols — simulating a false-green ERC
+    // on a schematic that has no real content
+    const { listSymbols } = await import('../src/kicad/sexp.js');
+    vi.mocked(listSymbols).mockResolvedValueOnce([]);
 
       const lines: string[] = [];
       const res = await runCreate({ repoRoot: repo, briefPath, model: 'gpt-5', log: (s) => lines.push(s) });
@@ -491,7 +492,7 @@ describe('create pipeline — end-to-end (mocked provider)', () => {
 
       const res1 = await runCreate({ repoRoot: repo, briefPath, model: 'gpt-5', log: () => {} });
       expect(res1.ok).toBe(false);
-      expect(res1.completed).toEqual([]); // spec-seed ran but architecture failed
+      expect(res1.completed).toEqual(['spec-seed']); // spec-seed succeeded, architecture failed
 
       // The first stage (spec-seed) was a success, so its docs should be committed.
       // But wait — the mock returns commit: null, so runCreate doesn't commit. The
