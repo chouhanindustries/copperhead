@@ -1,5 +1,5 @@
 import path from 'node:path';
-import { readFile, writeFile } from 'node:fs/promises';
+import { readFile, writeFile, rename } from 'node:fs/promises';
 import { execa } from 'execa';
 import type { Msg, Provider, Turn } from './types.js';
 import { availableTools, dispatchTool, type RunContext } from './tools.js';
@@ -28,6 +28,7 @@ import { existsSync } from 'node:fs';
 import { OpenAIProvider } from './providers/openai.js';
 import { AnthropicProvider } from './providers/anthropic.js';
 import { CodexProvider } from './providers/codex.js';
+import { GrokProvider } from './providers/grok.js';
 import { ClaudeCodeProvider } from './providers/claude-code.js';
 import { CursorProvider } from './providers/cursor.js';
 import { openSynapMemory, type RunRecord, type SynapMemory } from '../memory/synap.js';
@@ -135,6 +136,13 @@ export async function makeProvider(
         codexPathOverride: process.env.COPPERHEAD_CODEX_PATH || 'codex',
       }),
     });
+  }
+  if (model === 'grok' || model.startsWith('grok:')) {
+    const grokModel = model.startsWith('grok:') ? model.slice('grok:'.length) : undefined;
+    if (grokModel === '') {
+      throw new Error('grok model override cannot be empty; use "grok" or "grok:<model-id>"');
+    }
+    return new GrokProvider(grokModel, undefined, sessionResume);
   }
   // Match claude-code before the `claude*` prefix: both `claude-code` and
   // `claude-code:<id>` start with `claude` and would otherwise route to the
@@ -380,6 +388,18 @@ async function runWithMemory(
     durationMs: Date.now() - startMs,
   });
 
+  const flushMetrics = async (exitPath?: ExitPath): Promise<void> => {
+    const currentStats = stats(exitPath ?? 'running');
+    const p = path.join(transcript.dir, 'metrics.json');
+    const tmp = `${p}.tmp`;
+    try {
+      await writeFile(tmp, JSON.stringify(currentStats, null, 2), 'utf8');
+      await rename(tmp, p);
+    } catch {
+      // best-effort
+    }
+  };
+
   /** One outcome line, printed last at every terminal branch (AC-8.5). */
   const outcomeLine = (s: RunStats, extra?: string | null): string =>
     [
@@ -409,6 +429,7 @@ async function runWithMemory(
     }
     const runStats = stats(exitPath);
     await transcript.event('run-end', runStats);
+    await flushMetrics(exitPath);
     const summaryPath = await transcript.writeSummary({
       request: opts.request,
       changeId: ctx.changeId,
@@ -435,6 +456,17 @@ async function runWithMemory(
       log(
         `failed work preserved: git stash entry "copperhead failed run ${ctx.runId}" (${preserved.slice(0, 10)}); recover with \`git stash apply\`, discard with \`git stash drop\``,
       );
+    }
+    if (!restoreError) {
+      try {
+        await execa('git', ['add', '-f', transcript.dir], { cwd: repoRoot });
+        await execa('git', ['commit', '-m', `copperhead: partial run data ${ctx.runId}`, '--', transcript.dir], { cwd: repoRoot });
+        log(`committed partial run data for failed run`);
+      } catch (err) {
+        log(`warning: could not commit partial run data (${(err as Error).message})`);
+      }
+    } else {
+      log(`skipping partial run data commit because rollback failed and repository state is unverified`);
     }
     log(`transcript: ${transcript.jsonlPath}`);
     log(`summary: ${summaryPath}`);
@@ -514,6 +546,7 @@ async function runWithMemory(
           )
         : null;
     heartbeat?.unref?.();
+    const turnStartAtIso = new Date(turnStartMs).toISOString();
     try {
       res = await withRetry(
         () =>
@@ -525,6 +558,27 @@ async function runWithMemory(
         { onRetry: (attempt) => log(`rate limited; retry ${attempt}`) },
       );
     } catch (err) {
+      const callFinishedAt = new Date().toISOString();
+      await transcript.event('llm-call', {
+        turn: turn + 1,
+        stage: meta.stage?.name,
+        callId: `call-${turn + 1}-${turnTimeouts}`,
+        model: provider.name,
+        provider: provider.name,
+        tokensIn: 0,
+        tokensOut: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        cacheHit: false,
+        latencyMs: Date.now() - turnStartMs,
+        startedAt: turnStartAtIso,
+        finishedAt: callFinishedAt,
+        stopReason: 'error',
+        toolCalls: [],
+        error: (err as Error).message
+      });
+      await flushMetrics();
+
       if (err instanceof TurnTimeoutError) {
         // A hung provider turn: the watchdog aborted the in-flight call and tore
         // down its subprocess. Retry the same turn a bounded number of times
@@ -580,6 +634,28 @@ async function runWithMemory(
     tokensIn += res.usage.inputTokens;
     tokensOut += res.usage.outputTokens;
     perTurn.push({ turn: turn + 1, in: res.usage.inputTokens, out: res.usage.outputTokens });
+    
+    const callFinishedAt = new Date().toISOString();
+    await transcript.event('llm-call', {
+      turn: turn + 1,
+      stage: meta.stage?.name,
+      callId: `call-${turn + 1}`,
+      model: provider.name,
+      provider: provider.name,
+      tokensIn: res.usage.inputTokens,
+      tokensOut: res.usage.outputTokens,
+      cacheRead: 0,
+      cacheWrite: 0,
+      cacheHit: res.cacheHit ?? false,
+      latencyMs: Date.now() - turnStartMs,
+      startedAt: turnStartAtIso,
+      finishedAt: callFinishedAt,
+      stopReason: res.stopReason ?? 'unknown',
+      toolCalls: res.toolCalls.map((c) => c.name),
+      error: null
+    });
+    await flushMetrics();
+
     await transcript.event('assistant', { text: res.text, toolCalls: res.toolCalls });
 
     if (res.text) {

@@ -95,11 +95,12 @@ If `codex` is not on `PATH`, point `COPPERHEAD_CODEX_PATH` at an executable expl
 
 If none of these produce a model, the command exits with an error telling you the available ways to set one. `check` never needs a model, since it makes no LLM calls at all.
 
-Accepted model values (routing is by prefix; `makeProvider` checks `codex`, then `claude-code`, then `cursor`, then `claude`, then OpenAI):
+Accepted model values (routing is by prefix; makeProvider checks compat first, followed by codex, grok, claude-code, cursor, and claude, then OpenAI):
 
 | Value | Provider | Key |
 | --- | --- | --- |
 | `codex` / `codex:<id>` | Codex CLI, saved login | none (local Codex login) |
+| `grok` / `grok:<id>` | Grok CLI, saved login | none (`grok login`) |
 | `claude-code` / `claude-code:<id>` | Claude Code, saved login | none (uses `CLAUDE_CODE_OAUTH_TOKEN` / your logged-in CLI) |
 | `cursor` / `cursor:<id>` | Cursor Agent CLI, saved login | none (`agent login`) |
 | `compat:<id>` | Any OpenAI-compatible endpoint (Groq, OpenRouter, Gemini, Ollama) | the variable named by `apiKeyEnv`; none for a local endpoint |

@@ -21,6 +21,8 @@ export interface Turn {
   text: string | null;
   toolCalls: ToolCall[];
   usage: { inputTokens: number; outputTokens: number };
+  cacheHit?: boolean;
+  stopReason?: string;
   /**
    * A one-line steer for a turn that produced NO tool call but clearly *intended*
    * one — e.g. a fenced ```json block that names a real tool yet fails to parse

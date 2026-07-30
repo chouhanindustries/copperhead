@@ -182,7 +182,7 @@ copperhead create --brief brief.md [--model <model>] [--interactive]
 | Option | Description |
 | --- | --- |
 | `--brief <file>` | **Required.** The product brief, in markdown. |
-| `--model <model>` | `codex`, `cursor`, `gpt-5`, `claude`, or `claude-code` (saved-login; no model API key for those three). |
+| `--model <model>` | `codex`, `grok`, `cursor`, `claude-code`, `gpt-5`, or `claude` (saved login applies only to `grok`, `codex`, `cursor`, and `claude-code`, while `gpt-5` and `claude` require API keys). |
 | `--interactive` | Re-enable the human gates: spec approval, and a pause before export. |
 
 Exits 1 if any stage fails to complete, 0 when the pipeline finishes.
