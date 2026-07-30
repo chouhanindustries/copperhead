@@ -74,7 +74,8 @@ describe('kicad-cli binary resolution', () => {
     try {
       await expect(kicadCliVersion()).rejects.toBeInstanceOf(KicadCliMissingError);
     } finally {
-      process.env.PATH = savedPath;
+      if (savedPath === undefined) delete process.env.PATH;
+      else process.env.PATH = savedPath;
     }
   });
 
@@ -91,7 +92,8 @@ describe('kicad-cli binary resolution', () => {
       expect(await kicadCliVersion()).toBe('9.0.1');
       expect(resolveKicadCli()).toBe(bundle);
     } finally {
-      process.env.PATH = savedPath;
+      if (savedPath === undefined) delete process.env.PATH;
+      else process.env.PATH = savedPath;
     }
   });
 
@@ -121,7 +123,8 @@ describe('kicad-cli binary resolution', () => {
       resetKicadCliCache();
       expect(await kicadCliVersion()).toBe('8.0.4');
     } finally {
-      process.env.PATH = savedPath;
+      if (savedPath === undefined) delete process.env.PATH;
+      else process.env.PATH = savedPath;
     }
   });
 
