@@ -410,27 +410,31 @@ describe('copperhead sync verify phase (AC-7)', () => {
     }
   });
 
-  it('pins-h check ignores Notes column text when verifying pin names (#105)', async () => {
+  it('pins-h check ignores Notes, Refdes, and Pin number columns when verifying pin names (#105)', async () => {
     const { repo, cleanup } = await tempFixtureRepo();
     try {
       await runInit({ repoRoot: repo });
       const pinoutPath = path.join(repo, 'docs', 'PINOUT.md');
       await writeFile(
         pinoutPath,
-        '| Refdes | Pin | Net | Notes |\n|---|---|---|---|\n| U1 | 5 | KEY_DAH | KEY notes here |\n',
+        '| Refdes | Pin | Net | Notes |\n|---|---|---|---|\n| U1 | 5 | KEY_DAH | KEY |\n',
         'utf8',
       );
       const firmwareDir = path.join(repo, 'firmware', 'src');
       await mkdir(firmwareDir, { recursive: true });
       await writeFile(
         path.join(firmwareDir, 'pins.h'),
-        '#define PIN_KEY 5\n',
+        '#define PIN_KEY_DAH 5\n#define PIN_KEY 5\n#define PIN_5 21\n#define PIN_U1 1\n',
         'utf8',
       );
       const report = await syncVerify(repo);
       const pinsHItems = report.resolvable.filter((i) => i.kind === 'pins-h');
-      expect(pinsHItems).toHaveLength(1);
-      expect(pinsHItems[0]!.claim).toBe('defines PIN_KEY');
+      expect(pinsHItems).toHaveLength(3);
+      expect(pinsHItems.map((i) => i.claim)).toEqual([
+        'defines PIN_KEY',
+        'defines PIN_5',
+        'defines PIN_U1',
+      ]);
     } finally {
       await cleanup();
     }
