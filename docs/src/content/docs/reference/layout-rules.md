@@ -25,7 +25,7 @@ Hard rows exist only when a key in `.copperhead/constraints.json` matches one of
 An `n/a` row is never a silent pass, and what it does to the score depends on whether anything is placed:
 
 - **Empty scaffold (zero footprints):** `n/a` rows are excluded from the hard term. Nothing is placed yet, so unanswerable is the honest default, and the placement and routing terms already hold the score down.
-- **Populated board (any footprints):** any `n/a` row forfeits the entire 20-point hard term. An unanswerable row can never shrink the denominator and can never score above the same row failing, so deleting the component a constraint polices cannot improve the score. This is what stops deleting the bypass capacitors from outscoring misplacing them.
+- **Populated board (any footprints):** any `n/a` row forfeits the entire 20-point hard term. An unanswerable row can never shrink the denominator and can never score above the same row failing, so a fail turning into `n/a`, including through deleting the component a constraint polices, never improves this term. The guarantee is about the hard term only: soft terms are measured on whatever remains on the board, so they can still move. On the reference board this rule is what stops deleting the bypass capacitors from outscoring misplacing them.
 
 ## Soft scorecard
 

@@ -64,9 +64,11 @@ derived from, its expected bound, the measured value, and a status of `pass`,
 reaches the same measurement. A row the board cannot answer SHALL be `n/a` with a
 stated reason, never counted as a pass. On a board with no footprints, `n/a` rows
 SHALL be excluded from the score's hard term; on a board with footprints, any
-`n/a` row SHALL forfeit the hard term entirely, so deleting the component a
-constraint polices can never score above misplacing it. A board whose registry has
-no matching key SHALL produce an empty hard table rather than invented rows.
+`n/a` row SHALL forfeit the hard term entirely, so a row that would fail can never
+improve the hard term by becoming `n/a`, deletion of the policed component
+included. Soft terms are measured on whatever remains on the board. A board whose
+registry has no matching key SHALL produce an empty hard table rather than
+invented rows.
 
 #### Scenario: A width constraint produces a traceable row
 
@@ -83,10 +85,10 @@ no matching key SHALL produce an empty hard table rather than invented rows.
 - **WHEN** the registry holds a mounting-hole clearance constraint and the empty scaffold has no mounting holes
 - **THEN** that row's status is `n/a` with a stated reason, and it does not raise the score
 
-#### Scenario: Deleting the policed component does not outscore misplacing it
+#### Scenario: Deleting the policed component forfeits the hard term
 
 - **WHEN** the decoupling capacitors a decoupling-distance constraint polices are deleted from a populated board
-- **THEN** the decoupling row is `n/a`, the hard term is forfeited, and the board scores no higher than the same board with the capacitors misplaced
+- **THEN** the decoupling row is `n/a` and the hard term is forfeited rather than springing back to full marks
 
 ### Requirement: The agent can measure a layout
 

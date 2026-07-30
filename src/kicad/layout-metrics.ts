@@ -419,9 +419,11 @@ function scoreTerms(soft: SoftMetrics, hard: HardRow[], directness: ReturnType<t
   // score HIGHER than misplacing it (the fail row vanished and the hard term
   // sprang back to full marks). Forfeiting instead means an n/a row can never
   // shrink the denominator and can never score above the same row failing, so
-  // deletion cannot improve the score. The empty scaffold keeps the exclusion
-  // behaviour: with nothing placed yet, n/a is the honest default, and the
-  // placement and routing terms already hold its score down.
+  // a fail turning n/a, deletion included, never improves this term. The soft
+  // terms are measured on whatever remains and move on their own. The empty
+  // scaffold keeps the exclusion behaviour: with nothing placed yet, n/a is
+  // the honest default, and the placement and routing terms already hold its
+  // score down.
   const hardFraction = fp
     ? hard.length === 0
       ? 1
