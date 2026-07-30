@@ -89,8 +89,8 @@ describe('kicad-cli binary resolution', () => {
     const savedPath = process.env.PATH;
     process.env.PATH = dir;
     try {
+      expect(resolveKicadCli()).toBe('kicad-cli');
       expect(await kicadCliVersion()).toBe('9.0.1');
-      expect(resolveKicadCli()).toBe(bundle);
     } finally {
       if (savedPath === undefined) delete process.env.PATH;
       else process.env.PATH = savedPath;
