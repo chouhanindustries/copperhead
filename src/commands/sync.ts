@@ -6,6 +6,7 @@ import { checkDrift } from '../memory/drift.js';
 import { loadConstraints, checkForbiddenPins } from '../memory/constraints.js';
 import { pinNets } from '../kicad/sexp.js';
 import { openspecValidate } from '../openspec/cli.js';
+import { parseCanonicalTables } from '../memory/bom-table.js';
 import { runAgentLoop } from '../agent/loop.js';
 import type { RunMetaInput } from '../agent/runmeta.js';
 import type { ProgressRenderer } from '../agent/render.js';
@@ -90,13 +91,23 @@ export async function syncVerify(repoRoot: string): Promise<SyncReport> {
   if (existsSync(pinsH) && existsSync(path.join(docsDir, 'PINOUT.md'))) {
     const header = await readFile(pinsH, 'utf8');
     const pinout = await readFile(path.join(docsDir, 'PINOUT.md'), 'utf8');
+    const validNames = new Set<string>();
+    for (const { rows: tRows } of parseCanonicalTables(pinout)) {
+      for (const r of tRows) {
+        for (const cell of r.cells) {
+          const val = cell.replace(/`/g, '').trim();
+          if (val) validNames.add(val.toLowerCase());
+        }
+      }
+    }
     for (const m of header.matchAll(/#define\s+PIN_(\w+)\s+(\S+)/g)) {
-      if (!pinout.includes(m[1]!)) {
+      const pinName = m[1]!;
+      if (!validNames.has(pinName.toLowerCase())) {
         resolvable.push({
           kind: 'pins-h',
           doc: 'firmware/src/pins.h',
-          claim: `defines PIN_${m[1]}`,
-          actual: 'PINOUT.md does not mention it',
+          claim: `defines PIN_${pinName}`,
+          actual: 'PINOUT.md does not assign it',
           resolution: 'regenerate pins.h from PINOUT.md (PINOUT.md is the single source of truth)',
         });
       }
