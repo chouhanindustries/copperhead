@@ -59,30 +59,18 @@ export function normalizeReport(raw: unknown, source: 'erc' | 'drc'): CheckRepor
   const violations: Violation[] = [];
 
  for (const sheet of r.sheets ?? []) {
-    for (const v of sheet.violations ?? []) {
-      const violation = normViolation(v, sheet.path);
-      if (violation.severity !== 'error') continue;
-      violations.push(violation);
-    }
+    for (const v of sheet.violations ?? [])
+      violations.push(normViolation(v, sheet.path));
   }
 
-  for (const v of r.violations ?? []) {
-    const violation = normViolation(v);
-    if (violation.severity !== 'error') continue;
-    violations.push(violation);
-  }
+  for (const v of r.violations ?? [])
+    violations.push(normViolation(v));
 
-  for (const v of r.unconnected_items ?? []) {
-    const violation = normViolation(v);
-    if (violation.severity !== 'error') continue;
-    violations.push(violation);
-  }
+  for (const v of r.unconnected_items ?? [])
+    violations.push(normViolation(v));
 
- for (const v of r.schematic_parity ?? []) {
-    const violation = normViolation(v);
-    if (violation.severity !== 'error') continue;
-    violations.push(violation);
-  }
+  for (const v of r.schematic_parity ?? [])
+    violations.push(normViolation(v));
 
   return { ok: violations.length === 0, source, violations };
 }

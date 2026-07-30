@@ -33,4 +33,26 @@ describe('report normalizer', () => {
     expect(normalizeReport({}, 'erc').ok).toBe(true);
     expect(normalizeReport({ violations: [{}] }, 'drc').violations).toHaveLength(1);
   });
+
+  it('keeps warning-severity violations, so the gate stays closed', () => {
+    const r = normalizeReport(
+      {
+        sheets: [
+          {
+            path: '/',
+            violations: [
+              {
+                severity: 'warning',
+                type: 'power_pin_not_driven',
+              },
+            ],
+          },
+        ],
+      },
+      'erc',
+    );
+
+    expect(r.ok).toBe(false);
+    expect(r.violations).toHaveLength(1);
+  });
 });

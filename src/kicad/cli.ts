@@ -162,7 +162,7 @@ async function runCheck(
     );
     let raw: unknown;
     try {
-      raw = JSON.parse(await readFile(out, "utf8"));
+      raw = JSON.parse(await readFile(out, 'utf8'));
     } catch {
       // No report on disk means kicad-cli bailed before checking — usually the
       // design file itself failed to load (syntax/schema corruption). The

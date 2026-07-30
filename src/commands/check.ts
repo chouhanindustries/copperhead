@@ -38,16 +38,16 @@ export async function runCheck(
   let drc: CheckReport | null = null;
   if (config.schematic && existsSync(path.join(repoRoot, config.schematic))) {
     erc = await runErc(path.join(repoRoot, config.schematic));
-    log(erc.ok ? "ERC ✓" : formatViolations(erc));
+    log(erc.ok ? 'ERC ✓' : formatViolations(erc));
   } else {
-    log("ERC skipped (no schematic configured; run copperhead init)");
+    log('ERC skipped (no schematic configured; run copperhead init)');
   }
 
   if (config.board && existsSync(path.join(repoRoot, config.board))) {
     drc = await runDrc(path.join(repoRoot, config.board));
-    log(drc.ok ? "DRC ✓" : formatViolations(drc));
+    log(drc.ok ? 'DRC ✓' : formatViolations(drc));
   } else {
-    log("DRC skipped (no board configured)");
+    log('DRC skipped (no board configured)');
   }
 
   let drift: DriftMismatch[] = [];
@@ -56,13 +56,13 @@ export async function runCheck(
     drift = await checkDrift(repoRoot, config.docs, config.schematic);
     log(
       drift.length === 0
-        ? "drift ✓"
+        ? 'drift ✓'
         : drift
             .map(
               (m) =>
                 `drift: ${m.doc} claims "${m.claim}" but actual is "${m.actual}"`,
             )
-            .join("\n"),
+            .join('\n'),
     );
     // Informational, never a failure: the zero-symbol drift exemption is for
     // bootstrap, but an established repo that lost its schematic content
@@ -94,13 +94,13 @@ export async function runCheck(
     if (Object.keys(registry).length) {
       log(
         constraintViolations.length === 0
-          ? "constraints ✓"
+          ? 'constraints ✓'
           : constraintViolations
               .map(
                 (v) =>
                   `constraint ${v.key}: ${v.description} (source: ${v.source})`,
               )
-              .join("\n"),
+              .join('\n'),
       );
     }
   }
