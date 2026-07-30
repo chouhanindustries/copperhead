@@ -10,6 +10,7 @@ import { isDirty, commitAll, commitPaths, changedFiles } from '../util/git.js';
 import type { CompatSettings, CopperheadConfig } from '../config.js';
 import { checkDrift } from '../memory/drift.js';
 import { runAgentLoop, makeProvider, type BudgetExhaustedStats } from '../agent/loop.js';
+import type { ExitPath } from '../agent/transcript.js';
 import { diagnoseStageFailure, transcriptExcerpt, withTimeout, type StageDiagnosis } from '../agent/recovery.js';
 import type { Provider } from '../agent/types.js';
 import type { RunMetaInput } from '../agent/runmeta.js';
@@ -421,6 +422,14 @@ interface StageCost {
    *  D2) — a stage is either mid-attempt or it isn't; `resumed`/`ran`/
    *  `stalled` are orthogonal to it and rendered separately. */
   running?: boolean;
+  /** The most recent attempt's real exit path (`done` on success, or
+   *  whatever `fail()` actually reported: `stalled`, `provider-error`,
+   *  `turn-budget-exhausted`, ...). Reported directly instead of collapsing
+   *  every non-success outcome to a generic `'ran'` — a stalled or
+   *  provider-error stage previously showed identically to a finished one,
+   *  which the delta spec explicitly promises not to do ("a stage whose run
+   *  reports stalled SHALL appear as stalled"). Caught in review. */
+  lastExitPath?: ExitPath;
 }
 
 /** Quote a path/value for a copy-pasteable resume command (5.3). */
@@ -539,6 +548,24 @@ function ranTotals(stageCosts: StageCost[]): {
 const cachePct = (hits: number, turns: number): number => (turns ? Math.round((hits / turns) * 100) : 0);
 
 /**
+ * Per-stage report status: 'resumed' or 'running' take priority (design D2 —
+ * not derived from an exit path), otherwise the stage's last real exit path,
+ * with the ordinary success case ('done') rendered as the existing 'ran' for
+ * readability. A stage that stopped for any other reason (`stalled`,
+ * `provider-error`, `turn-budget-exhausted`, ...) reports that reason
+ * directly instead of collapsing to the same 'ran' a successful stage gets —
+ * previously every non-success stop looked identical to a finished stage,
+ * contradicting the delta spec's "a stage whose run reports stalled SHALL
+ * appear as stalled". Caught in review.
+ */
+function stageStatus(c: StageCost): string {
+  if (c.resumed) return 'resumed';
+  if (c.running) return 'running';
+  if (c.lastExitPath && c.lastExitPath !== 'done') return c.lastExitPath;
+  return 'ran';
+}
+
+/**
  * The running whole-run total, printed at each stage's end (5.6). A create board
  * is built over many invocations and each stage's `summary.md` covers only that
  * stage; this line accrues the pipeline total so the operator sees the true cost
@@ -587,7 +614,7 @@ async function writeRunReport(opts: CreateOptions, stageCosts: StageCost[]): Pro
       tokensOut: c.tokensOut,
       cacheHits: c.cacheHits,
       cacheHitPct: c.resumed ? null : cachePct(c.cacheHits, c.turns),
-      status: c.resumed ? 'resumed' : c.running ? 'running' : 'ran',
+      status: stageStatus(c),
     })),
     total: { ...t, cacheHitPct: cachePct(t.cacheHits, t.turns) },
     slowestStage: slowest ? { name: slowest.name, wallMs: slowest.wallMs } : null,
@@ -614,7 +641,7 @@ async function writeRunReport(opts: CreateOptions, stageCosts: StageCost[]): Pro
             fmtTokens(c.tokensIn),
             fmtTokens(c.tokensOut),
             `${cachePct(c.cacheHits, c.turns)}%`,
-            c.running ? 'running' : 'ran',
+            stageStatus(c),
           ]),
     ),
     row([
@@ -800,6 +827,7 @@ export async function runCreate(opts: CreateOptions): Promise<{ ok: boolean; com
       cost.tokensIn += res.stats?.tokensIn ?? 0;
       cost.tokensOut += res.stats?.tokensOut ?? 0;
       cost.cacheHits += res.cacheHits ?? 0;
+      cost.lastExitPath = res.exitPath; // 'done' on success; the real reason otherwise
       stageTranscriptDir = res.transcriptDir; // last attempt's run dir (for SVG artifacts / report)
 
       // A successful run is not the same as a completed stage: an agent can

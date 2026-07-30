@@ -163,4 +163,54 @@ describe('stage-boundary REPORT.md/report.json regeneration (AC-16.4)', () => {
       await cleanup();
     }
   });
+
+  it('a stalled stage reports its real exit path, not the generic "ran" a finished stage gets', async () => {
+    // Regression: writeRunReport used to derive status as
+    // `resumed ? 'resumed' : running ? 'running' : 'ran'` — nothing else,
+    // so a stage that stopped for any other reason (stalled, provider-error,
+    // turn-budget-exhausted, ...) reported identically to a stage that
+    // actually finished. The delta spec explicitly promises otherwise ("a
+    // stage whose run reports stalled SHALL appear as stalled"). Caught in
+    // review, not by CodeRabbit.
+    const { repo, cleanup } = await tempFixtureRepo();
+    try {
+      await mkdir(path.join(repo, '.copperhead'), { recursive: true });
+      // maxStageRetries: 0 so the pipeline gives up after the single failing
+      // attempt below instead of calling the (real, unmocked) diagnose()
+      // path, which would need a live provider.
+      await writeFile(path.join(repo, '.copperhead', 'config.json'), JSON.stringify({ maxStageRetries: 0 }), 'utf8');
+      mockRunAgentLoop.mockImplementationOnce(async () => ({
+        outcome: 'failure' as const,
+        exitPath: 'stalled' as const,
+        summary: 'model stopped calling tools without finishing',
+        transcriptDir: '',
+        filesTouched: [],
+        commit: null,
+        stats: {
+          exitPath: 'stalled' as const,
+          turnsUsed: 2,
+          maxTurns: 40,
+          repairCyclesUsed: 0,
+          maxRepairCycles: 5,
+          tokensIn: 100,
+          tokensOut: 20,
+          perTurn: [],
+          durationMs: 500,
+        },
+        cacheHits: 0,
+      }));
+      const briefPath = path.join(repo, 'brief.md');
+      await writeFile(briefPath, '# A tiny device\n', 'utf8');
+      const res = await runCreate({ repoRoot: repo, briefPath, model: 'gpt-5', log: () => {} });
+      expect(res.ok).toBe(false);
+      expect(res.completed).toEqual([]);
+
+      const report = await reportJson(repo);
+      const specSeed = report.stages.find((s) => s.name === 'spec-seed')!;
+      expect(specSeed.status).toBe('stalled');
+      expect(specSeed.status).not.toBe('ran');
+    } finally {
+      await cleanup();
+    }
+  });
 });
