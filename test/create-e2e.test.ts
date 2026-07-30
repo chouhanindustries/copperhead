@@ -14,7 +14,7 @@ describe('create pipeline: e2e stage contracts (bounty AC)', () => {
     ]);
   });
 
-  it('spec-seed isComplete: SPEC.md with Budgets heading', async () => {
+  it('spec-seed isComplete: SPEC.md with Budgets heading and budget line', async () => {
     const { repo, cleanup } = await tempFixtureRepo();
     try {
       const docs = path.join(repo, 'docs');
@@ -22,14 +22,14 @@ describe('create pipeline: e2e stage contracts (bounty AC)', () => {
       const s = STAGES[0];
       expect(s.name).toBe('spec-seed');
       expect(await s.isComplete(repo, 'docs')).toBe(false);
-      await writeFile(path.join(docs, 'SPEC.md'), '# Device\n\n## Budgets and constraints\n', 'utf8');
+      await writeFile(path.join(docs, 'SPEC.md'), '# Device\n\n## Budgets and constraints\nPower budget: 500mA\n', 'utf8');
       expect(await s.isComplete(repo, 'docs')).toBe(true);
     } finally {
       await cleanup();
     }
   });
 
-  it('architecture isComplete: SUBSYSTEMS.md exists', async () => {
+  it('architecture isComplete: SUBSYSTEMS.md with section heading and content', async () => {
     const { repo, cleanup } = await tempFixtureRepo();
     try {
       const docs = path.join(repo, 'docs');
@@ -37,14 +37,14 @@ describe('create pipeline: e2e stage contracts (bounty AC)', () => {
       const s = STAGES[1];
       expect(s.name).toBe('architecture');
       expect(await s.isComplete(repo, 'docs')).toBe(false);
-      await writeFile(path.join(docs, 'SUBSYSTEMS.md'), '# Architecture\n', 'utf8');
+      await writeFile(path.join(docs, 'SUBSYSTEMS.md'), '# Architecture\n\n## Power Subsystem\nRegulates 5V to 3.3V.\n', 'utf8');
       expect(await s.isComplete(repo, 'docs')).toBe(true);
     } finally {
       await cleanup();
     }
   });
 
-  it('part-selection isComplete: BOM.md exists', async () => {
+  it('part-selection isComplete: BOM.md with real MPN', async () => {
     const { repo, cleanup } = await tempFixtureRepo();
     try {
       const docs = path.join(repo, 'docs');
@@ -52,7 +52,7 @@ describe('create pipeline: e2e stage contracts (bounty AC)', () => {
       const s = STAGES[2];
       expect(s.name).toBe('part-selection');
       expect(await s.isComplete(repo, 'docs')).toBe(false);
-      await writeFile(path.join(docs, 'BOM.md'), '# BOM\n', 'utf8');
+      await writeFile(path.join(docs, 'BOM.md'), '# BOM\n\n| Refdes | Value | Footprint | MPN | Rationale |\n|---|---|---|---|---|\n| R1 | 10k | 0402 | RC0402JR-0710KL | Pullup |\n', 'utf8');
       expect(await s.isComplete(repo, 'docs')).toBe(true);
     } finally {
       await cleanup();
@@ -91,7 +91,7 @@ describe('create pipeline: e2e stage contracts (bounty AC)', () => {
       const outDir = path.join(repo, 'outputs');
       await mkdir(outDir, { recursive: true });
       expect(await s.isComplete(repo, 'docs')).toBe(false); // empty dir is not complete
-      await writeFile(path.join(outDir, 'bom.csv'), 'ref,mpn,qty\n', 'utf8');
+      await writeFile(path.join(outDir, 'board.gbr'), 'G04 Gerber*\n', 'utf8');
       expect(await s.isComplete(repo, 'docs')).toBe(true);
     } finally {
       await cleanup();
@@ -122,7 +122,7 @@ describe('create pipeline: e2e stage contracts (bounty AC)', () => {
       const s = STAGES[7];
       expect(s.name).toBe('devplan');
       expect(await s.isComplete(repo, 'docs')).toBe(false);
-      await writeFile(path.join(docs, 'DEVPLAN.md'), '# Dev plan\n', 'utf8');
+      await writeFile(path.join(docs, 'DEVPLAN.md'), '# Dev plan\n\n## Bring-up\n1. Check power rails.\n', 'utf8');
       expect(await s.isComplete(repo, 'docs')).toBe(true);
     } finally {
       await cleanup();

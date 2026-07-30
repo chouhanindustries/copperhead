@@ -47,11 +47,11 @@ async function writeStageArtifacts(repoRoot: string, request: string): Promise<v
   const docs = path.join(repoRoot, 'docs');
   await mkdir(docs, { recursive: true });
   if (request.includes('spec-seed'))
-    await writeFile(path.join(docs, 'SPEC.md'), '# Dev\n\n## Budgets and constraints\n', 'utf8');
+    await writeFile(path.join(docs, 'SPEC.md'), '# Dev\n\n## Budgets and constraints\nPower budget: 500mA\n', 'utf8');
   else if (request.includes('architecture'))
-    await writeFile(path.join(docs, 'SUBSYSTEMS.md'), '# Arch\n', 'utf8');
+    await writeFile(path.join(docs, 'SUBSYSTEMS.md'), '# Arch\n\n## Subsystems\nPower subsystem regulates 3.3V.\n', 'utf8');
   else if (request.includes('part-selection'))
-    await writeFile(path.join(docs, 'BOM.md'), '# BOM\n| Refdes | Value |\n| --- | --- |\n| R1 | 10k |\n', 'utf8');
+    await writeFile(path.join(docs, 'BOM.md'), '# BOM\n| Refdes | Value | Footprint | MPN | Rationale |\n| --- | --- | --- | --- | --- |\n| R1 | 10k | Resistor_SMD:R_0402 | RC0402JR-0710KL | Pullup |\n', 'utf8');
   else if (request.includes('schematic')) {
     const configPath = path.join(repoRoot, '.copperhead', 'config.json');
     const configContent = await readFile(configPath, 'utf8');
@@ -83,12 +83,12 @@ async function writeStageArtifacts(repoRoot: string, request: string): Promise<v
     await writeFile(path.join(docs, 'LAYOUT.md'), '# Layout\n\n## Draft quality\nsome draft details here\n', 'utf8');
   } else if (request.includes('outputs')) {
     await mkdir(path.join(repoRoot, 'outputs'), { recursive: true });
-    await writeFile(path.join(repoRoot, 'outputs', 'README.txt'), 'ok', 'utf8');
+    await writeFile(path.join(repoRoot, 'outputs', 'board.gbr'), 'G04 Gerber*', 'utf8');
   } else if (request.includes('firmware')) {
     await mkdir(path.join(repoRoot, 'firmware'), { recursive: true });
     await writeFile(path.join(repoRoot, 'firmware', 'main.c'), '// fw', 'utf8');
   } else if (request.includes('devplan'))
-    await writeFile(path.join(docs, 'DEVPLAN.md'), '# Dev plan\n', 'utf8');
+    await writeFile(path.join(docs, 'DEVPLAN.md'), '# Dev plan\n\n## Bring-up\n1. Check power rails.\n', 'utf8');
 }
 
 let prevKey: string | undefined;
@@ -182,9 +182,9 @@ describe('create pipeline: runCreate integration (mocked agent + KiCad)', () => 
     try {
       const docs = path.join(repo, 'docs');
       await mkdir(docs, { recursive: true });
-      await writeFile(path.join(docs, 'SPEC.md'), '# Dev\n\n## Budgets\n', 'utf8');
-      await writeFile(path.join(docs, 'SUBSYSTEMS.md'), '# Arch\n', 'utf8');
-      await writeFile(path.join(docs, 'BOM.md'), '# BOM\n', 'utf8');
+      await writeFile(path.join(docs, 'SPEC.md'), '# Dev\n\n## Budgets\nPower: 500mA\n', 'utf8');
+      await writeFile(path.join(docs, 'SUBSYSTEMS.md'), '# Arch\n\n## Subsystems\nPower subsystem regulates 3.3V.\n', 'utf8');
+      await writeFile(path.join(docs, 'BOM.md'), '# BOM\n| Refdes | Value | Footprint | MPN | Rationale |\n| --- | --- | --- | --- | --- |\n| R1 | 10k | Resistor_SMD:R_0402 | RC0402JR-0710KL | Pullup |\n', 'utf8');
       await writeFile(path.join(repo, '.gitignore'), '.env\n', 'utf8');
       const { execa } = await import('execa');
       await execa('git', ['add', '-A'], { cwd: repo });

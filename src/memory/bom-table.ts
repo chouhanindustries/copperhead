@@ -35,18 +35,92 @@ export interface TableRow {
    * whatever cells they split into — this function never throws.
    */
   export function parseMarkdownTables(md: string): TableRow[] {
-    const rows: TableRow[] = [];
-    for (const line of md.split('\n')) {
+    return (
+      scanTableGroups(md)
+        // A group opened by an un-piped line with no delimiter row is not a table:
+        // GFM requires the delimiter row for one to exist at all. Without this,
+        // ordinary prose such as `Second-source options: Yageo | Vishay | KOA`
+        // under a BOM table becomes a part in `export bom`, which `check` cannot
+        // catch because `parseCanonicalTables` drops the header-less group.
+        .filter((g) => g[0]!.piped || g.some((l) => l.separator))
+        .flat()
+        .filter((l) => !l.separator)
+        .map((l) => ({ cells: l.cells }))
+    );
+  }
+
+  interface ScannedLine {
+    cells: string[];
+    separator: boolean;
+    /** Whether the source line carried a leading pipe. */
+    piped: boolean;
+  }
+
+  /**
+   * Group a document's table lines, one group per table. Both readers below go
+   * through this so they cannot disagree about which documents are readable:
+   * `check` accepting a BOM.md that `export bom` reads as empty is how a clean
+   * check turns into a header-only ordering file.
+   *
+   * Lines inside a fenced code block are skipped. Docs legitimately show the
+   * table format as an example, and an example row is not a part or a pin.
+   */
+  function scanTableGroups(md: string): ScannedLine[][] {
+    const groups: ScannedLine[][] = [];
+    let current: ScannedLine[] | null = null;
+    let width = 0; // column count of the open group, set by its first line
+    // The open fence's delimiter, or null outside one. A fence closes only on the
+    // same character, at least as long (CommonMark). Toggling on any fence-like
+    // line would let a shorter or different delimiter *inside* a block end it
+    // early, and the example rows after it would be read as parts or pins.
+    let fence: { char: string; length: number } | null = null;
+    // Split on either line ending: a CRLF document would otherwise leave a
+    // trailing \r on every line, and \r is a line terminator that `.` does not
+    // match, so the fence patterns below would never fire on a CRLF file.
+    for (const line of md.split(/\r?\n/)) {
       const t = line.trim();
-      if (!t.startsWith('|')) continue;
-      const cells = t
-        .split('|')
-        .slice(1, -1)
-        .map((c) => c.trim());
-      if (cells.every((c) => /^:?-+:?$/.test(c))) continue; // separator row
-      rows.push({ cells });
+      // Matched against the raw line: CommonMark allows a fence up to three
+      // spaces of indentation, and four or more makes it content rather than a
+      // fence. Trimming first would let an indented delimiter inside a block
+      // read as a closer.
+      const delim = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(line);
+      if (delim) {
+        const marker = delim[1]!;
+        const char = marker[0]!;
+        if (!fence) {
+          fence = { char, length: marker.length };
+          current = null;
+          continue;
+        }
+        // A closing fence carries no info string; anything else stays content.
+        if (char === fence.char && marker.length >= fence.length && !delim[2]!.trim()) {
+          fence = null;
+          current = null;
+          continue;
+        }
+      }
+      if (fence || !t.includes('|')) {
+        current = null; // a blank, prose, or fenced line terminates the table
+        continue;
+      }
+      const cells = splitRow(t);
+      // Outer pipes make a line unambiguously a table row. Without them, a
+      // pipe-bearing prose line (`Legend: A | B`) is indistinguishable from a
+      // row by shape alone, so the column count decides: matching the open
+      // table's width keeps it as a row, a mismatch ends the table there rather
+      // than reading the prose as a part/pin. The line still opens a new group,
+      // in case it is itself the header of an un-piped table.
+      if (current && !t.startsWith('|') && cells.length !== width) current = null;
+      if (!current) {
+        current = [];
+        width = cells.length;
+        groups.push(current);
+      }
+      // The separator row stays in the group so the header can be located
+      // relative to it; it is dropped by the readers above and below.
+      current.push({ cells, separator: isSeparatorRow(cells), piped: t.startsWith('|') });
     }
-    return rows;
+    return groups;
   }
   
   /** True for a table's header row. BOM.md and PINOUT.md both lead with a
@@ -86,35 +160,8 @@ export interface TableRow {
    * it loops on finish forever. Resolving by header name fixes that.
    */
   export function parseCanonicalTables(md: string): Array<{ header: TableRow; rows: TableRow[] }> {
-    type Line = { cells: string[]; separator: boolean };
-    const groups: Line[][] = [];
-    let current: Line[] | null = null;
-    let width = 0; // column count of the open group, set by its first line
-    for (const line of md.split('\n')) {
-      const t = line.trim();
-      if (!t.includes('|')) {
-        current = null; // a blank or prose line terminates the current table
-        continue;
-      }
-      const cells = splitRow(t);
-      // Outer pipes make a line unambiguously a table row. Without them, a
-      // pipe-bearing prose line (`Legend: A | B`) is indistinguishable from a
-      // row by shape alone, so the column count decides: matching the open
-      // table's width keeps it as a row, a mismatch ends the table there rather
-      // than reading the prose as a part/pin. The line still opens a new group,
-      // in case it is itself the header of an un-piped table.
-      if (current && !t.startsWith('|') && cells.length !== width) current = null;
-      if (!current) {
-        current = [];
-        width = cells.length;
-        groups.push(current);
-      }
-      // The separator row stays in the group so the header can be located
-      // relative to it; it is dropped from the rows returned below.
-      current.push({ cells, separator: isSeparatorRow(cells) });
-    }
     const tables: Array<{ header: TableRow; rows: TableRow[] }> = [];
-    for (const g of groups) {
+    for (const g of scanTableGroups(md)) {
       // The header is the row directly above the separator. Falling back to the
       // first row keeps a table that omits the separator working, and anchoring
       // on the separator means a stray pipe-bearing prose line immediately above

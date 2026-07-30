@@ -13,11 +13,23 @@ const mockRunAgentLoop = vi.hoisted(() =>
     const docs = pathMod.join(opts.repoRoot, 'docs');
     await mkdirFs(docs, { recursive: true });
     if (opts.request.includes('spec-seed'))
-      await writeFileFs(pathMod.join(docs, 'SPEC.md'), '# spec\n\n## Budgets\n', 'utf8');
+      await writeFileFs(
+        pathMod.join(docs, 'SPEC.md'),
+        '# spec\n\n## Budgets\n\n- sleep_current_uA: 25\n',
+        'utf8',
+      );
     if (opts.request.includes('architecture'))
-      await writeFileFs(pathMod.join(docs, 'SUBSYSTEMS.md'), '# subsystems\n', 'utf8');
+      await writeFileFs(
+        pathMod.join(docs, 'SUBSYSTEMS.md'),
+        '# subsystems\n\n## Power\n\nLDO regulator 3.3 V, 300 mA.\n',
+        'utf8',
+      );
     if (opts.request.includes('part-selection'))
-      await writeFileFs(pathMod.join(docs, 'BOM.md'), '# bom\n', 'utf8');
+      await writeFileFs(
+        pathMod.join(docs, 'BOM.md'),
+        '# bom\n\n| Refdes | Value | Footprint | MPN | Rationale |\n|---|---|---|---|---|\n| R1 | 10k | R_0603 | RC0603FR-0710KL | bias resistor |\n',
+        'utf8',
+      );
     return {
       outcome: 'success' as const,
       exitPath: 'done' as const,
