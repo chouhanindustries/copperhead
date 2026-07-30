@@ -828,6 +828,9 @@ export async function runCreate(opts: CreateOptions): Promise<{ ok: boolean; com
     }
     completed.push(stage.name);
     
+    await writeRunReport(opts, stageCosts);
+    await renderStageArtifacts(opts, stage.name, stageTranscriptDir);
+
     // The successful runAgentLoop created a commit. Amend it to include the run artifacts.
     try {
       if (stageTranscriptDir) {
@@ -838,7 +841,6 @@ export async function runCreate(opts: CreateOptions): Promise<{ ok: boolean; com
       opts.log(`warning: could not amend stage commit with run artifacts (${(err as Error).message})`);
     }
 
-    await renderStageArtifacts(opts, stage.name, stageTranscriptDir);
     await emitJlcpcbAfterOutputs(stage.name, opts);
     logCumulative(opts, stageCosts);
   }
