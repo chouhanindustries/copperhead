@@ -1,4 +1,5 @@
 import path from 'node:path';
+import { execa } from 'execa';
 import { existsSync } from 'node:fs';
 import { readFile, mkdir, writeFile, readdir } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
@@ -416,6 +417,7 @@ interface StageCost {
   tokensIn: number;
   tokensOut: number;
   cacheHits: number;
+  status?: 'running' | 'stalled';
 }
 
 /** Quote a path/value for a copy-pasteable resume command (5.3). */
@@ -582,6 +584,7 @@ async function writeRunReport(opts: CreateOptions, stageCosts: StageCost[]): Pro
       tokensOut: c.tokensOut,
       cacheHits: c.cacheHits,
       cacheHitPct: c.resumed ? null : cachePct(c.cacheHits, c.turns),
+      status: c.resumed ? 'resumed' : c.status ?? 'ran',
     })),
     total: { ...t, cacheHitPct: cachePct(t.cacheHits, t.turns) },
     slowestStage: slowest ? { name: slowest.name, wallMs: slowest.wallMs } : null,
@@ -607,7 +610,7 @@ async function writeRunReport(opts: CreateOptions, stageCosts: StageCost[]): Pro
             fmtTokens(c.tokensIn),
             fmtTokens(c.tokensOut),
             `${cachePct(c.cacheHits, c.turns)}%`,
-            'ran',
+            c.status ?? 'ran',
           ]),
     ),
     row([
@@ -700,7 +703,9 @@ export async function runCreate(opts: CreateOptions): Promise<{ ok: boolean; com
     // Cost accumulates across all attempts of the stage, so a stage that took a
     // retry to complete shows its true total in the summary (5.2).
     const stageStart = Date.now();
-    const cost: StageCost = { name: stage.name, resumed: false, wallMs: 0, turns: 0, tokensIn: 0, tokensOut: 0, cacheHits: 0 };
+    const cost: StageCost = { name: stage.name, resumed: false, wallMs: 0, turns: 0, tokensIn: 0, tokensOut: 0, cacheHits: 0, status: 'running' };
+    stageCosts.push(cost);
+    await writeRunReport(opts, stageCosts);
     for (let attempt = 1; ; attempt++) {
       // Re-scaffold before every attempt, not just once per stage. A previous
       // attempt that failed at the commit gate rolls the tree back
@@ -748,6 +753,10 @@ export async function runCreate(opts: CreateOptions): Promise<{ ok: boolean; com
       cost.tokensIn += res.stats?.tokensIn ?? 0;
       cost.tokensOut += res.stats?.tokensOut ?? 0;
       cost.cacheHits += res.cacheHits ?? 0;
+      cost.wallMs = Date.now() - stageStart;
+      cost.status = res.exitPath === 'stalled' ? 'stalled' : 'running';
+      await writeRunReport(opts, stageCosts);
+      
       stageTranscriptDir = res.transcriptDir; // last attempt's run dir (for SVG artifacts / report)
 
       // A successful run is not the same as a completed stage: an agent can
@@ -808,8 +817,8 @@ export async function runCreate(opts: CreateOptions): Promise<{ ok: boolean; com
       guidance = diagnosis.guidance ?? `The previous attempt failed: ${failure}. ${diagnosis.reason}`;
     }
 
+    cost.status = undefined; // marks as 'ran' upon completion/failure exits
     cost.wallMs = Date.now() - stageStart;
-    stageCosts.push(cost);
 
     if (!stageDone) {
       logResumePoint(opts, stage, i);
@@ -818,6 +827,17 @@ export async function runCreate(opts: CreateOptions): Promise<{ ok: boolean; com
       return { ok: false, completed };
     }
     completed.push(stage.name);
+    
+    // The successful runAgentLoop created a commit. Amend it to include the run artifacts.
+    try {
+      if (stageTranscriptDir) {
+        await execa('git', ['add', '-f', stageTranscriptDir, path.join(opts.repoRoot, '.copperhead/runs/REPORT.md'), path.join(opts.repoRoot, '.copperhead/runs/report.json')], { cwd: opts.repoRoot });
+        await execa('git', ['commit', '--amend', '--no-edit', '--no-verify'], { cwd: opts.repoRoot });
+      }
+    } catch (err) {
+      opts.log(`warning: could not amend stage commit with run artifacts (${(err as Error).message})`);
+    }
+
     await renderStageArtifacts(opts, stage.name, stageTranscriptDir);
     await emitJlcpcbAfterOutputs(stage.name, opts);
     logCumulative(opts, stageCosts);
