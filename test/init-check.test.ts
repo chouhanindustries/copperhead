@@ -86,7 +86,7 @@ describe('copperhead check (AC-2)', () => {
       expect(res.erc).toEqual({ ok: true, violations: 0 });
       expect(res.drc).toEqual({ ok: true, violations: 0 });
       expect(res.drift.ok).toBe(true);
-      expect(Object.keys(res).sort()).toEqual(['constraints', 'drc', 'drift', 'erc', 'ok', 'openspec']);
+      expect(Object.keys(res).sort()).toEqual(['constraints', 'drc', 'drift', 'erc', 'ok', 'openspec', 'symbols']);
     } finally {
       await cleanup();
     }
