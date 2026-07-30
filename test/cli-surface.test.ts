@@ -36,7 +36,8 @@ describe('--repo resolution', () => {
   });
 
   it('passes an absolute path through unchanged', () => {
-    expect(repoOf({ repo: '/tmp/some-repo' })).toBe('/tmp/some-repo');
+    const absPath = path.resolve('/tmp/some-repo');
+    expect(repoOf({ repo: absPath })).toBe(absPath);
   });
 
   it('defaults to the working directory', () => {
@@ -71,8 +72,6 @@ describe('budget-exhausted prompt (design D1)', () => {
 });
 
 describe('theme styling (color on)', () => {
-  // These branches early-return when color is off, which is how every other
-  // suite runs them, so they need their own explicit color-on coverage.
   beforeEach(() => setColorEnabled(true));
 
   it('colors a successful outcome differently from a refusal', () => {
@@ -81,7 +80,6 @@ describe('theme styling (color on)', () => {
     expect(done).toContain('done');
     expect(refused).toContain('refused');
     expect(done).not.toBe(refused);
-    // The head is painted and the tail dimmed, so both carry SGR.
     expect(done).toMatch(/\x1b\[/);
     expect(refused).toMatch(/\x1b\[/);
   });
@@ -113,9 +111,6 @@ describe('theme styling (color on)', () => {
 });
 
 describe('demo --tour honours --json', () => {
-  // The only end-to-end check of the CLI wiring: --tour short-circuits before
-  // the try block, so it used to print prose even under --json. Runs the real
-  // entry point through tsx; --tour touches no network and no kicad-cli.
   it('emits structured JSON, not prose, under --json', async () => {
     const res = await execa('npx', ['tsx', 'src/cli.ts', '--json', 'demo', '--tour'], {
       cwd: ROOT,
@@ -126,7 +121,6 @@ describe('demo --tour honours --json', () => {
     const parsed = JSON.parse(res.stdout) as { tour: string[] };
     expect(Array.isArray(parsed.tour)).toBe(true);
     expect(parsed.tour.join('\n')).toContain('copperhead');
-    // Machine-readable means no leftover SGR in the payload.
     expect(res.stdout).not.toMatch(/\x1b\[/);
   }, 60_000);
 
