@@ -360,6 +360,48 @@ export async function commitAll(repo: string, message: string): Promise<string> 
 }
 
 /**
+ * `git ls-files --stage` for exactly one path: `"<mode> <blob-sha>"` if it
+ * currently has a staged entry, or `null` if it doesn't. Queried one path at
+ * a time (not batched) so restoring never needs to parse git's own displayed
+ * path strings back against the caller's paths — an absolute-vs-relative or
+ * slash-direction mismatch there would silently restore the wrong entry (or
+ * none), which is worse than not restoring at all.
+ */
+async function stagedEntry(repo: string, p: string): Promise<string | null> {
+  const line = await git(repo, ['ls-files', '--stage', '--', p]);
+  if (!line) return null;
+  const [mode, sha] = line.split('\t')[0]!.split(/\s+/);
+  return `${mode},${sha}`;
+}
+
+/**
+ * `git update-index --cacheinfo` rejects an absolute Windows path outright
+ * ("Invalid path ... cannot add") even though `git add`/`git diff --cached`
+ * happily accept the same absolute paths used everywhere else in this file —
+ * it wants a path relative to the repo root, forward-slashed regardless of
+ * platform, the way git always stores paths internally. Caught in review
+ * (by a failing test on this exact platform, not by reasoning about it).
+ */
+function toRepoRelative(repo: string, p: string): string {
+  return path.relative(repo, p).split(path.sep).join('/');
+}
+
+/**
+ * Put back exactly the staged blob {@link stagedEntry} captured — not just
+ * "leave whatever is currently staged alone" — or, if the path had no prior
+ * staged entry, drop it from the index the way `git reset -- <path>` would.
+ * `git update-index --cacheinfo` rewrites only the index entry; it never
+ * touches the working tree, so the file on disk is untouched either way.
+ */
+async function restoreStagedEntry(repo: string, p: string, entry: string | null): Promise<void> {
+  if (entry) {
+    await git(repo, ['update-index', '--cacheinfo', `${entry},${toRepoRelative(repo, p)}`]).catch(() => {});
+  } else {
+    await git(repo, ['reset', '--', p]).catch(() => {});
+  }
+}
+
+/**
  * Commit exactly the given paths — never a directory, never `-A` — as a NEW,
  * standalone commit, and never an amend of an existing one (change
  * flush-run-metrics-incrementally, design D5/D8: a run's own commit can
@@ -381,14 +423,17 @@ export async function commitPaths(
 ): Promise<string | null> {
   const existing = paths.filter((p) => existsSync(p));
   if (!existing.length) return null;
-  // Captured before this helper's own `git add -f`: on a failed commit, the
-  // cleanup below must be able to tell "nothing was staged for these exact
-  // paths before I touched them" (safe to reset back to HEAD) from
-  // "something was legitimately staged here already" (a dirty-tree run,
-  // gitPreflight's allowDirty, can have real staged content under these
-  // exact paths — resetting would silently discard it, not just what this
-  // call added). Caught in review.
-  const preExisting = await git(repo, ['diff', '--cached', '--name-only', '--', ...existing]);
+  // Snapshot each path's exact pre-existing staged entry (mode + blob sha),
+  // not merely whether *something* was staged — this helper's own `git add
+  // -f` below overwrites the index entry unconditionally, so on a failed
+  // commit the earlier fix ("skip the reset when something was already
+  // staged") still silently left *this call's* content staged instead of
+  // restoring what was there before, if the two differed (e.g. the working
+  // tree changed between an earlier stage and this call running). Caught in
+  // review, twice: a boolean "was it staged" isn't enough — the actual blob
+  // has to be captured and put back.
+  const preEntries = new Map<string, string | null>();
+  for (const p of existing) preEntries.set(p, await stagedEntry(repo, p));
   await git(repo, ['add', '-f', '--', ...existing]);
   // Pathspec-scoped on both the check and the commit itself, not just the
   // add: an unscoped `git diff --cached`/`git commit` would sweep any other
@@ -402,14 +447,12 @@ export async function commitPaths(
     await git(repo, ['commit', '-m', message, ...(opts.noVerify ? ['--no-verify'] : []), '--', ...existing]);
   } catch (err) {
     // A failing pre-commit hook (or any other commit failure) must not leave
-    // these paths sitting staged — the caller's own tree may be inspected
-    // for cleanliness right after (e.g. fail()'s snapshot contract). But
-    // only when there was nothing to lose: if these exact paths already had
-    // staged content before this call ran, resetting to HEAD would discard
-    // that pre-existing state, not just what this call added — so it is
-    // left as-is instead, staged alongside whatever else was already there.
-    if (!preExisting) {
-      await git(repo, ['reset', '--', ...existing]).catch(() => {});
+    // these paths in whatever state this call's own `add -f` put them in —
+    // the caller's own tree may be inspected for cleanliness right after
+    // (e.g. fail()'s snapshot contract) — but restoring means putting back
+    // exactly what was staged before, not discarding it to HEAD.
+    for (const p of existing) {
+      await restoreStagedEntry(repo, p, preEntries.get(p) ?? null);
     }
     throw err;
   }
@@ -436,20 +479,31 @@ export function commitPathsSync(
   // already handles the resulting throw. Caught in review.
   const run = (args: string[]): string =>
     execFileSync('git', args, { cwd: repo, encoding: 'utf8', timeout: 5000 }).trim();
+  const stagedEntrySync = (p: string): string | null => {
+    const line = run(['ls-files', '--stage', '--', p]);
+    if (!line) return null;
+    const [mode, sha] = line.split('\t')[0]!.split(/\s+/);
+    return `${mode},${sha}`;
+  };
+  const restoreStagedEntrySync = (p: string, entry: string | null): void => {
+    try {
+      // See toRepoRelative above: --cacheinfo rejects an absolute path.
+      if (entry) run(['update-index', '--cacheinfo', `${entry},${toRepoRelative(repo, p)}`]);
+      else run(['reset', '--', p]);
+    } catch {
+      // best effort, see commitPaths
+    }
+  };
   // See commitPaths above: captured before `add -f` so the failure cleanup
-  // never discards content that was already staged under these exact paths.
-  const preExisting = run(['diff', '--cached', '--name-only', '--', ...existing]);
+  // restores the exact blob that was staged before, not just "something".
+  const preEntries = existing.map((p): [string, string | null] => [p, stagedEntrySync(p)]);
   run(['add', '-f', '--', ...existing]);
   // Pathspec-scoped, see commitPaths above.
   if (!run(['diff', '--cached', '--name-only', '--', ...existing])) return null;
   try {
     run(['commit', '-m', message, ...(opts.noVerify ? ['--no-verify'] : []), '--', ...existing]);
   } catch (err) {
-    try {
-      if (!preExisting) run(['reset', '--', ...existing]);
-    } catch {
-      // best effort, see commitPaths
-    }
+    for (const [p, entry] of preEntries) restoreStagedEntrySync(p, entry);
     throw err;
   }
   return run(['rev-parse', 'HEAD']);

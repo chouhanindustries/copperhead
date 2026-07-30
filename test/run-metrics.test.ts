@@ -500,12 +500,17 @@ describe('the synchronous SIGINT/SIGTERM primitives (AC-16.9, design D5)', () =>
     }
   });
 
-  it('a failed commit does not discard content already staged under the same path', async () => {
-    // Previously, a failed commit's cleanup always ran `git reset -- <paths>`
-    // to unstage them — correct when there was nothing there before, but a
-    // dirty-tree run (allowDirty) can legitimately have real staged content
-    // under these exact paths already; resetting discarded that too, not
-    // just what this call added. Caught in review.
+  it('a failed commit restores the exact blob that was staged before, not just "something"', async () => {
+    // Two rounds of review, same underlying issue at increasing depth:
+    // (1) a failed commit's cleanup always ran `git reset -- <paths>`,
+    // discarding any pre-existing staged content outright; (2) the first fix
+    // only checked *whether* something was staged, but this helper's own
+    // `git add -f` unconditionally overwrites the index entry with whatever
+    // is on disk *before* the commit is even attempted — so if the
+    // pre-existing staged blob differed from the current working-tree
+    // content (staged earlier, file changed since), the "skip the reset"
+    // fix was silently leaving the *new* content staged, not restoring the
+    // *original* one. Verified here at the blob level, not just presence.
     const { repo, cleanup } = await tempFixtureRepo();
     try {
       const hook = path.join(repo, '.git', 'hooks', 'pre-commit');
@@ -513,14 +518,17 @@ describe('the synchronous SIGINT/SIGTERM primitives (AC-16.9, design D5)', () =>
       await chmod(hook, 0o755);
 
       const target = path.join(repo, '.copperhead', 'runs', 'x', 'summary.md');
+      const relativeTarget = '.copperhead/runs/x/summary.md';
       await mkdir(path.dirname(target), { recursive: true });
       await writeFile(target, '# pre-existing staged content\n', 'utf8');
       await execa('git', ['add', '-f', target], { cwd: repo }); // staged BEFORE commitPathsSync ever touches it
+      const { stdout: before } = await execa('git', ['show', `:${relativeTarget}`], { cwd: repo });
+      await writeFile(target, '# newer artifact content\n', 'utf8'); // worktree changes after staging, before the call
 
       expect(() => commitPathsSync(repo, [target], 'copperhead: partial run data x (interrupted)')).toThrow();
 
-      const { stdout: staged } = await execa('git', ['diff', '--cached', '--name-only'], { cwd: repo });
-      expect(staged.split('\n')).toContain('.copperhead/runs/x/summary.md');
+      const { stdout: after } = await execa('git', ['show', `:${relativeTarget}`], { cwd: repo });
+      expect(after).toBe(before);
     } finally {
       await cleanup();
     }
