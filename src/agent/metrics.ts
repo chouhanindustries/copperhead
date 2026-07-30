@@ -25,12 +25,30 @@ export interface LiveMetrics {
   lastUpdateAt: string;
 }
 
-function metricsPath(dir: string): string {
+/** Exported so callers (e.g. loop.ts's artifact-path list) derive the path
+ *  from this module rather than hardcoding the filename, which would
+ *  silently drift on a rename here. */
+export function metricsPath(dir: string): string {
   return path.join(dir, 'metrics.json');
 }
 
 function serialize(data: LiveMetrics): string {
   return JSON.stringify(data, null, 2) + '\n';
+}
+
+/**
+ * Monotonic per-process counter so two writes issued close together (the
+ * heartbeat's fire-and-forget snapshot can overlap the awaited per-call one,
+ * and the synchronous SIGINT/SIGTERM twin can run concurrently with an
+ * in-flight async write) never share a temp filename. `process.pid` alone is
+ * NOT enough: it is identical across every write in this process, so two
+ * writers racing on the same tmp path could rename/close over each other and
+ * corrupt or drop a metrics.json snapshot — exactly the failure atomicity
+ * here exists to prevent. Caught in review.
+ */
+let writeSeq = 0;
+function tmpPath(target: string): string {
+  return `${target}.tmp-${process.pid}-${writeSeq++}`;
 }
 
 /**
@@ -42,7 +60,7 @@ function serialize(data: LiveMetrics): string {
 export async function writeLiveMetrics(dir: string, data: LiveMetrics): Promise<void> {
   await mkdir(dir, { recursive: true });
   const target = metricsPath(dir);
-  const tmp = `${target}.tmp-${process.pid}`;
+  const tmp = tmpPath(target);
   const fh = await open(tmp, 'w');
   try {
     await fh.writeFile(serialize(data), 'utf8');
@@ -62,7 +80,7 @@ export async function writeLiveMetrics(dir: string, data: LiveMetrics): Promise<
 export function writeLiveMetricsSync(dir: string, data: LiveMetrics): void {
   mkdirSync(dir, { recursive: true });
   const target = metricsPath(dir);
-  const tmp = `${target}.tmp-${process.pid}`;
+  const tmp = tmpPath(target);
   const fd = openSync(tmp, 'w');
   try {
     writeSync(fd, serialize(data));

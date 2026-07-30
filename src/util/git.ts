@@ -382,10 +382,18 @@ export async function commitPaths(
   const existing = paths.filter((p) => existsSync(p));
   if (!existing.length) return null;
   await git(repo, ['add', '-f', '--', ...existing]);
-  const staged = await git(repo, ['diff', '--cached', '--name-only']);
+  // Pathspec-scoped on both the check and the commit itself, not just the
+  // add: a run can legitimately execute against a dirty tree (gitPreflight's
+  // allowDirty, which create.ts's stage runs always set), so other content
+  // can already be staged. An unscoped `git diff --cached`/`git commit` would
+  // sweep that unrelated staged work into this "targeted" commit — exactly
+  // what "exactly the given paths" promises not to do. `git commit -- <paths>`
+  // commits only those paths' current content regardless of what else is
+  // staged, and leaves the rest of the index untouched. Caught in review.
+  const staged = await git(repo, ['diff', '--cached', '--name-only', '--', ...existing]);
   if (!staged) return null;
   try {
-    await git(repo, ['commit', '-m', message, ...(opts.noVerify ? ['--no-verify'] : [])]);
+    await git(repo, ['commit', '-m', message, ...(opts.noVerify ? ['--no-verify'] : []), '--', ...existing]);
   } catch (err) {
     // A failing pre-commit hook (or any other commit failure) must not leave
     // these paths sitting staged — the caller's own tree may be inspected
@@ -411,11 +419,18 @@ export function commitPathsSync(
 ): string | null {
   const existing = paths.filter((p) => existsSync(p));
   if (!existing.length) return null;
-  const run = (args: string[]): string => execFileSync('git', args, { cwd: repo, encoding: 'utf8' }).trim();
+  // A short timeout, not the default of none: this runs from the SIGINT/
+  // SIGTERM handler, whose whole point is to exit promptly (design D5). An
+  // index.lock or a slow git would otherwise block execFileSync forever,
+  // which is the exact opposite of "exit promptly" — the caller's catch
+  // already handles the resulting throw. Caught in review.
+  const run = (args: string[]): string =>
+    execFileSync('git', args, { cwd: repo, encoding: 'utf8', timeout: 5000 }).trim();
   run(['add', '-f', '--', ...existing]);
-  if (!run(['diff', '--cached', '--name-only'])) return null;
+  // Pathspec-scoped, see commitPaths above.
+  if (!run(['diff', '--cached', '--name-only', '--', ...existing])) return null;
   try {
-    run(['commit', '-m', message, ...(opts.noVerify ? ['--no-verify'] : [])]);
+    run(['commit', '-m', message, ...(opts.noVerify ? ['--no-verify'] : []), '--', ...existing]);
   } catch (err) {
     try {
       run(['reset', '--', ...existing]);

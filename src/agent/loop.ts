@@ -17,7 +17,7 @@ import {
   type CopperheadConfig,
 } from '../config.js';
 import { Transcript, appendEventSync, type ExitPath, type RunStats } from './transcript.js';
-import { writeLiveMetrics, writeLiveMetricsSync, type LiveMetrics } from './metrics.js';
+import { writeLiveMetrics, writeLiveMetricsSync, metricsPath, type LiveMetrics } from './metrics.js';
 import { collectRunMeta, renderCliHeader, type RunMeta, type RunMetaInput } from './runmeta.js';
 import { plainRenderer, fmtDuration, fmtTokens, type ProgressRenderer } from './render.js';
 import { styleHeaderLines } from './theme.js';
@@ -414,11 +414,27 @@ async function runWithMemory(
    *  trail only, never a design file (design D5/D8). Summary may not exist
    *  yet at call time; commitPaths/commitPathsSync silently skip missing
    *  paths. */
-  const artifactPaths = (): string[] => [
-    transcript.jsonlPath,
-    path.join(transcript.dir, 'metrics.json'),
-    path.join(transcript.dir, 'summary.md'),
-  ];
+  const artifactPaths = (): string[] => [transcript.jsonlPath, metricsPath(transcript.dir), path.join(transcript.dir, 'summary.md')];
+
+  /**
+   * Commit this run's audit trail as a new, standalone commit, gated by
+   * `config.commitRunArtifacts` (design D5/D8). Centralizes the gate/try/
+   * catch/log shape that was previously repeated at every terminal branch
+   * with inconsistent logging — the refuse/dry-run branches used to log
+   * nothing on success, unlike fail()/done (caught in review).
+   */
+  const commitArtifacts = async (label: string, opts: { noVerify?: boolean } = {}): Promise<void> => {
+    if (!config.commitRunArtifacts) {
+      log(`run artifacts not committed (commitRunArtifacts: false); see ${transcript.dir}`);
+      return;
+    }
+    try {
+      const sha = await commitPaths(repoRoot, artifactPaths(), `copperhead: ${label}`, opts);
+      if (sha) log(`committed run artifacts ${sha.slice(0, 10)}`);
+    } catch (err) {
+      log(`warning: could not commit run artifacts (${(err as Error).message})`);
+    }
+  };
 
   /** One outcome line, printed last at every terminal branch (AC-8.5). */
   const outcomeLine = (s: RunStats, extra?: string | null): string =>
@@ -469,18 +485,7 @@ async function runWithMemory(
     // never the 'running' placeholder (design D2). Written after restore()
     // and writeSummary() so the files being committed already exist.
     await writeLiveMetrics(transcript.dir, liveMetrics(exitPath, turnsUsed));
-    let artifactsCommit: string | null = null;
-    if (config.commitRunArtifacts) {
-      try {
-        artifactsCommit = await commitPaths(
-          repoRoot,
-          artifactPaths(),
-          `copperhead: partial run data ${ctx.runId} (${exitPath})`,
-        );
-      } catch (err) {
-        log(`warning: could not commit run artifacts (${(err as Error).message})`);
-      }
-    }
+    await commitArtifacts(`partial run data ${ctx.runId} (${exitPath})`);
     log(`run failed: ${reason}`);
     if (restoreError) {
       log(`WARNING: rollback failed (${restoreError}); the working tree may be in a partial state`);
@@ -491,11 +496,6 @@ async function runWithMemory(
       log(
         `failed work preserved: git stash entry "copperhead failed run ${ctx.runId}" (${preserved.slice(0, 10)}); recover with \`git stash apply\`, discard with \`git stash drop\``,
       );
-    }
-    if (artifactsCommit) {
-      log(`committed run artifacts ${artifactsCommit.slice(0, 10)}`);
-    } else if (!config.commitRunArtifacts) {
-      log(`run artifacts not committed (commitRunArtifacts: false); see ${transcript.dir}`);
     }
     log(`transcript: ${transcript.jsonlPath}`);
     log(`summary: ${summaryPath}`);
@@ -819,13 +819,7 @@ async function runWithMemory(
             verification: 'n/a (refused before verification)',
           });
           await writeLiveMetrics(transcript.dir, liveMetrics('refused', turnsUsed));
-          if (config.commitRunArtifacts) {
-            try {
-              await commitPaths(repoRoot, artifactPaths(), `copperhead: partial run data ${ctx.runId} (refused)`);
-            } catch (err) {
-              log(`warning: could not commit run artifacts (${(err as Error).message})`);
-            }
-          }
+          await commitArtifacts(`partial run data ${ctx.runId} (refused)`);
           log(`refused: ${summary}`);
           r.finish(outcomeLine(runStats));
           return {
@@ -875,13 +869,7 @@ async function runWithMemory(
             stats: runStats,
           });
           await writeLiveMetrics(transcript.dir, liveMetrics('done', turnsUsed));
-          if (config.commitRunArtifacts) {
-            try {
-              await commitPaths(repoRoot, artifactPaths(), `copperhead: partial run data ${ctx.runId} (dry-run)`);
-            } catch (err) {
-              log(`warning: could not commit run artifacts (${(err as Error).message})`);
-            }
-          }
+          await commitArtifacts(`partial run data ${ctx.runId} (dry-run)`);
           r.finish(outcomeLine(runStats, 'dry run: changes reverted'));
           return {
             outcome: 'success',
@@ -974,16 +962,7 @@ async function runWithMemory(
         // design commit above may already be followed by an openspec-archive
         // commit; amending "the last commit" would risk landing on whichever
         // of those happened to be HEAD, silently misattributing the artifacts.
-        let artifactsCommit: string | null = null;
-        if (config.commitRunArtifacts) {
-          try {
-            artifactsCommit = await commitPaths(repoRoot, artifactPaths(), `copperhead: run artifacts ${ctx.runId}`);
-          } catch (err) {
-            log(`warning: could not commit run artifacts (${(err as Error).message})`);
-          }
-        }
-        if (artifactsCommit) log(`committed run artifacts ${artifactsCommit.slice(0, 10)}`);
-        else if (!config.commitRunArtifacts) log(`run artifacts not committed (commitRunArtifacts: false); see ${transcript.dir}`);
+        await commitArtifacts(`run artifacts ${ctx.runId}`);
         log(`committed ${commit.slice(0, 10)} (${files.length} file(s))`);
         r.finish(outcomeLine(runStats, `committed ${commit.slice(0, 10)}`));
         return {

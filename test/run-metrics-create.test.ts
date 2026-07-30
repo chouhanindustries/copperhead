@@ -120,10 +120,18 @@ describe('stage-boundary REPORT.md/report.json regeneration (AC-16.4)', () => {
     }
   });
 
-  it('an in-flight stage would render as "running" (StageCost.running flag) rather than being omitted', async () => {
-    // Structural guard: the report's per-stage status derivation must be able
-    // to express 'running', distinct from 'ran'/'resumed' (design D2's
-    // anti-conflation rule extended to create.ts's StageCost).
+  it('a mocked-success run never reports a stage as "stalled" or an unexpected status (regression guard for the PR#149 conflation bug)', async () => {
+    // Retitled after review: the previous version of this test asserted
+    // `status === 'ran' || status === 'running'` against a *finished*
+    // report, which passes even if `StageCost.running` were deleted
+    // outright (every row would just be 'ran') — it proved nothing about
+    // in-flight rendering. That property is what the previous test's
+    // `sawRunningAtCallTime` actually demonstrates, by reading report.json
+    // from inside the mock at call time, before the stage resolves. This
+    // test instead guards a real, distinct invariant on the finished
+    // report: a status is only ever 'resumed', 'running', or 'ran' — never
+    // a leaked 'stalled' placeholder, the exact class of bug PR#149 had in
+    // its per-run metrics.json.
     const { repo, cleanup } = await tempFixtureRepo();
     try {
       await mkdir(path.join(repo, '.copperhead'), { recursive: true });
@@ -131,9 +139,9 @@ describe('stage-boundary REPORT.md/report.json regeneration (AC-16.4)', () => {
       await writeFile(briefPath, '# A tiny device\n', 'utf8');
       await runCreate({ repoRoot: repo, briefPath, model: 'gpt-5', log: () => {} });
       const report = await reportJson(repo);
-      // every completed stage in this mocked run is 'ran', never 'stalled' —
-      // regression guard mirroring the loop.ts-level one in run-metrics.test.ts
-      expect(report.stages.every((s) => s.status === 'ran' || s.status === 'running')).toBe(true);
+      expect(report.stages.length).toBeGreaterThan(0);
+      expect(report.stages.every((s) => s.status !== 'stalled')).toBe(true);
+      expect(report.stages.every((s) => ['resumed', 'running', 'ran'].includes(s.status))).toBe(true);
     } finally {
       await cleanup();
     }

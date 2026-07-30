@@ -31,6 +31,14 @@ class TwoThenHangProvider implements Provider {
   }
 }
 
+// Referenced (not unref'd), so this process cannot exit on its own while the
+// third provider call hangs. A pending promise does not hold the event loop
+// open by itself, and the loop's own heartbeat timer is unref'd — without
+// this, nothing guarantees the process survives long enough for the parent
+// to actually deliver the SIGKILL the test is meant to exercise (caught in
+// review).
+setInterval(() => {}, 60_000);
+
 await runAgentLoop({
   repoRoot,
   request: 'sigkill survival fixture',

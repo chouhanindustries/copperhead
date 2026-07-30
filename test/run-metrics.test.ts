@@ -1,16 +1,29 @@
 import { describe, it, expect, vi } from 'vitest';
-import { chmod, mkdir, readFile, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execa } from 'execa';
 import { runAgentLoop, type RunOptions } from '../src/agent/loop.js';
+import { runCreate } from '../src/commands/create.js';
 import type { ChatOpts, Provider, Turn } from '../src/agent/types.js';
 import { writeLiveMetricsSync, writeLiveMetrics, type LiveMetrics } from '../src/agent/metrics.js';
 import { appendEventSync } from '../src/agent/transcript.js';
 import { commitPathsSync, commitPaths } from '../src/util/git.js';
 import { CachingProvider } from '../src/agent/response-cache.js';
 import { tempFixtureRepo } from './helpers.js';
+
+// A real spy that still calls through to the actual implementation, so every
+// other test in this file keeps writing genuine metrics.json files — only
+// the regression-guard test below inspects the recorded call args. Without
+// this, the guard test has nothing real to assert against (caught in
+// review: an earlier version hand-built literals and asserted them against
+// themselves, which passed unconditionally).
+vi.mock('../src/agent/metrics.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../src/agent/metrics.js')>();
+  return { ...actual, writeLiveMetrics: vi.fn(actual.writeLiveMetrics) };
+});
 
 const SCRIPT = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures', 'scripts', 'sigkill-run.ts');
 
@@ -109,7 +122,10 @@ describe('per-call llm-call events (AC-16.1)', () => {
     try {
       const textTurn: Turn = { text: 'thinking', toolCalls: [], usage: { inputTokens: 10, outputTokens: 5 } };
       const provider = new ScriptedProvider([textTurn]);
-      await runAgentLoop(loopOpts(repo, provider, { maxTurns: 1 }));
+      const res = await runAgentLoop(loopOpts(repo, provider, { maxTurns: 1 }));
+      const calls = (await transcriptEvents(res.transcriptDir)).filter((e) => e.type === 'llm-call');
+      expect(calls[0]!.data.stopReason).toBe('text');
+      expect(calls[0]!.data.toolCalls).toEqual([]);
     } finally {
       await cleanup();
     }
@@ -257,31 +273,21 @@ describe('live metrics.json (AC-16.3)', () => {
   it('a healthy run never reports status "stalled" mid-run (regression guard for the PR#149 conflation bug)', async () => {
     const { repo, cleanup } = await tempFixtureRepo();
     try {
-      // A spy captures every writeLiveMetrics call's status, including the
-      // ones written mid-run (before the terminal snapshot).
-      const seen: LiveMetrics['status'][] = [];
+      const spy = vi.mocked(writeLiveMetrics);
+      spy.mockClear();
       const provider = new ScriptedProvider([spin('a'), spin('b'), finishTurn('done', 'all good')]);
       const res = await runAgentLoop(loopOpts(repo, provider, { maxTurns: 5 }));
-      // Reconstruct mid-run status from the llm-call event count vs the
-      // final metrics.json: every write before the terminal one must have
-      // used 'running' — verified by re-deriving what the live writer would
-      // have produced at each point (writeLiveMetrics itself is exercised
-      // directly here since the intermediate files are overwritten in place).
-      for (let i = 1; i <= 3; i++) {
-        const data: LiveMetrics = {
-          runId: 'x',
-          status: 'running',
-          turn: i,
-          maxTurns: 5,
-          tokensIn: 0,
-          tokensOut: 0,
-          cacheHits: 0,
-          startedAt: new Date().toISOString(),
-          lastUpdateAt: new Date().toISOString(),
-        };
-        seen.push(data.status);
-      }
-      expect(seen.every((s) => s === 'running')).toBe(true);
+      // Real recorded calls to the actual writer, not hand-built literals.
+      // Every write except the last (the terminal snapshot, made once after
+      // the run reaches 'done') must be 'running' — PR#149's bug was writing
+      // 'stalled' as a placeholder for every one of these.
+      const calls = spy.mock.calls;
+      expect(calls.length).toBeGreaterThanOrEqual(2); // at least the 2 per-turn snapshots
+      const nonTerminal = calls.slice(0, -1);
+      expect(nonTerminal.length).toBeGreaterThan(0);
+      expect(nonTerminal.every(([, data]) => data.status === 'running')).toBe(true);
+      const [, lastData] = calls[calls.length - 1]!;
+      expect(lastData.status).toBe('done');
       const final = await readMetrics(res.transcriptDir);
       expect(final.status).toBe('done'); // the terminal snapshot is a real ExitPath, not a placeholder
     } finally {
@@ -491,10 +497,15 @@ describe('SIGKILL survival across a real process boundary (AC-16.2)', () => {
         }
         if (!dir) await new Promise((r) => setTimeout(r, 100));
       }
-      expect(dir, 'expected two llm-call events to land before the timeout').toBeTruthy();
-
-      child.kill('SIGKILL');
-      await child.catch(() => {}); // wait for the process to actually exit
+      // try/finally, not a bare assertion: if the poll times out, the throw
+      // must not skip killing the spawned child — otherwise it leaks for the
+      // rest of the test run (caught in review).
+      try {
+        expect(dir, 'expected two llm-call events to land before the timeout').toBeTruthy();
+      } finally {
+        child.kill('SIGKILL');
+        await child.catch(() => {}); // wait for the process to actually exit
+      }
 
       const events = await transcriptEvents(dir!);
       const calls = events.filter((e) => e.type === 'llm-call');
@@ -510,4 +521,30 @@ describe('SIGKILL survival across a real process boundary (AC-16.2)', () => {
       await cleanup();
     }
   }, 20000);
+});
+
+describe('stage-start report write stays disk-only (design D8 regression)', () => {
+  it('a fresh, zero-commit repo still fails on "repository has no commits", not a later provider error', async () => {
+    // Guards the exact bug design D8 documents: create.ts's stage-start
+    // writeRunReport() call runs before that stage's own runAgentLoop call,
+    // i.e. before gitPreflight has validated the repo even once. If a
+    // stage-start commit were reintroduced there, it would create this
+    // repo's first commit out of a REPORT.md write, silently curing the "no
+    // commits yet" precondition — and this test would then fail with a
+    // provider-resolution error instead of the one asserted below (this is
+    // exactly the regression a real run of this test caught during
+    // development). Deliberately in this file, not
+    // run-metrics-create.test.ts: that file mocks runAgentLoop entirely, so
+    // it cannot exercise the real gitPreflight check this test is about.
+    const dir = await mkdtemp(path.join(tmpdir(), 'ch-d8-regression-'));
+    try {
+      await writeFile(path.join(dir, 'brief.md'), 'A tiny USB macro keypad', 'utf8');
+      await execa('git', ['init', '-q'], { cwd: dir });
+      await expect(
+        runCreate({ repoRoot: dir, briefPath: path.join(dir, 'brief.md'), model: 'gpt-5', log: () => {} }),
+      ).rejects.toThrow(/repository has no commits/);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
 });

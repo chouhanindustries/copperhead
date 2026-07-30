@@ -134,7 +134,9 @@ One directory per \`do\`/\`create\`/\`sync\` run: \`transcript.jsonl\` (full aud
 trail, including a per-call \`llm-call\` event for every LLM call), a live
 \`metrics.json\` current for the whole run, and \`summary.md\` (human-readable:
 request, plan, files touched, verification results, decisions, open
-obligations). All three redact secrets at write time.
+obligations). \`transcript.jsonl\` and \`summary.md\` redact secrets at write
+time; \`metrics.json\` holds only token counts and status, never free text, so
+it is written directly.
 
 The directory itself is gitignored (so a stray file never gets swept in by
 accident), but when \`commitRunArtifacts\` is true (the default), exactly
@@ -142,8 +144,10 @@ accident), but when \`commitRunArtifacts\` is true (the default), exactly
 committed as their own standalone commit at the end of every run — never the
 whole directory, and never \`llm-cache/\` (kept out by its own \`.gitignore\`).
 \`create\` additionally commits the pipeline-level \`REPORT.md\`/\`report.json\`
-at every stage boundary. Set \`commitRunArtifacts: false\` in \`config.json\` to
-keep all of this on disk without committing it.
+once each stage's outcome is known and again at pipeline completion (the
+report is regenerated, but not committed, when a stage starts). Set
+\`commitRunArtifacts: false\` in \`config.json\` to keep all of this on disk
+without committing it.
 `;
 }
 
