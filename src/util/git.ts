@@ -1,4 +1,5 @@
 import { execa } from 'execa';
+import { execFileSync } from 'node:child_process';
 import { access, constants, cp, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -356,6 +357,74 @@ export async function commitAll(repo: string, message: string): Promise<string> 
   await git(repo, ['add', '-A']);
   await git(repo, ['commit', '-m', message]);
   return git(repo, ['rev-parse', 'HEAD']);
+}
+
+/**
+ * Commit exactly the given paths — never a directory, never `-A` — as a NEW,
+ * standalone commit, and never an amend of an existing one (change
+ * flush-run-metrics-incrementally, design D5/D8: a run's own commit can
+ * already be followed by a separate openspec-archive commit, so blindly
+ * amending "the last commit" risks landing on the wrong one). `-f` bypasses
+ * `.gitignore` for exactly these paths (run artifacts are gitignored by
+ * default, AC-4.3) without force-adding anything else nearby. Paths that no
+ * longer exist are silently skipped; if none of the paths exist, or nothing
+ * ends up staged (e.g. identical content already committed), no commit is
+ * made and `null` is returned rather than erroring on "nothing to commit".
+ * `noVerify` is a narrow, deliberate exception (design D6) — never the
+ * default.
+ */
+export async function commitPaths(
+  repo: string,
+  paths: string[],
+  message: string,
+  opts: { noVerify?: boolean } = {},
+): Promise<string | null> {
+  const existing = paths.filter((p) => existsSync(p));
+  if (!existing.length) return null;
+  await git(repo, ['add', '-f', '--', ...existing]);
+  const staged = await git(repo, ['diff', '--cached', '--name-only']);
+  if (!staged) return null;
+  try {
+    await git(repo, ['commit', '-m', message, ...(opts.noVerify ? ['--no-verify'] : [])]);
+  } catch (err) {
+    // A failing pre-commit hook (or any other commit failure) must not leave
+    // these paths sitting staged — the caller's own tree may be inspected
+    // for cleanliness right after (e.g. fail()'s snapshot contract). Best
+    // effort: if even the unstage fails, the original error is still what
+    // propagates.
+    await git(repo, ['reset', '--', ...existing]).catch(() => {});
+    throw err;
+  }
+  return git(repo, ['rev-parse', 'HEAD']);
+}
+
+/**
+ * Synchronous twin of {@link commitPaths}, used only from the SIGINT/SIGTERM
+ * handler in the agent loop: a signal handler must complete within one
+ * synchronous tick (design D5), so it cannot `await` anything.
+ */
+export function commitPathsSync(
+  repo: string,
+  paths: string[],
+  message: string,
+  opts: { noVerify?: boolean } = {},
+): string | null {
+  const existing = paths.filter((p) => existsSync(p));
+  if (!existing.length) return null;
+  const run = (args: string[]): string => execFileSync('git', args, { cwd: repo, encoding: 'utf8' }).trim();
+  run(['add', '-f', '--', ...existing]);
+  if (!run(['diff', '--cached', '--name-only'])) return null;
+  try {
+    run(['commit', '-m', message, ...(opts.noVerify ? ['--no-verify'] : [])]);
+  } catch (err) {
+    try {
+      run(['reset', '--', ...existing]);
+    } catch {
+      // best effort, see commitPaths
+    }
+    throw err;
+  }
+  return run(['rev-parse', 'HEAD']);
 }
 
 export async function changedFiles(repo: string, sinceHead: string): Promise<string[]> {

@@ -69,8 +69,10 @@ export class CachingProvider implements Provider {
         const cached = JSON.parse(await readFile(file, 'utf8')) as Turn;
         this.hits++;
         this.log?.(`llm-cache: replayed a cached response (hit #${this.hits}, no tokens spent)`);
-        // Report zero usage: replaying a cached turn costs nothing.
-        return { ...cached, usage: { inputTokens: 0, outputTokens: 0 } };
+        // Report zero usage: replaying a cached turn costs nothing. cacheHit
+        // is the only real per-call cache signal in this codebase — surfaced
+        // for the transcript's llm-call events (change flush-run-metrics-incrementally).
+        return { ...cached, usage: { inputTokens: 0, outputTokens: 0 }, cacheHit: true };
       } catch {
         // corrupt/partial cache file — fall through and regenerate
       }

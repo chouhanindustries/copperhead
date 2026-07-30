@@ -30,6 +30,13 @@ export interface Turn {
    * a near-miss simply never set it.
    */
   nudge?: string;
+  /**
+   * True when this Turn was served from the on-disk response cache
+   * (CachingProvider), never from a live provider call. Undefined on every
+   * real call — the only source of a true per-call cache signal (design D1,
+   * change flush-run-metrics-incrementally).
+   */
+  cacheHit?: boolean;
 }
 
 export interface ChatOpts {

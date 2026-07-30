@@ -1,4 +1,5 @@
-import { appendFile, mkdir, writeFile } from 'node:fs/promises';
+import { appendFile, mkdir, open, writeFile } from 'node:fs/promises';
+import { closeSync, fsyncSync, mkdirSync, openSync, writeSync } from 'node:fs';
 import path from 'node:path';
 import { redactSecrets } from '../util/redact.js';
 import { renderEnvironmentSection, type RunMeta } from './runmeta.js';
@@ -79,12 +80,31 @@ export class Transcript {
     await writeFile(this.jsonlPath, '', 'utf8');
   }
 
-  async event(type: string, data: unknown): Promise<void> {
+  /**
+   * `durable: true` (change flush-run-metrics-incrementally, design D3) does
+   * an explicit fsync before returning, for the one event type whose
+   * survive-a-SIGKILL guarantee this repo is actually tested against
+   * (`llm-call`). Every other event keeps the cheaper plain append — a
+   * completed write already reaches the OS before the promise resolves, so
+   * it survives a bare SIGKILL regardless; fsync only additionally protects
+   * against a concurrent OS crash, not worth paying for on every event.
+   */
+  async event(type: string, data: unknown, opts: { durable?: boolean } = {}): Promise<void> {
     const line = redactSecrets(JSON.stringify({ ts: new Date().toISOString(), type, data }));
     // The audit trail must survive anything that happens to the working tree
     // mid-run (a rollback path once deleted this directory); losing an event
     // is acceptable, crashing the run to report one is not.
     await mkdir(this.dir, { recursive: true });
+    if (opts.durable) {
+      const fh = await open(this.jsonlPath, 'a');
+      try {
+        await fh.appendFile(line + '\n', 'utf8');
+        await fh.sync();
+      } finally {
+        await fh.close();
+      }
+      return;
+    }
     await appendFile(this.jsonlPath, line + '\n', 'utf8');
   }
 
@@ -124,5 +144,23 @@ export class Transcript {
     await mkdir(this.dir, { recursive: true });
     await writeFile(out, redactSecrets(lines.join('\n') + '\n'), 'utf8');
     return out;
+  }
+}
+
+/**
+ * Synchronous, durable (fsync'd) twin of `Transcript.event(..., { durable:
+ * true })`, used only from the SIGINT/SIGTERM handler in the agent loop
+ * (change flush-run-metrics-incrementally, design D5): a signal handler must
+ * complete within one synchronous tick, so it cannot call an async method.
+ */
+export function appendEventSync(jsonlPath: string, type: string, data: unknown): void {
+  const line = redactSecrets(JSON.stringify({ ts: new Date().toISOString(), type, data }));
+  mkdirSync(path.dirname(jsonlPath), { recursive: true });
+  const fd = openSync(jsonlPath, 'a');
+  try {
+    writeSync(fd, line + '\n');
+    fsyncSync(fd);
+  } finally {
+    closeSync(fd);
   }
 }
