@@ -27,6 +27,16 @@ export interface CopperheadConfig {
    * so retries/restarts reuse work already paid for. Default on. */
   llmCache: boolean;
   /**
+   * Commit each run's transcript.jsonl/metrics.json/summary.md (and, for
+   * `create`, the regenerated REPORT.md/report.json) as new, standalone
+   * commits at every terminal path, so the data survives a stalled or killed
+   * run (change flush-run-metrics-incrementally, issue #138). Default on —
+   * a real change from the historical default of `.copperhead/runs/` never
+   * being committed (AC-4.3); set false to keep the files on disk without
+   * committing them.
+   */
+  commitRunArtifacts: boolean;
+  /**
    * Base URL of an OpenAI-compatible endpoint (Groq, OpenRouter, Gemini's
    * compat endpoint, a local Ollama). Consulted only by the `compat`
    * route (design D2), so a stray value never redirects a plain `gpt-5` run.
@@ -69,6 +79,7 @@ export const DEFAULTS: Omit<CopperheadConfig, 'schematic' | 'board'> = {
   heartbeatMs: 30000,
   maxStageRetries: 2,
   llmCache: true,
+  commitRunArtifacts: true,
 };
 
 export function configPath(repoRoot: string): string {
@@ -102,6 +113,7 @@ export async function loadConfig(repoRoot: string): Promise<CopperheadConfig> {
         ? (raw.maxStageRetries as number)
         : DEFAULTS.maxStageRetries,
     llmCache: raw.llmCache !== false,
+    commitRunArtifacts: raw.commitRunArtifacts !== false,
     ...(typeof raw.baseURL === 'string' && raw.baseURL.trim() ? { baseURL: raw.baseURL.trim() } : {}),
     ...(typeof raw.apiKeyEnv === 'string' && raw.apiKeyEnv.trim() ? { apiKeyEnv: raw.apiKeyEnv.trim() } : {}),
     ...(raw.generatedHashes ? { generatedHashes: raw.generatedHashes } : {}),

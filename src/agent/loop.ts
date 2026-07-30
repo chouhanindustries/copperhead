@@ -16,12 +16,23 @@ import {
   type CompatSettings,
   type CopperheadConfig,
 } from '../config.js';
-import { Transcript, type ExitPath, type RunStats } from './transcript.js';
+import { Transcript, appendEventSync, type ExitPath, type RunStats } from './transcript.js';
+import { writeLiveMetrics, writeLiveMetricsSync, metricsPath, type LiveMetrics } from './metrics.js';
 import { collectRunMeta, renderCliHeader, type RunMeta, type RunMetaInput } from './runmeta.js';
 import { plainRenderer, fmtDuration, fmtTokens, type ProgressRenderer } from './render.js';
 import { styleHeaderLines } from './theme.js';
 import { ObligationsLedger } from './ledger.js';
-import { gitPreflight, isDirty, snapshot, restore, commitAll, changedFiles, preserveFailedRun } from '../util/git.js';
+import {
+  gitPreflight,
+  isDirty,
+  snapshot,
+  restore,
+  commitAll,
+  commitPaths,
+  commitPathsSync,
+  changedFiles,
+  preserveFailedRun,
+} from '../util/git.js';
 import { withRetry, isRateLimit, sessionLimit } from '../util/retry.js';
 import { openspecArchive } from '../openspec/cli.js';
 import { existsSync } from 'node:fs';
@@ -367,6 +378,10 @@ async function runWithMemory(
   let nudges = 0;
   let turnTimeouts = 0;
   const maxTurnTimeouts = 3;
+  /** Monotonic call counter for llm-call events' callId — distinct from
+   *  `turn`, since a turn-timeout retry reuses the same turn number for a
+   *  second call attempt (change flush-run-metrics-incrementally). */
+  let callSeq = 0;
 
   const stats = (exitPath: ExitPath): RunStats => ({
     exitPath,
@@ -379,6 +394,67 @@ async function runWithMemory(
     perTurn,
     durationMs: Date.now() - startMs,
   });
+
+  // Live, whole-run cost snapshot (change flush-run-metrics-incrementally,
+  // design D2): `status` is 'running' for the entire healthy duration of the
+  // run, never a placeholder that could be mistaken for a terminal exit path.
+  const startedAtIso = new Date(startMs).toISOString();
+  const liveMetrics = (status: LiveMetrics['status'], turn: number): LiveMetrics => ({
+    runId: ctx.runId,
+    status,
+    turn,
+    maxTurns,
+    tokensIn,
+    tokensOut,
+    cacheHits: cacheHits(),
+    startedAt: startedAtIso,
+    lastUpdateAt: new Date().toISOString(),
+  });
+  // Serializes every metrics.json write for this run into call order (design
+  // D3/D4, hardened further in review): unique temp filenames alone stop two
+  // writers from corrupting each other's file, but not a last-writer-wins
+  // ordering race — the heartbeat's fire-and-forget write can still start
+  // before, and finish after, a later per-call or terminal write, so its
+  // stale 'running' snapshot ends up renamed on top of newer data. Chaining
+  // every call through one promise makes them run strictly in invocation
+  // order regardless of how long any individual write's fsync takes.
+  // `metricsQueue` itself never rejects (a failed write must not permanently
+  // wedge every later write behind a rejected promise, since `.then()` on a
+  // rejected promise never runs) — the real per-call result, which CAN
+  // reject, is returned separately so callers that want to know about (or
+  // propagate) a failure still can, while the heartbeat's caller keeps its
+  // existing best-effort `.catch(() => {})`.
+  let metricsQueue: Promise<unknown> = Promise.resolve();
+  const queueMetricsWrite = (data: LiveMetrics): Promise<void> => {
+    const write = metricsQueue.then(() => writeLiveMetrics(transcript.dir, data));
+    metricsQueue = write.catch(() => {});
+    return write;
+  };
+  /** Files eligible for the per-run artifact commit: this run's own audit
+   *  trail only, never a design file (design D5/D8). Summary may not exist
+   *  yet at call time; commitPaths/commitPathsSync silently skip missing
+   *  paths. */
+  const artifactPaths = (): string[] => [transcript.jsonlPath, metricsPath(transcript.dir), path.join(transcript.dir, 'summary.md')];
+
+  /**
+   * Commit this run's audit trail as a new, standalone commit, gated by
+   * `config.commitRunArtifacts` (design D5/D8). Centralizes the gate/try/
+   * catch/log shape that was previously repeated at every terminal branch
+   * with inconsistent logging — the refuse/dry-run branches used to log
+   * nothing on success, unlike fail()/done (caught in review).
+   */
+  const commitArtifacts = async (label: string, opts: { noVerify?: boolean } = {}): Promise<void> => {
+    if (!config.commitRunArtifacts) {
+      log(`run artifacts not committed (commitRunArtifacts: false); see ${transcript.dir}`);
+      return;
+    }
+    try {
+      const sha = await commitPaths(repoRoot, artifactPaths(), `copperhead: ${label}`, opts);
+      if (sha) log(`committed run artifacts ${sha.slice(0, 10)}`);
+    } catch (err) {
+      log(`warning: could not commit run artifacts (${(err as Error).message})`);
+    }
+  };
 
   /** One outcome line, printed last at every terminal branch (AC-8.5). */
   const outcomeLine = (s: RunStats, extra?: string | null): string =>
@@ -425,6 +501,11 @@ async function runWithMemory(
       env: meta,
       stats: runStats,
     });
+    // Final terminal snapshot: a real exit path now that the run has one,
+    // never the 'running' placeholder (design D2). Written after restore()
+    // and writeSummary() so the files being committed already exist.
+    await queueMetricsWrite(liveMetrics(exitPath, turnsUsed));
+    await commitArtifacts(`partial run data ${ctx.runId} (${exitPath})`);
     log(`run failed: ${reason}`);
     if (restoreError) {
       log(`WARNING: rollback failed (${restoreError}); the working tree may be in a partial state`);
@@ -451,244 +532,425 @@ async function runWithMemory(
     };
   };
 
-  let budget = maxTurns;
-  for (let turn = 0; ; turn++) {
-    if (turn >= budget) {
-      // Budget exhausted. In an attended run this is a user decision made with
-      // the cost visible, not an unconditional rollback (issue #15).
-      const exhaustStats: BudgetExhaustedStats = {
-        maxTurns,
-        turnsUsed: turn,
-        tokensIn,
-        tokensOut,
-        filesTouched: [...ctx.filesTouched],
-        openObligations: ctx.ledger.openObligations.length,
-      };
-      let extra = 0;
-      if (opts.onBudgetExhausted) {
-        try {
-          extra = Math.floor(await opts.onBudgetExhausted(exhaustStats));
-        } catch {
-          // A broken prompt (stdin closed mid-question, dying terminal) must
-          // read as "declined" and take the preserve-and-restore path below,
-          // not propagate past it and skip the rollback entirely.
-          extra = 0;
-        }
-      }
-      if (!Number.isFinite(extra) || extra <= 0) break;
-      budget += extra;
-      await transcript.event('budget-extended', { extraTurns: extra, budget, ...exhaustStats });
-      log(`turn budget extended by ${extra} (now ${budget})`);
-    }
-    // Advertise EVERY tool each turn; dispatchTool enforces the edit-unlock gate
-    // live at call time. Hiding locked edit tools from the turn catalog meant a
-    // model that unlocked (validate_change) and edited in the SAME reply had its
-    // edit silently dropped in parsing — the call named a tool the turn had not
-    // advertised, so it was treated as prose, executed nothing, and returned no
-    // error. The model then "verified" against an unchanged file (an empty
-    // schematic even passes ERC) and finished believing it had succeeded.
-    // Structural lock (SPEC.md §1.3 invariant 1): the edit tools stay OUT of the
-    // advertised list until a proposal validates (`editsUnlocked`), so the model
-    // is gated by omission, not by prompt text. `dispatchTool` re-checks the same
-    // `availableTools(ctx)` live, so this is defense in depth. A premature edit is
-    // simply not offered; once `validate_change` unlocks, the next turn advertises
-    // the edit tools. (Earlier this advertised every tool to let a same-turn
-    // propose→validate→edit batch through, but that traded the spec's structural
-    // guarantee for one saved turn — not worth it.)
-    const tools = availableTools(ctx).map((t) => t.schema);
-    r.turnStart(turn + 1, maxTurns, tokensIn, tokensOut);
-    r.status('thinking');
-    let res: Turn;
-    // Liveness heartbeat (5.1): a large-output turn can legitimately run several
-    // minutes, which is otherwise indistinguishable from a hung subprocess until
-    // the watchdog fires. Emit a periodic elapsed/streamed signal so an operator
-    // can tell the two apart. Fires only after the first interval, so quick turns
-    // stay silent; `unref` keeps it from holding the event loop open.
-    const turnStartMs = Date.now();
-    let streamedChars = 0;
-    const heartbeat =
-      config.heartbeatMs > 0
-        ? setInterval(
-            () => r.heartbeat({ elapsedMs: Date.now() - turnStartMs, streamedChars }),
-            config.heartbeatMs,
-          )
-        : null;
-    heartbeat?.unref?.();
+  // SIGINT/SIGTERM handling (change flush-run-metrics-incrementally, design
+  // D5). Registered here, not earlier: everything the handler touches
+  // (stats/liveMetrics/artifactPaths/fail, and turnsUsed below) already
+  // exists by this point, and nothing worth preserving exists before the
+  // turn loop starts anyway (no turns have run yet).
+  //
+  // Fully synchronous — no `await` anywhere in this handler. render.ts's
+  // InteractiveRenderer and repl.ts's runRepl already register their own
+  // SIGINT listeners (constructed before this run started) that call
+  // process.exit() synchronously; prependListener() puts this handler
+  // first, but only a handler that never yields is guaranteed to finish
+  // before Node's listener dispatch reaches theirs and calls process.exit()
+  // out from under it.
+  //
+  // Deliberately does NOT roll back the working tree the way fail() does: a
+  // signal is the user asking to stop now, a different intent than an
+  // unattended failure, and replaying restore()'s async multi-step rollback
+  // synchronously here would be its own source of failure modes (a stuck
+  // subprocess the interrupted turn may have spawned, on top of an
+  // emergency shutdown). Only the run's own audit trail is touched.
+  const onInterruptSignal = (signal: NodeJS.Signals): void => {
     try {
-      res = await withRetry(
-        () =>
-          withTimeout(
-            () => provider.chat(messages, tools, { onStream: (chars) => (streamedChars = chars) }),
-            config.turnTimeoutMs,
-            () => provider.close?.(),
-          ),
-        { onRetry: (attempt) => log(`rate limited; retry ${attempt}`) },
-      );
-    } catch (err) {
-      if (err instanceof TurnTimeoutError) {
-        // A hung provider turn: the watchdog aborted the in-flight call and tore
-        // down its subprocess. Retry the same turn a bounded number of times
-        // before giving up, so a transient hang self-heals instead of stalling
-        // the run forever.
-        if (turnTimeouts++ < maxTurnTimeouts) {
-          log(`turn exceeded ${config.turnTimeoutMs}ms; aborted the hung call and retrying (${turnTimeouts}/${maxTurnTimeouts})`);
-          await transcript.event('turn-timeout', { ms: config.turnTimeoutMs, attempt: turnTimeouts });
-          turn--;
-          continue;
-        }
-        return fail(`provider turns timed out ${turnTimeouts}× (>${config.turnTimeoutMs}ms each)`, 'provider-error');
+      writeLiveMetricsSync(transcript.dir, liveMetrics('running', turnsUsed));
+      appendEventSync(transcript.jsonlPath, 'run-interrupted', { signal, turnsUsed });
+      if (config.commitRunArtifacts) {
+        commitPathsSync(repoRoot, artifactPaths(), `copperhead: partial run data ${ctx.runId} (interrupted)`, {
+          noVerify: true,
+        });
       }
-      if (isRateLimit(err)) {
-        const fallback = otherProvider(provider);
-        if (fallback) {
-          log(`failing over ${provider.name} → ${fallback.name}`);
-          await transcript.event('provider-failover', { from: provider.name, to: fallback.name });
-          provider = fallback;
-          providers.add(provider);
-          turn--;
-          continue;
-        }
-      }
-      // A saved-login session/usage limit is not a code bug and not a 429 (2.4,
-      // I13): it names its own reset time and clears only then, and every turn
-      // so far is already in the llm-cache — so re-running after the reset
-      // replays them at ~0 tokens and resumes in place. Surface it as its own
-      // exit path with the reset time and the resume instruction, rather than a
-      // bare "provider error" the operator would read as a failure to debug.
-      const limit = sessionLimit(err);
-      if (limit) {
-        const when = limit.resetsAt ? ` (resets ${limit.resetsAt})` : '';
-        await transcript.event('session-limit', { resetsAt: limit.resetsAt, provider: provider.name });
-        return fail(
-          `${provider.name} session/usage limit reached${when} — this is a schedulable pause, not a bug. ` +
-            `Wait for the reset, then re-run the same command: completed turns replay from the cache at ~0 tokens and the run resumes where it left off.`,
-          'session-limit',
-        );
-      }
-      return fail(`provider error: ${(err as Error).message}`, 'provider-error');
-    } finally {
-      if (heartbeat) clearInterval(heartbeat);
-      r.status(null);
+    } catch {
+      // Emergency shutdown: nothing left to do if even the synchronous save
+      // fails. Exit anyway rather than hang on a signal the user already sent.
     }
-    turnsUsed = turn + 1;
-    // A productive turn resets the timeout budget: maxTurnTimeouts is meant to
-    // catch a turn that is genuinely, repeatedly stuck — not to cap the total
-    // number of slow-but-recoverable turns across a whole stage. Without this a
-    // long stage that merely has a few independent slow turns accumulates
-    // timeouts and hard-fails even though every one of them recovered.
-    turnTimeouts = 0;
-    tokensIn += res.usage.inputTokens;
-    tokensOut += res.usage.outputTokens;
-    perTurn.push({ turn: turn + 1, in: res.usage.inputTokens, out: res.usage.outputTokens });
-    await transcript.event('assistant', { text: res.text, toolCalls: res.toolCalls });
+    process.exit(130);
+  };
+  process.prependListener('SIGINT', onInterruptSignal);
+  process.prependListener('SIGTERM', onInterruptSignal);
 
-    if (res.text) {
-      if (!plan) plan = res.text;
-      log(res.text);
-    }
-    messages.push({ role: 'assistant', content: res.text, toolCalls: res.toolCalls });
-
-    if (!res.toolCalls.length) {
-      // Only *consecutive* tool-less turns are a stall. Providers emit the
-      // occasional empty completion mid-run (observed live: three empties
-      // spread across 31 productive turns); a cumulative counter turns those
-      // into a full rollback of an otherwise-converging run.
-      if (nudges++ >= 2) return fail('model stopped calling tools without finishing', 'stalled');
-      messages.push({
-        role: 'user',
-        // A near-miss malformed tool call (#I10) gets a specific steer to re-emit
-        // it; an ordinary tool-less turn gets the generic continue prompt.
-        content: res.nudge ?? 'Continue using tools, or call finish({outcome, summary}) to end the run.',
-      });
-      continue;
-    }
-    nudges = 0;
-
-    for (const call of res.toolCalls) {
-      const result = await dispatchTool(ctx, call.name, call.args);
-      await transcript.event('tool', { name: call.name, args: call.args, result });
-      r.toolResult(call.name, result.split('\n')[0] ?? '');
-      messages.push({ role: 'tool', toolCallId: call.id, content: result });
-    }
-
-    if (ctx.repairCycles > config.maxRepairCycles) {
-      return fail(`repair cycles exhausted (${config.maxRepairCycles}); violations persist`, 'repair-cycles-exhausted');
-    }
-
-    const remaining = budget - turn - 1;
-    if (remaining === 5 && !ctx.finishRequest) {
-      messages.push({
-        role: 'user',
-        content:
-          'Only 5 turns remain. Converge now: finish the minimal correct edit set, run run_erc (and run_drc if the board changed), run check_drift, then call finish. Batch independent tool calls in a single response (e.g. all resolve_affected calls at once) instead of one per turn.',
-      });
-    }
-
-    if (ctx.finishRequest) {
-      const { outcome, summary } = ctx.finishRequest;
-      const files = [...ctx.filesTouched];
-      if (outcome === 'refuse') {
-        await restore(repoRoot, snap);
-        await transcript.event('run-refused', { summary });
-        const runStats = stats('refused');
-        await transcript.event('run-end', runStats);
-        await transcript.writeSummary({
-          request: opts.request,
-          changeId: ctx.changeId,
-          plan,
-          filesTouched: [],
-          ercResult: null,
-          drcResult: null,
-          decisions: ctx.decisions,
+  try {
+    let budget = maxTurns;
+    for (let turn = 0; ; turn++) {
+      if (turn >= budget) {
+        // Budget exhausted. In an attended run this is a user decision made with
+        // the cost visible, not an unconditional rollback (issue #15).
+        const exhaustStats: BudgetExhaustedStats = {
+          maxTurns,
+          turnsUsed: turn,
           tokensIn,
           tokensOut,
-          outcome: 'aborted',
-          openObligations: null,
-          detail: `REFUSED: ${summary}`,
-          env: meta,
-          stats: runStats,
-        });
-        // Refusals are the most valuable thing to remember: they encode a budget
-        // or constraint that this user's designs keep running into.
-        await remember({
-          request: opts.request,
-          outcome: 'refused',
-          summary,
-          changeId: ctx.changeId,
-          filesTouched: [],
-          decisions: ctx.decisions,
-          verification: 'n/a (refused before verification)',
-        });
-        log(`refused: ${summary}`);
-        r.finish(outcomeLine(runStats));
-        return {
-          outcome: 'refused',
-          exitPath: 'refused',
-          summary,
-          transcriptDir: transcript.dir,
-          filesTouched: [],
-          commit: null,
-          stats: runStats,
-          cacheHits: cacheHits(),
+          filesTouched: [...ctx.filesTouched],
+          openObligations: ctx.ledger.openObligations.length,
         };
+        let extra = 0;
+        if (opts.onBudgetExhausted) {
+          try {
+            extra = Math.floor(await opts.onBudgetExhausted(exhaustStats));
+          } catch {
+            // A broken prompt (stdin closed mid-question, dying terminal) must
+            // read as "declined" and take the preserve-and-restore path below,
+            // not propagate past it and skip the rollback entirely.
+            extra = 0;
+          }
+        }
+        if (!Number.isFinite(extra) || extra <= 0) break;
+        budget += extra;
+        await transcript.event('budget-extended', { extraTurns: extra, budget, ...exhaustStats });
+        log(`turn budget extended by ${extra} (now ${budget})`);
+      }
+      // Advertise EVERY tool each turn; dispatchTool enforces the edit-unlock gate
+      // live at call time. Hiding locked edit tools from the turn catalog meant a
+      // model that unlocked (validate_change) and edited in the SAME reply had its
+      // edit silently dropped in parsing — the call named a tool the turn had not
+      // advertised, so it was treated as prose, executed nothing, and returned no
+      // error. The model then "verified" against an unchanged file (an empty
+      // schematic even passes ERC) and finished believing it had succeeded.
+      // Structural lock (SPEC.md §1.3 invariant 1): the edit tools stay OUT of the
+      // advertised list until a proposal validates (`editsUnlocked`), so the model
+      // is gated by omission, not by prompt text. `dispatchTool` re-checks the same
+      // `availableTools(ctx)` live, so this is defense in depth. A premature edit is
+      // simply not offered; once `validate_change` unlocks, the next turn advertises
+      // the edit tools. (Earlier this advertised every tool to let a same-turn
+      // propose→validate→edit batch through, but that traded the spec's structural
+      // guarantee for one saved turn — not worth it.)
+      const tools = availableTools(ctx).map((t) => t.schema);
+      r.turnStart(turn + 1, maxTurns, tokensIn, tokensOut);
+      r.status('thinking');
+      let res: Turn;
+      // Liveness heartbeat (5.1): a large-output turn can legitimately run several
+      // minutes, which is otherwise indistinguishable from a hung subprocess until
+      // the watchdog fires. Emit a periodic elapsed/streamed signal so an operator
+      // can tell the two apart. Fires only after the first interval, so quick turns
+      // stay silent; `unref` keeps it from holding the event loop open.
+      const turnStartMs = Date.now();
+      let streamedChars = 0;
+      const heartbeat =
+        config.heartbeatMs > 0
+          ? setInterval(() => {
+              r.heartbeat({ elapsedMs: Date.now() - turnStartMs, streamedChars });
+              // Keeps metrics.json advancing during a single long/hung call,
+              // not just between calls (design D4). Best-effort: a transient
+              // write failure here must not crash an otherwise-healthy run —
+              // unlike the per-call llm-call event below, nothing downstream
+              // depends on any one heartbeat snapshot landing.
+              queueMetricsWrite(liveMetrics('running', turn + 1)).catch(() => {});
+            }, config.heartbeatMs)
+          : null;
+      heartbeat?.unref?.();
+      try {
+        res = await withRetry(
+          () =>
+            withTimeout(
+              () => provider.chat(messages, tools, { onStream: (chars) => (streamedChars = chars) }),
+              config.turnTimeoutMs,
+              () => provider.close?.(),
+            ),
+          { onRetry: (attempt) => log(`rate limited; retry ${attempt}`) },
+        );
+      } catch (err) {
+        // Every error shape below still gets an llm-call event (change
+        // flush-run-metrics-incrementally): a call that cost input tokens and
+        // then errored is still a cost, and this is the one place that sees
+        // every error branch, including ones added above this in the future.
+        await transcript.event(
+          'llm-call',
+          {
+            turn: turn + 1,
+            stage: meta.stage?.name ?? null,
+            callId: `call-${++callSeq}`,
+            model: opts.model,
+            provider: provider.name,
+            tokensIn: 0,
+            tokensOut: 0,
+            cacheRead: 0,
+            cacheWrite: 0,
+            cacheHit: false,
+            latencyMs: Date.now() - turnStartMs,
+            startedAt: new Date(turnStartMs).toISOString(),
+            finishedAt: new Date().toISOString(),
+            stopReason: 'error',
+            toolCalls: [],
+            error: (err as Error).message,
+          },
+          { durable: true },
+        );
+        await queueMetricsWrite(liveMetrics('running', turn + 1));
+        if (err instanceof TurnTimeoutError) {
+          // A hung provider turn: the watchdog aborted the in-flight call and tore
+          // down its subprocess. Retry the same turn a bounded number of times
+          // before giving up, so a transient hang self-heals instead of stalling
+          // the run forever.
+          if (turnTimeouts++ < maxTurnTimeouts) {
+            log(`turn exceeded ${config.turnTimeoutMs}ms; aborted the hung call and retrying (${turnTimeouts}/${maxTurnTimeouts})`);
+            await transcript.event('turn-timeout', { ms: config.turnTimeoutMs, attempt: turnTimeouts });
+            turn--;
+            continue;
+          }
+          return fail(`provider turns timed out ${turnTimeouts}× (>${config.turnTimeoutMs}ms each)`, 'provider-error');
+        }
+        if (isRateLimit(err)) {
+          const fallback = otherProvider(provider);
+          if (fallback) {
+            log(`failing over ${provider.name} → ${fallback.name}`);
+            await transcript.event('provider-failover', { from: provider.name, to: fallback.name });
+            provider = fallback;
+            providers.add(provider);
+            turn--;
+            continue;
+          }
+        }
+        // A saved-login session/usage limit is not a code bug and not a 429 (2.4,
+        // I13): it names its own reset time and clears only then, and every turn
+        // so far is already in the llm-cache — so re-running after the reset
+        // replays them at ~0 tokens and resumes in place. Surface it as its own
+        // exit path with the reset time and the resume instruction, rather than a
+        // bare "provider error" the operator would read as a failure to debug.
+        const limit = sessionLimit(err);
+        if (limit) {
+          const when = limit.resetsAt ? ` (resets ${limit.resetsAt})` : '';
+          await transcript.event('session-limit', { resetsAt: limit.resetsAt, provider: provider.name });
+          return fail(
+            `${provider.name} session/usage limit reached${when} — this is a schedulable pause, not a bug. ` +
+              `Wait for the reset, then re-run the same command: completed turns replay from the cache at ~0 tokens and the run resumes where it left off.`,
+            'session-limit',
+          );
+        }
+        return fail(`provider error: ${(err as Error).message}`, 'provider-error');
+      } finally {
+        if (heartbeat) clearInterval(heartbeat);
+        r.status(null);
+      }
+      turnsUsed = turn + 1;
+      // A productive turn resets the timeout budget: maxTurnTimeouts is meant to
+      // catch a turn that is genuinely, repeatedly stuck — not to cap the total
+      // number of slow-but-recoverable turns across a whole stage. Without this a
+      // long stage that merely has a few independent slow turns accumulates
+      // timeouts and hard-fails even though every one of them recovered.
+      turnTimeouts = 0;
+      tokensIn += res.usage.inputTokens;
+      tokensOut += res.usage.outputTokens;
+      perTurn.push({ turn: turn + 1, in: res.usage.inputTokens, out: res.usage.outputTokens });
+      await transcript.event(
+        'llm-call',
+        {
+          turn: turn + 1,
+          stage: meta.stage?.name ?? null,
+          callId: `call-${++callSeq}`,
+          model: opts.model,
+          provider: provider.name,
+          tokensIn: res.usage.inputTokens,
+          tokensOut: res.usage.outputTokens,
+          cacheRead: 0,
+          cacheWrite: 0,
+          // Real per-call signal from CachingProvider (design D1) — not a
+          // provider-reported field, since no provider reports one.
+          cacheHit: res.cacheHit ?? false,
+          latencyMs: Date.now() - turnStartMs,
+          startedAt: new Date(turnStartMs).toISOString(),
+          finishedAt: new Date().toISOString(),
+          // Derived, not read off a nonexistent provider field (design D1):
+          // this is everything actually knowable about why the turn ended.
+          stopReason: res.toolCalls.length ? 'tool_use' : 'text',
+          toolCalls: res.toolCalls.map((c) => c.name),
+          error: null,
+        },
+        { durable: true },
+      );
+      await queueMetricsWrite(liveMetrics('running', turn + 1));
+      await transcript.event('assistant', { text: res.text, toolCalls: res.toolCalls });
+
+      if (res.text) {
+        if (!plan) plan = res.text;
+        log(res.text);
+      }
+      messages.push({ role: 'assistant', content: res.text, toolCalls: res.toolCalls });
+
+      if (!res.toolCalls.length) {
+        // Only *consecutive* tool-less turns are a stall. Providers emit the
+        // occasional empty completion mid-run (observed live: three empties
+        // spread across 31 productive turns); a cumulative counter turns those
+        // into a full rollback of an otherwise-converging run.
+        if (nudges++ >= 2) return fail('model stopped calling tools without finishing', 'stalled');
+        messages.push({
+          role: 'user',
+          // A near-miss malformed tool call (#I10) gets a specific steer to re-emit
+          // it; an ordinary tool-less turn gets the generic continue prompt.
+          content: res.nudge ?? 'Continue using tools, or call finish({outcome, summary}) to end the run.',
+        });
+        continue;
+      }
+      nudges = 0;
+
+      for (const call of res.toolCalls) {
+        const result = await dispatchTool(ctx, call.name, call.args);
+        await transcript.event('tool', { name: call.name, args: call.args, result });
+        r.toolResult(call.name, result.split('\n')[0] ?? '');
+        messages.push({ role: 'tool', toolCallId: call.id, content: result });
       }
 
-      const verification = [
-        ctx.lastErc ? `ERC ${ctx.lastErc.ok ? 'clean' : 'FAILING'}` : 'ERC not required',
-        ctx.lastDrc ? `DRC ${ctx.lastDrc.ok ? 'clean' : 'FAILING'}` : null,
-      ]
-        .filter(Boolean)
-        .join(', ');
+      if (ctx.repairCycles > config.maxRepairCycles) {
+        return fail(`repair cycles exhausted (${config.maxRepairCycles}); violations persist`, 'repair-cycles-exhausted');
+      }
 
-      if (opts.dryRun) {
-        const { stdout: diff } = await execa('git', ['diff'], { cwd: repoRoot });
-        const { stdout: untracked } = await execa('git', ['ls-files', '--others', '--exclude-standard'], {
-          cwd: repoRoot,
+      const remaining = budget - turn - 1;
+      if (remaining === 5 && !ctx.finishRequest) {
+        messages.push({
+          role: 'user',
+          content:
+            'Only 5 turns remain. Converge now: finish the minimal correct edit set, run run_erc (and run_drc if the board changed), run check_drift, then call finish. Batch independent tool calls in a single response (e.g. all resolve_affected calls at once) instead of one per turn.',
         });
-        log('--- dry run: proposed diff ---');
-        log(diff || '(no diff)');
-        if (untracked) log(`new files:\n${untracked}`);
-        await restore(repoRoot, snap);
+      }
+
+      if (ctx.finishRequest) {
+        const { outcome, summary } = ctx.finishRequest;
+        const files = [...ctx.filesTouched];
+        if (outcome === 'refuse') {
+          await restore(repoRoot, snap);
+          await transcript.event('run-refused', { summary });
+          const runStats = stats('refused');
+          await transcript.event('run-end', runStats);
+          await transcript.writeSummary({
+            request: opts.request,
+            changeId: ctx.changeId,
+            plan,
+            filesTouched: [],
+            ercResult: null,
+            drcResult: null,
+            decisions: ctx.decisions,
+            tokensIn,
+            tokensOut,
+            outcome: 'aborted',
+            openObligations: null,
+            detail: `REFUSED: ${summary}`,
+            env: meta,
+            stats: runStats,
+          });
+          // Refusals are the most valuable thing to remember: they encode a budget
+          // or constraint that this user's designs keep running into.
+          await remember({
+            request: opts.request,
+            outcome: 'refused',
+            summary,
+            changeId: ctx.changeId,
+            filesTouched: [],
+            decisions: ctx.decisions,
+            verification: 'n/a (refused before verification)',
+          });
+          await queueMetricsWrite(liveMetrics('refused', turnsUsed));
+          await commitArtifacts(`partial run data ${ctx.runId} (refused)`);
+          log(`refused: ${summary}`);
+          r.finish(outcomeLine(runStats));
+          return {
+            outcome: 'refused',
+            exitPath: 'refused',
+            summary,
+            transcriptDir: transcript.dir,
+            filesTouched: [],
+            commit: null,
+            stats: runStats,
+            cacheHits: cacheHits(),
+          };
+        }
+
+        const verification = [
+          ctx.lastErc ? `ERC ${ctx.lastErc.ok ? 'clean' : 'FAILING'}` : 'ERC not required',
+          ctx.lastDrc ? `DRC ${ctx.lastDrc.ok ? 'clean' : 'FAILING'}` : null,
+        ]
+          .filter(Boolean)
+          .join(', ');
+
+        if (opts.dryRun) {
+          const { stdout: diff } = await execa('git', ['diff'], { cwd: repoRoot });
+          const { stdout: untracked } = await execa('git', ['ls-files', '--others', '--exclude-standard'], {
+            cwd: repoRoot,
+          });
+          log('--- dry run: proposed diff ---');
+          log(diff || '(no diff)');
+          if (untracked) log(`new files:\n${untracked}`);
+          await restore(repoRoot, snap);
+          const runStats = stats('done');
+          await transcript.event('run-end', runStats);
+          await transcript.writeSummary({
+            request: opts.request,
+            changeId: ctx.changeId,
+            plan,
+            filesTouched: files,
+            ercResult: verification,
+            drcResult: null,
+            decisions: ctx.decisions,
+            tokensIn,
+            tokensOut,
+            outcome: 'success',
+            openObligations: null,
+            detail: 'dry run: changes reverted',
+            env: meta,
+            stats: runStats,
+          });
+          await queueMetricsWrite(liveMetrics('done', turnsUsed));
+          await commitArtifacts(`partial run data ${ctx.runId} (dry-run)`);
+          r.finish(outcomeLine(runStats, 'dry run: changes reverted'));
+          return {
+            outcome: 'success',
+            exitPath: 'done',
+            summary,
+            transcriptDir: transcript.dir,
+            filesTouched: files,
+            commit: null,
+            stats: runStats,
+            cacheHits: cacheHits(),
+          };
+        }
+
+        // Bookkeeping must never cost the verified design its commit (2.1): the
+        // KiCad work passed its ERC/DRC gates, so a failure appending the changelog
+        // (a plain CHANGELOG.md read+write) is a warning, not a rollback. It stays
+        // before commitAll so, on the normal path, the entry lands in the run's
+        // single commit and a zero-edit "done" run still has something to commit;
+        // if it throws, the design is committed without a changelog line rather
+        // than sent through fail()'s rollback. The other bookkeeping — the openspec
+        // archive — is already post-commit and non-fatal below.
+        try {
+          await appendChangelog(repoRoot, config, {
+            changeId: ctx.changeId,
+            request: opts.request,
+            files,
+            verification,
+          });
+          ctx.ledger.clear('changelog');
+        } catch (err) {
+          const message = (err as Error).message;
+          log(`warning: changelog append failed (${message}); committing the verified design without a changelog entry`);
+          await transcript.event('changelog-append-failed', { error: message });
+        }
+
+        const commitMsg = `copperhead: ${opts.request}\n\n${summary}\n\nVerification: ${verification}`;
+        // A git failure here (e.g. `git add -A` exiting 128 on an embedded repo)
+        // must land in summary.md as an outcome, not escape as a stack trace
+        // (AC-8.6): roll back per the snapshot contract and report commit-failed.
+        let commit: string;
+        try {
+          commit = await commitAll(repoRoot, commitMsg);
+        } catch (err) {
+          return fail(`commit failed: ${(err as Error).message}`, 'commit-failed');
+        }
+        if (ctx.changeId && existsSync(path.join(repoRoot, 'openspec', 'config.yaml'))) {
+          // The verified commit already exists; discarding it because archive
+          // housekeeping failed would be the worse trade, so this is a warning.
+          try {
+            const arch = await openspecArchive(repoRoot, ctx.changeId);
+            await transcript.event('openspec-archive', { changeId: ctx.changeId, ok: arch.ok });
+            if (arch.ok && (await isDirty(repoRoot))) {
+              await commitAll(repoRoot, `copperhead: archive change ${ctx.changeId}`);
+            }
+          } catch (err) {
+            const message = (err as Error).message;
+            log(`warning: openspec archive failed (${message}); the run commit itself succeeded`);
+            await transcript.event('openspec-archive-failed', { changeId: ctx.changeId, error: message });
+          }
+        }
+        await transcript.event('run-committed', { commit, files });
         const runStats = stats('done');
         await transcript.event('run-end', runStats);
         await transcript.writeSummary({
@@ -696,122 +958,53 @@ async function runWithMemory(
           changeId: ctx.changeId,
           plan,
           filesTouched: files,
-          ercResult: verification,
-          drcResult: null,
+          ercResult: ctx.lastErc ? (ctx.lastErc.ok ? 'clean' : 'FAILING') : 'not run',
+          drcResult: ctx.lastDrc ? (ctx.lastDrc.ok ? 'clean' : 'FAILING') : 'not run',
           decisions: ctx.decisions,
           tokensIn,
           tokensOut,
           outcome: 'success',
           openObligations: null,
-          detail: 'dry run: changes reverted',
           env: meta,
           stats: runStats,
         });
-        r.finish(outcomeLine(runStats, 'dry run: changes reverted'));
+        await remember({
+          request: opts.request,
+          outcome: 'success',
+          summary,
+          changeId: ctx.changeId,
+          filesTouched: files,
+          decisions: ctx.decisions,
+          verification,
+        });
+        await queueMetricsWrite(liveMetrics('done', turnsUsed));
+        // A NEW, standalone commit — never an amend (design D5/D8). The
+        // design commit above may already be followed by an openspec-archive
+        // commit; amending "the last commit" would risk landing on whichever
+        // of those happened to be HEAD, silently misattributing the artifacts.
+        await commitArtifacts(`run artifacts ${ctx.runId}`);
+        log(`committed ${commit.slice(0, 10)} (${files.length} file(s))`);
+        r.finish(outcomeLine(runStats, `committed ${commit.slice(0, 10)}`));
         return {
           outcome: 'success',
           exitPath: 'done',
           summary,
           transcriptDir: transcript.dir,
           filesTouched: files,
-          commit: null,
+          commit,
           stats: runStats,
           cacheHits: cacheHits(),
         };
       }
-
-      // Bookkeeping must never cost the verified design its commit (2.1): the
-      // KiCad work passed its ERC/DRC gates, so a failure appending the changelog
-      // (a plain CHANGELOG.md read+write) is a warning, not a rollback. It stays
-      // before commitAll so, on the normal path, the entry lands in the run's
-      // single commit and a zero-edit "done" run still has something to commit;
-      // if it throws, the design is committed without a changelog line rather
-      // than sent through fail()'s rollback. The other bookkeeping — the openspec
-      // archive — is already post-commit and non-fatal below.
-      try {
-        await appendChangelog(repoRoot, config, {
-          changeId: ctx.changeId,
-          request: opts.request,
-          files,
-          verification,
-        });
-        ctx.ledger.clear('changelog');
-      } catch (err) {
-        const message = (err as Error).message;
-        log(`warning: changelog append failed (${message}); committing the verified design without a changelog entry`);
-        await transcript.event('changelog-append-failed', { error: message });
-      }
-
-      const commitMsg = `copperhead: ${opts.request}\n\n${summary}\n\nVerification: ${verification}`;
-      // A git failure here (e.g. `git add -A` exiting 128 on an embedded repo)
-      // must land in summary.md as an outcome, not escape as a stack trace
-      // (AC-8.6): roll back per the snapshot contract and report commit-failed.
-      let commit: string;
-      try {
-        commit = await commitAll(repoRoot, commitMsg);
-      } catch (err) {
-        return fail(`commit failed: ${(err as Error).message}`, 'commit-failed');
-      }
-      if (ctx.changeId && existsSync(path.join(repoRoot, 'openspec', 'config.yaml'))) {
-        // The verified commit already exists; discarding it because archive
-        // housekeeping failed would be the worse trade, so this is a warning.
-        try {
-          const arch = await openspecArchive(repoRoot, ctx.changeId);
-          await transcript.event('openspec-archive', { changeId: ctx.changeId, ok: arch.ok });
-          if (arch.ok && (await isDirty(repoRoot))) {
-            await commitAll(repoRoot, `copperhead: archive change ${ctx.changeId}`);
-          }
-        } catch (err) {
-          const message = (err as Error).message;
-          log(`warning: openspec archive failed (${message}); the run commit itself succeeded`);
-          await transcript.event('openspec-archive-failed', { changeId: ctx.changeId, error: message });
-        }
-      }
-      await transcript.event('run-committed', { commit, files });
-      const runStats = stats('done');
-      await transcript.event('run-end', runStats);
-      await transcript.writeSummary({
-        request: opts.request,
-        changeId: ctx.changeId,
-        plan,
-        filesTouched: files,
-        ercResult: ctx.lastErc ? (ctx.lastErc.ok ? 'clean' : 'FAILING') : 'not run',
-        drcResult: ctx.lastDrc ? (ctx.lastDrc.ok ? 'clean' : 'FAILING') : 'not run',
-        decisions: ctx.decisions,
-        tokensIn,
-        tokensOut,
-        outcome: 'success',
-        openObligations: null,
-        env: meta,
-        stats: runStats,
-      });
-      await remember({
-        request: opts.request,
-        outcome: 'success',
-        summary,
-        changeId: ctx.changeId,
-        filesTouched: files,
-        decisions: ctx.decisions,
-        verification,
-      });
-      log(`committed ${commit.slice(0, 10)} (${files.length} file(s))`);
-      r.finish(outcomeLine(runStats, `committed ${commit.slice(0, 10)}`));
-      return {
-        outcome: 'success',
-        exitPath: 'done',
-        summary,
-        transcriptDir: transcript.dir,
-        filesTouched: files,
-        commit,
-        stats: runStats,
-        cacheHits: cacheHits(),
-      };
     }
-  }
 
-  const filesAfter = await changedFiles(repoRoot, snap.head);
-  return fail(
-    `turn budget exhausted (${budget} turns, ${filesAfter.length} files touched but unverified)`,
-    'turn-budget-exhausted',
-  );
+    const filesAfter = await changedFiles(repoRoot, snap.head);
+    return fail(
+      `turn budget exhausted (${budget} turns, ${filesAfter.length} files touched but unverified)`,
+      'turn-budget-exhausted',
+    );
+  } finally {
+    process.removeListener('SIGINT', onInterruptSignal);
+    process.removeListener('SIGTERM', onInterruptSignal);
+  }
 }

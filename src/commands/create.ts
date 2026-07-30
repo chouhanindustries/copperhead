@@ -6,10 +6,11 @@ import { loadConfig, resolveCompatSettings } from '../config.js';
 import { bootstrapKicadProject } from '../kicad/bootstrap.js';
 import { exportSvg, runErc } from '../kicad/cli.js';
 import { listSymbols } from '../kicad/sexp.js';
-import { isDirty, commitAll, changedFiles } from '../util/git.js';
+import { isDirty, commitAll, commitPaths, changedFiles } from '../util/git.js';
 import type { CompatSettings, CopperheadConfig } from '../config.js';
 import { checkDrift } from '../memory/drift.js';
 import { runAgentLoop, makeProvider, type BudgetExhaustedStats } from '../agent/loop.js';
+import type { ExitPath } from '../agent/transcript.js';
 import { diagnoseStageFailure, transcriptExcerpt, withTimeout, type StageDiagnosis } from '../agent/recovery.js';
 import type { Provider } from '../agent/types.js';
 import type { RunMetaInput } from '../agent/runmeta.js';
@@ -416,6 +417,19 @@ interface StageCost {
   tokensIn: number;
   tokensOut: number;
   cacheHits: number;
+  /** True while this stage's attempt loop is actively running (change
+   *  flush-run-metrics-incrementally). Not a reused exit-path enum (design
+   *  D2) — a stage is either mid-attempt or it isn't; `resumed`/`ran`/
+   *  `stalled` are orthogonal to it and rendered separately. */
+  running?: boolean;
+  /** The most recent attempt's real exit path (`done` on success, or
+   *  whatever `fail()` actually reported: `stalled`, `provider-error`,
+   *  `turn-budget-exhausted`, ...). Reported directly instead of collapsing
+   *  every non-success outcome to a generic `'ran'` — a stalled or
+   *  provider-error stage previously showed identically to a finished one,
+   *  which the delta spec explicitly promises not to do ("a stage whose run
+   *  reports stalled SHALL appear as stalled"). Caught in review. */
+  lastExitPath?: ExitPath;
 }
 
 /** Quote a path/value for a copy-pasteable resume command (5.3). */
@@ -534,6 +548,24 @@ function ranTotals(stageCosts: StageCost[]): {
 const cachePct = (hits: number, turns: number): number => (turns ? Math.round((hits / turns) * 100) : 0);
 
 /**
+ * Per-stage report status: 'resumed' or 'running' take priority (design D2 —
+ * not derived from an exit path), otherwise the stage's last real exit path,
+ * with the ordinary success case ('done') rendered as the existing 'ran' for
+ * readability. A stage that stopped for any other reason (`stalled`,
+ * `provider-error`, `turn-budget-exhausted`, ...) reports that reason
+ * directly instead of collapsing to the same 'ran' a successful stage gets —
+ * previously every non-success stop looked identical to a finished stage,
+ * contradicting the delta spec's "a stage whose run reports stalled SHALL
+ * appear as stalled". Caught in review.
+ */
+function stageStatus(c: StageCost): string {
+  if (c.resumed) return 'resumed';
+  if (c.running) return 'running';
+  if (c.lastExitPath && c.lastExitPath !== 'done') return c.lastExitPath;
+  return 'ran';
+}
+
+/**
  * The running whole-run total, printed at each stage's end (5.6). A create board
  * is built over many invocations and each stage's `summary.md` covers only that
  * stage; this line accrues the pipeline total so the operator sees the true cost
@@ -582,6 +614,7 @@ async function writeRunReport(opts: CreateOptions, stageCosts: StageCost[]): Pro
       tokensOut: c.tokensOut,
       cacheHits: c.cacheHits,
       cacheHitPct: c.resumed ? null : cachePct(c.cacheHits, c.turns),
+      status: stageStatus(c),
     })),
     total: { ...t, cacheHitPct: cachePct(t.cacheHits, t.turns) },
     slowestStage: slowest ? { name: slowest.name, wallMs: slowest.wallMs } : null,
@@ -592,7 +625,8 @@ async function writeRunReport(opts: CreateOptions, stageCosts: StageCost[]): Pro
   const lines = [
     '# Copperhead run report',
     '',
-    'Per-stage cost of the create pipeline, regenerated at the end of every run.',
+    'Per-stage cost of the create pipeline, regenerated at every stage boundary',
+    '(stage start and stage end), not only at the end of the whole run.',
     'Resumed stages were already complete on entry and cost nothing this run.',
     '',
     row(['Stage', 'Wall', 'Turns', 'In', 'Out', 'Cache', 'Status']),
@@ -607,7 +641,7 @@ async function writeRunReport(opts: CreateOptions, stageCosts: StageCost[]): Pro
             fmtTokens(c.tokensIn),
             fmtTokens(c.tokensOut),
             `${cachePct(c.cacheHits, c.turns)}%`,
-            'ran',
+            stageStatus(c),
           ]),
     ),
     row([
@@ -636,6 +670,29 @@ async function writeRunReport(opts: CreateOptions, stageCosts: StageCost[]): Pro
     opts.log(`wrote run report: ${path.relative(opts.repoRoot, path.join(runsDir, 'REPORT.md'))} (+ report.json)`);
   } catch (err) {
     opts.log(`warning: could not write run report (${(err as Error).message})`);
+  }
+}
+
+/**
+ * Commit the just-regenerated REPORT.md/report.json as their own standalone
+ * commit (change flush-run-metrics-incrementally). Separate from the per-run
+ * artifact commit `loop.ts` makes for a single stage's transcript/metrics/
+ * summary — this file has no visibility into a single run's audit trail, and
+ * `loop.ts` has no visibility into the pipeline-level report (design D8/open
+ * question). Best-effort and silent when nothing changed (e.g. an unchanged
+ * report between two calls at the same stage boundary).
+ */
+async function commitReportArtifacts(opts: CreateOptions, config: CopperheadConfig, label: string): Promise<void> {
+  if (!config.commitRunArtifacts) return;
+  const runsDir = path.join(opts.repoRoot, '.copperhead', 'runs');
+  try {
+    await commitPaths(
+      opts.repoRoot,
+      [path.join(runsDir, 'REPORT.md'), path.join(runsDir, 'report.json')],
+      `copperhead: run report ${label}`,
+    );
+  } catch (err) {
+    opts.log(`warning: could not commit run report (${(err as Error).message})`);
   }
 }
 
@@ -700,7 +757,29 @@ export async function runCreate(opts: CreateOptions): Promise<{ ok: boolean; com
     // Cost accumulates across all attempts of the stage, so a stage that took a
     // retry to complete shows its true total in the summary (5.2).
     const stageStart = Date.now();
-    const cost: StageCost = { name: stage.name, resumed: false, wallMs: 0, turns: 0, tokensIn: 0, tokensOut: 0, cacheHits: 0 };
+    const cost: StageCost = {
+      name: stage.name,
+      resumed: false,
+      wallMs: 0,
+      turns: 0,
+      tokensIn: 0,
+      tokensOut: 0,
+      cacheHits: 0,
+      running: true,
+    };
+    // Pushed now, mutated in place as attempts progress, so a report
+    // regenerated while this stage is still running (change
+    // flush-run-metrics-incrementally) shows it as an in-flight row rather
+    // than omitting it until the stage finishes. Written to disk only, not
+    // committed: this runs before the stage's own runAgentLoop call, i.e.
+    // before its gitPreflight has validated the repo even once. A stage-start
+    // commit here would (and, caught in review, once did) create the repo's
+    // first commit out of a REPORT.md write on a genuinely fresh repo,
+    // silently curing the very "no commits yet" precondition gitPreflight
+    // exists to refuse on. Committing is deferred to a stage's actual
+    // boundary — success, failure, or stop — once the repo is known-valid.
+    stageCosts.push(cost);
+    await writeRunReport(opts, stageCosts);
     for (let attempt = 1; ; attempt++) {
       // Re-scaffold before every attempt, not just once per stage. A previous
       // attempt that failed at the commit gate rolls the tree back
@@ -748,6 +827,7 @@ export async function runCreate(opts: CreateOptions): Promise<{ ok: boolean; com
       cost.tokensIn += res.stats?.tokensIn ?? 0;
       cost.tokensOut += res.stats?.tokensOut ?? 0;
       cost.cacheHits += res.cacheHits ?? 0;
+      cost.lastExitPath = res.exitPath; // 'done' on success; the real reason otherwise
       stageTranscriptDir = res.transcriptDir; // last attempt's run dir (for SVG artifacts / report)
 
       // A successful run is not the same as a completed stage: an agent can
@@ -809,15 +889,22 @@ export async function runCreate(opts: CreateOptions): Promise<{ ok: boolean; com
     }
 
     cost.wallMs = Date.now() - stageStart;
-    stageCosts.push(cost);
+    cost.running = false;
 
     if (!stageDone) {
       logResumePoint(opts, stage, i);
       printCostTable(opts, stageCosts);
       await writeRunReport(opts, stageCosts);
+      await commitReportArtifacts(opts, config, `${stage.name} (stopped)`);
       return { ok: false, completed };
     }
     completed.push(stage.name);
+    // Regenerated immediately on a bare stage success (change
+    // flush-run-metrics-incrementally) — previously this only happened on
+    // failure or once at the very end of the whole pipeline, so a stage that
+    // succeeded mid-pipeline never got its own report/commit boundary.
+    await writeRunReport(opts, stageCosts);
+    await commitReportArtifacts(opts, config, stage.name);
     await renderStageArtifacts(opts, stage.name, stageTranscriptDir);
     await emitJlcpcbAfterOutputs(stage.name, opts);
     logCumulative(opts, stageCosts);
@@ -831,5 +918,6 @@ export async function runCreate(opts: CreateOptions): Promise<{ ok: boolean; com
   );
   printCostTable(opts, stageCosts);
   await writeRunReport(opts, stageCosts);
+  await commitReportArtifacts(opts, config, 'pipeline complete');
   return { ok: check.ok, completed };
 }
