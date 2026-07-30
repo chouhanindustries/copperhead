@@ -270,6 +270,50 @@ describe('live metrics.json (AC-16.3)', () => {
     }
   });
 
+  it('serializes writes so a slow heartbeat snapshot cannot land after a later terminal one (ordering regression)', async () => {
+    // Unique temp filenames (the earlier fix) stop two writers from
+    // corrupting *each other's* file, but not this: a last-writer-wins race
+    // where a slow write started earlier finishes later and renames its
+    // stale data over a newer snapshot. Delaying exactly the first write
+    // (the heartbeat tick that fires during the slow first turn below)
+    // simulates that; without serialization, the run's real per-call and
+    // terminal writes — all fast, all dispatched while the slow one is still
+    // in flight — would finish first, and the delayed heartbeat's stale
+    // 'running' status would land last. Caught in review.
+    const { repo, cleanup } = await tempFixtureRepo();
+    try {
+      await mkdir(path.join(repo, '.copperhead'), { recursive: true });
+      await writeFile(path.join(repo, '.copperhead', 'config.json'), JSON.stringify({ heartbeatMs: 10 }), 'utf8');
+
+      const real = vi.mocked(writeLiveMetrics).getMockImplementation()!;
+      vi.mocked(writeLiveMetrics).mockImplementationOnce(async (dir, data) => {
+        await new Promise((r) => setTimeout(r, 200));
+        return real(dir, data);
+      });
+
+      class SlowThenDoneProvider implements Provider {
+        readonly name = 'scripted';
+        private i = 0;
+        async chat(_m: unknown, _t: unknown, opts?: ChatOpts): Promise<Turn> {
+          this.i++;
+          if (this.i === 1) {
+            opts?.onStream?.(1);
+            await new Promise((r) => setTimeout(r, 60)); // several 10ms heartbeat ticks
+            return spin('a');
+          }
+          return finishTurn('done', 'all good');
+        }
+      }
+
+      const res = await runAgentLoop(loopOpts(repo, new SlowThenDoneProvider(), { maxTurns: 5, allowDirty: true }));
+      expect(res.outcome).toBe('success');
+      const final = await readMetrics(res.transcriptDir);
+      expect(final.status).toBe('done');
+    } finally {
+      await cleanup();
+    }
+  });
+
   it('a healthy run never reports status "stalled" mid-run (regression guard for the PR#149 conflation bug)', async () => {
     const { repo, cleanup } = await tempFixtureRepo();
     try {
@@ -451,6 +495,32 @@ describe('the synchronous SIGINT/SIGTERM primitives (AC-16.9, design D5)', () =>
       expect(sha).toBeTruthy();
       const files = await commitFiles(repo, sha!);
       expect(files).toEqual(['.copperhead/runs/x/summary.md']);
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it('a failed commit does not discard content already staged under the same path', async () => {
+    // Previously, a failed commit's cleanup always ran `git reset -- <paths>`
+    // to unstage them — correct when there was nothing there before, but a
+    // dirty-tree run (allowDirty) can legitimately have real staged content
+    // under these exact paths already; resetting discarded that too, not
+    // just what this call added. Caught in review.
+    const { repo, cleanup } = await tempFixtureRepo();
+    try {
+      const hook = path.join(repo, '.git', 'hooks', 'pre-commit');
+      await writeFile(hook, '#!/bin/sh\nexit 1\n', 'utf8');
+      await chmod(hook, 0o755);
+
+      const target = path.join(repo, '.copperhead', 'runs', 'x', 'summary.md');
+      await mkdir(path.dirname(target), { recursive: true });
+      await writeFile(target, '# pre-existing staged content\n', 'utf8');
+      await execa('git', ['add', '-f', target], { cwd: repo }); // staged BEFORE commitPathsSync ever touches it
+
+      expect(() => commitPathsSync(repo, [target], 'copperhead: partial run data x (interrupted)')).toThrow();
+
+      const { stdout: staged } = await execa('git', ['diff', '--cached', '--name-only'], { cwd: repo });
+      expect(staged.split('\n')).toContain('.copperhead/runs/x/summary.md');
     } finally {
       await cleanup();
     }

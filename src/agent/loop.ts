@@ -410,6 +410,26 @@ async function runWithMemory(
     startedAt: startedAtIso,
     lastUpdateAt: new Date().toISOString(),
   });
+  // Serializes every metrics.json write for this run into call order (design
+  // D3/D4, hardened further in review): unique temp filenames alone stop two
+  // writers from corrupting each other's file, but not a last-writer-wins
+  // ordering race — the heartbeat's fire-and-forget write can still start
+  // before, and finish after, a later per-call or terminal write, so its
+  // stale 'running' snapshot ends up renamed on top of newer data. Chaining
+  // every call through one promise makes them run strictly in invocation
+  // order regardless of how long any individual write's fsync takes.
+  // `metricsQueue` itself never rejects (a failed write must not permanently
+  // wedge every later write behind a rejected promise, since `.then()` on a
+  // rejected promise never runs) — the real per-call result, which CAN
+  // reject, is returned separately so callers that want to know about (or
+  // propagate) a failure still can, while the heartbeat's caller keeps its
+  // existing best-effort `.catch(() => {})`.
+  let metricsQueue: Promise<unknown> = Promise.resolve();
+  const queueMetricsWrite = (data: LiveMetrics): Promise<void> => {
+    const write = metricsQueue.then(() => writeLiveMetrics(transcript.dir, data));
+    metricsQueue = write.catch(() => {});
+    return write;
+  };
   /** Files eligible for the per-run artifact commit: this run's own audit
    *  trail only, never a design file (design D5/D8). Summary may not exist
    *  yet at call time; commitPaths/commitPathsSync silently skip missing
@@ -484,7 +504,7 @@ async function runWithMemory(
     // Final terminal snapshot: a real exit path now that the run has one,
     // never the 'running' placeholder (design D2). Written after restore()
     // and writeSummary() so the files being committed already exist.
-    await writeLiveMetrics(transcript.dir, liveMetrics(exitPath, turnsUsed));
+    await queueMetricsWrite(liveMetrics(exitPath, turnsUsed));
     await commitArtifacts(`partial run data ${ctx.runId} (${exitPath})`);
     log(`run failed: ${reason}`);
     if (restoreError) {
@@ -615,7 +635,7 @@ async function runWithMemory(
               // write failure here must not crash an otherwise-healthy run —
               // unlike the per-call llm-call event below, nothing downstream
               // depends on any one heartbeat snapshot landing.
-              writeLiveMetrics(transcript.dir, liveMetrics('running', turn + 1)).catch(() => {});
+              queueMetricsWrite(liveMetrics('running', turn + 1)).catch(() => {});
             }, config.heartbeatMs)
           : null;
       heartbeat?.unref?.();
@@ -656,7 +676,7 @@ async function runWithMemory(
           },
           { durable: true },
         );
-        await writeLiveMetrics(transcript.dir, liveMetrics('running', turn + 1));
+        await queueMetricsWrite(liveMetrics('running', turn + 1));
         if (err instanceof TurnTimeoutError) {
           // A hung provider turn: the watchdog aborted the in-flight call and tore
           // down its subprocess. Retry the same turn a bounded number of times
@@ -738,7 +758,7 @@ async function runWithMemory(
         },
         { durable: true },
       );
-      await writeLiveMetrics(transcript.dir, liveMetrics('running', turn + 1));
+      await queueMetricsWrite(liveMetrics('running', turn + 1));
       await transcript.event('assistant', { text: res.text, toolCalls: res.toolCalls });
 
       if (res.text) {
@@ -818,7 +838,7 @@ async function runWithMemory(
             decisions: ctx.decisions,
             verification: 'n/a (refused before verification)',
           });
-          await writeLiveMetrics(transcript.dir, liveMetrics('refused', turnsUsed));
+          await queueMetricsWrite(liveMetrics('refused', turnsUsed));
           await commitArtifacts(`partial run data ${ctx.runId} (refused)`);
           log(`refused: ${summary}`);
           r.finish(outcomeLine(runStats));
@@ -868,7 +888,7 @@ async function runWithMemory(
             env: meta,
             stats: runStats,
           });
-          await writeLiveMetrics(transcript.dir, liveMetrics('done', turnsUsed));
+          await queueMetricsWrite(liveMetrics('done', turnsUsed));
           await commitArtifacts(`partial run data ${ctx.runId} (dry-run)`);
           r.finish(outcomeLine(runStats, 'dry run: changes reverted'));
           return {
@@ -957,7 +977,7 @@ async function runWithMemory(
           decisions: ctx.decisions,
           verification,
         });
-        await writeLiveMetrics(transcript.dir, liveMetrics('done', turnsUsed));
+        await queueMetricsWrite(liveMetrics('done', turnsUsed));
         // A NEW, standalone commit — never an amend (design D5/D8). The
         // design commit above may already be followed by an openspec-archive
         // commit; amending "the last commit" would risk landing on whichever

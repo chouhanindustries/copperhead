@@ -381,15 +381,21 @@ export async function commitPaths(
 ): Promise<string | null> {
   const existing = paths.filter((p) => existsSync(p));
   if (!existing.length) return null;
+  // Captured before this helper's own `git add -f`: on a failed commit, the
+  // cleanup below must be able to tell "nothing was staged for these exact
+  // paths before I touched them" (safe to reset back to HEAD) from
+  // "something was legitimately staged here already" (a dirty-tree run,
+  // gitPreflight's allowDirty, can have real staged content under these
+  // exact paths — resetting would silently discard it, not just what this
+  // call added). Caught in review.
+  const preExisting = await git(repo, ['diff', '--cached', '--name-only', '--', ...existing]);
   await git(repo, ['add', '-f', '--', ...existing]);
   // Pathspec-scoped on both the check and the commit itself, not just the
-  // add: a run can legitimately execute against a dirty tree (gitPreflight's
-  // allowDirty, which create.ts's stage runs always set), so other content
-  // can already be staged. An unscoped `git diff --cached`/`git commit` would
-  // sweep that unrelated staged work into this "targeted" commit — exactly
-  // what "exactly the given paths" promises not to do. `git commit -- <paths>`
-  // commits only those paths' current content regardless of what else is
-  // staged, and leaves the rest of the index untouched. Caught in review.
+  // add: an unscoped `git diff --cached`/`git commit` would sweep any other
+  // staged content into this "targeted" commit — exactly what "exactly the
+  // given paths" promises not to do. `git commit -- <paths>` commits only
+  // those paths' current content regardless of what else is staged, and
+  // leaves the rest of the index untouched. Caught in review.
   const staged = await git(repo, ['diff', '--cached', '--name-only', '--', ...existing]);
   if (!staged) return null;
   try {
@@ -397,10 +403,14 @@ export async function commitPaths(
   } catch (err) {
     // A failing pre-commit hook (or any other commit failure) must not leave
     // these paths sitting staged — the caller's own tree may be inspected
-    // for cleanliness right after (e.g. fail()'s snapshot contract). Best
-    // effort: if even the unstage fails, the original error is still what
-    // propagates.
-    await git(repo, ['reset', '--', ...existing]).catch(() => {});
+    // for cleanliness right after (e.g. fail()'s snapshot contract). But
+    // only when there was nothing to lose: if these exact paths already had
+    // staged content before this call ran, resetting to HEAD would discard
+    // that pre-existing state, not just what this call added — so it is
+    // left as-is instead, staged alongside whatever else was already there.
+    if (!preExisting) {
+      await git(repo, ['reset', '--', ...existing]).catch(() => {});
+    }
     throw err;
   }
   return git(repo, ['rev-parse', 'HEAD']);
@@ -426,6 +436,9 @@ export function commitPathsSync(
   // already handles the resulting throw. Caught in review.
   const run = (args: string[]): string =>
     execFileSync('git', args, { cwd: repo, encoding: 'utf8', timeout: 5000 }).trim();
+  // See commitPaths above: captured before `add -f` so the failure cleanup
+  // never discards content that was already staged under these exact paths.
+  const preExisting = run(['diff', '--cached', '--name-only', '--', ...existing]);
   run(['add', '-f', '--', ...existing]);
   // Pathspec-scoped, see commitPaths above.
   if (!run(['diff', '--cached', '--name-only', '--', ...existing])) return null;
@@ -433,7 +446,7 @@ export function commitPathsSync(
     run(['commit', '-m', message, ...(opts.noVerify ? ['--no-verify'] : []), '--', ...existing]);
   } catch (err) {
     try {
-      run(['reset', '--', ...existing]);
+      if (!preExisting) run(['reset', '--', ...existing]);
     } catch {
       // best effort, see commitPaths
     }
