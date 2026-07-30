@@ -130,10 +130,15 @@ export function upsertDraftQuality(doc: string, generated: string): string {
     after = lines.slice(end);
   }
 
+  // Blank-line normalization applies to the generated block only. The seams
+  // are single blank lines by construction (`before`, `notes` and `after` are
+  // edge-trimmed), and everything the user or the model wrote, including blank
+  // runs inside fenced code blocks either side of the section, is preserved
+  // byte for byte.
   const section = [
     `${'#'.repeat(level)} ${DRAFT_QUALITY_TITLE}`,
     '',
-    generated,
+    generated.replace(/\n{3,}/g, '\n\n'),
     '',
     DRAFT_QUALITY_MARKER,
     '',
@@ -142,7 +147,7 @@ export function upsertDraftQuality(doc: string, generated: string): string {
   const out = [...(before.length ? [...trimBlank(before), ''] : []), ...section];
   const tail = trimBlank(after);
   if (tail.length) out.push('', ...tail);
-  return out.join('\n').replace(/\n{3,}/g, '\n\n') + '\n';
+  return out.join('\n') + '\n';
 }
 
 /** Plain-text scorecard for the agent, in the voice of the ERC/DRC reports. */

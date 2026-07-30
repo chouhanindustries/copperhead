@@ -100,6 +100,7 @@ export default defineConfig({
           items: [
             { label: 'CLI', link: '/reference/cli/' },
             { label: 'Configuration', link: '/reference/configuration/' },
+            { label: 'Layout quality rules', link: '/reference/layout-rules/' },
           ],
         },
         {

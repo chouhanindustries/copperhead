@@ -20,12 +20,17 @@ jobs:
           cache: npm
 
       # ERC/DRC tests shell out to kicad-cli, so the real thing has to be here.
+      # kicad-demos is only Recommended by the kicad package, so under
+      # --no-install-recommends it must be named explicitly: the corpus
+      # calibration tier (test/layout-corpus.test.ts) skips without
+      # /usr/share/kicad/demos, and CI must run it, not skip it.
       - name: Install KiCad
         run: |
           sudo add-apt-repository --yes ppa:kicad/kicad-10.0-releases
           sudo apt-get update
-          sudo apt-get install --yes --no-install-recommends kicad
+          sudo apt-get install --yes --no-install-recommends kicad kicad-demos
           kicad-cli --version
+          test -d /usr/share/kicad/demos
 
       - run: npm ci
       - run: npm run lint:md

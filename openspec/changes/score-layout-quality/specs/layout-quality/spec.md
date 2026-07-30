@@ -9,13 +9,15 @@ rotation, layer), pads (number, net, absolute position, extent), courtyard exten
 track segments (endpoints, width, layer, net), vias, zones (net, layer), and the
 Edge.Cuts outline extents. Net identity SHALL resolve both the KiCad ≤9 numeric form
 (`(net 3 "GND")` on pads, `(net 3)` on segments, resolved through the board's net
-table) and the KiCad 10 named form (`(net "GND")`). The reader SHALL never
-serialize a board.
+table) and the KiCad 10 named form (`(net "GND")`). The board's reported net-name
+set SHALL be the union of the net-table names and every net resolved on a pad,
+segment, via, or zone, so a KiCad 10 board, whose table holds only net 0, still
+reports its nets. The reader SHALL never serialize a board.
 
 #### Scenario: A KiCad 10 board reads its nets
 
 - **WHEN** a board written by KiCad 10 is read
-- **THEN** pads and segments report net names taken from their `(net "…")` forms
+- **THEN** pads and segments report net names taken from their `(net "…")` forms, and the board's net-name set contains those names even though the net table holds only net 0
 
 #### Scenario: A KiCad 8 board reads its nets
 
@@ -60,9 +62,11 @@ Each row of the hard table SHALL name the `.copperhead/constraints.json` key it 
 derived from, its expected bound, the measured value, and a status of `pass`,
 `fail`, or `n/a`. Keys SHALL be matched by suffix, so a project's own namespacing
 reaches the same measurement. A row the board cannot answer SHALL be `n/a` with a
-stated reason and SHALL be excluded from the score rather than counted as a pass. A
-board whose registry has no matching key SHALL produce an empty hard table rather
-than invented rows.
+stated reason, never counted as a pass. On a board with no footprints, `n/a` rows
+SHALL be excluded from the score's hard term; on a board with footprints, any
+`n/a` row SHALL forfeit the hard term entirely, so deleting the component a
+constraint polices can never score above misplacing it. A board whose registry has
+no matching key SHALL produce an empty hard table rather than invented rows.
 
 #### Scenario: A width constraint produces a traceable row
 
@@ -76,8 +80,13 @@ than invented rows.
 
 #### Scenario: An unanswerable constraint reads as n/a, not as a pass
 
-- **WHEN** the registry holds a mounting-hole clearance constraint and the board has no mounting holes
+- **WHEN** the registry holds a mounting-hole clearance constraint and the empty scaffold has no mounting holes
 - **THEN** that row's status is `n/a` with a stated reason, and it does not raise the score
+
+#### Scenario: Deleting the policed component does not outscore misplacing it
+
+- **WHEN** the decoupling capacitors a decoupling-distance constraint polices are deleted from a populated board
+- **THEN** the decoupling row is `n/a`, the hard term is forfeited, and the board scores no higher than the same board with the capacitors misplaced
 
 ### Requirement: The agent can measure a layout
 
@@ -112,7 +121,8 @@ score to fall for each. The suite SHALL run in CI on committed fixtures. When
 `/usr/share/kicad/demos` is present, a corpus test SHALL additionally require that
 every demo board scores without throwing and that the routed `multichannel_mixer`
 outscores its unrouted twin; when the directory is absent the corpus test SHALL skip
-rather than fail.
+rather than fail. CI SHALL install the KiCad demos explicitly, so the corpus tier
+runs there rather than skipping.
 
 #### Scenario: Each mutation lowers the score
 

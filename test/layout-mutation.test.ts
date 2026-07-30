@@ -29,6 +29,20 @@ const replaceOnce = (text: string, from: string, to: string): string => {
   return text.slice(0, at) + to + text.slice(at + from.length);
 };
 
+/** Remove a whole `(footprint …)` block by its refdes, balancing parentheses.
+ *  Still a text edit on the source: nothing here serializes a board. */
+const deleteFootprint = (text: string, ref: string): string => {
+  const at = text.indexOf(`(property "Reference" "${ref}"`);
+  if (at === -1) throw new Error(`refdes not found: ${ref}`);
+  const start = text.lastIndexOf('(footprint', at);
+  let depth = 0;
+  for (let i = start; i < text.length; i++) {
+    if (text[i] === '(') depth++;
+    else if (text[i] === ')' && --depth === 0) return text.slice(0, start) + text.slice(i + 1);
+  }
+  throw new Error(`unbalanced footprint block for ${ref}`);
+};
+
 const MUTATIONS: Mutation[] = [
   {
     name: 'every decoupling cap moves 15 mm from the part it bypasses',
@@ -98,6 +112,23 @@ describe('layout scorer mutation suite', () => {
       expect(mutated.score).toBeLessThan(original.score);
     });
   }
+
+  it('scores deleting the bypass caps no higher than moving them 15 mm', () => {
+    // Regression: an n/a row used to shrink the hard term's denominator, so a
+    // board with its decoupling DELETED (row n/a, term back to full marks)
+    // outscored the same board with its decoupling misplaced (row fail). On a
+    // populated board an unanswerable constraint now forfeits the hard term.
+    const moved = computeLayoutMetrics(parseBoard(MUTATIONS[0]!.apply(source), 'moved.kicad_pcb'), REFERENCE_CONSTRAINTS);
+    const deleted = computeLayoutMetrics(
+      parseBoard(deleteFootprint(deleteFootprint(source, 'C1'), 'C2'), 'deleted.kicad_pcb'),
+      REFERENCE_CONSTRAINTS,
+    );
+    expect(deleted.soft.footprints).toBe(6);
+    expect(deleted.hard.find((r) => r.key === 'power.decoupling_distance_mm')!.status).toBe('n/a');
+    expect(deleted.terms.find((t) => t.name === 'Hard constraints')!.points).toBe(0);
+    expect(deleted.score).toBeLessThanOrEqual(moved.score);
+    expect(deleted.score).toBeLessThan(original.score);
+  });
 
   it('leaves the fixture on disk untouched', async () => {
     expect(await readFile(REFERENCE_BOARD, 'utf8')).toBe(source);

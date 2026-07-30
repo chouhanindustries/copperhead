@@ -59,6 +59,26 @@ describe('create pipeline: generated "## Draft quality" (D11)', () => {
     }
   });
 
+  it('warns and leaves LAYOUT.md alone when the board cannot be read', async () => {
+    const { repo, cleanup } = await tempFixtureRepo();
+    try {
+      await runInit({ repoRoot: repo });
+      const config = await loadConfig(repo);
+      // Corrupt the board so the reader throws: regeneration is best-effort
+      // and must log a warning rather than fail the pipeline.
+      await writeFile(path.join(repo, config.board!), '(kicad_sch (version 20240108))', 'utf8');
+      const layout = path.join(repo, config.docs, 'LAYOUT.md');
+      const before = await readFile(layout, 'utf8');
+      const lines: string[] = [];
+      await refreshDraftQuality(opts(repo, (s) => lines.push(s)), 'layout-draft');
+      expect(lines.join('\n')).toContain('could not regenerate');
+      expect(lines.join('\n')).toContain('not a KiCad board file');
+      expect(await readFile(layout, 'utf8')).toBe(before);
+    } finally {
+      await cleanup();
+    }
+  });
+
   it('does nothing for other stages, and nothing without a board or a LAYOUT.md', async () => {
     const { repo, cleanup } = await tempFixtureRepo();
     try {

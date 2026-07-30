@@ -44,3 +44,12 @@
 ## 6. Archive
 
 - [ ] 6.1 On archive, merge `layout_metrics` into SPEC.md's tool table and the generated `## Draft quality` section into the create-pipeline stage-5 description (via /opsx:archive)
+
+## 7. Review fixes (PR #152)
+
+- [x] 7.1 Build the board's net-name set as the union of the net table and every net resolved on pads, segments, vias, and zones, so KiCad 10 boards (net table holding net 0 only) keep their net-named hard rows
+- [x] 7.2 Forfeit the hard term for any n/a row on a populated board, so deleting the component a constraint polices can never outscore misplacing it; keep the exclusion behaviour on the empty scaffold; regression test in the mutation suite
+- [x] 7.3 Install `kicad-demos` explicitly in CI so the corpus tier (the labeled routed/unrouted pair) runs there instead of skipping
+- [x] 7.4 Scope `upsertDraftQuality`'s blank-line normalization to the generated block, preserving blank runs in user prose and fenced code elsewhere in the document
+- [x] 7.5 Cover the range-bound, no-bound, max-only-outline, and padless-mounting-hole branches, and the `refreshDraftQuality` unreadable-board warning path
+- [x] 7.6 Document the measured layout rules in `docs/src/content/docs/reference/layout-rules.md`

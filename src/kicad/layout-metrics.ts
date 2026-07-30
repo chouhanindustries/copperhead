@@ -412,8 +412,24 @@ function routingDirectness(d: Derived, pourNets: Set<string>): { ratio: number; 
 function scoreTerms(soft: SoftMetrics, hard: HardRow[], directness: ReturnType<typeof routingDirectness>): ScoreTerm[] {
   const decided = hard.filter((r) => r.status !== 'n/a');
   const hardPass = decided.filter((r) => r.status === 'pass').length;
-  const hardFraction = decided.length ? hardPass / decided.length : 1;
+  const undecided = hard.length - decided.length;
   const fp = soft.footprints;
+  // On a populated board an n/a row forfeits the whole term. Excluding n/a
+  // rows from the denominator let deleting the component a constraint polices
+  // score HIGHER than misplacing it (the fail row vanished and the hard term
+  // sprang back to full marks), so an unanswerable requirement on a board with
+  // parts on it must cost strictly more than a failing one. The empty scaffold
+  // keeps the exclusion behaviour: with nothing placed yet, n/a is the honest
+  // default, and the placement and routing terms already hold its score down.
+  const hardFraction = fp
+    ? hard.length === 0
+      ? 1
+      : undecided
+        ? 0
+        : hardPass / hard.length
+    : decided.length
+      ? hardPass / decided.length
+      : 1;
   const TARGET_DENSITY = 0.35;
   return [
     {
@@ -426,7 +442,12 @@ function scoreTerms(soft: SoftMetrics, hard: HardRow[], directness: ReturnType<t
       name: 'Hard constraints',
       max: 20,
       points: round(20 * hardFraction),
-      detail: decided.length ? `${hardPass}/${decided.length} constraint rows pass` : 'no matching constraint keys',
+      detail:
+        fp && undecided
+          ? `${undecided} n/a row(s) forfeit the term: a populated board must answer every constraint`
+          : decided.length
+            ? `${hardPass}/${decided.length} constraint rows pass`
+            : 'no matching constraint keys',
     },
     {
       name: 'Courtyard clearance',

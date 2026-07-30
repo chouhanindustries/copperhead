@@ -82,7 +82,9 @@ export interface Board {
   filePath: string;
   generatorVersion: string | null;
   copperLayers: string[];
-  /** Every net name in the board's net table, excluding the empty net 0. */
+  /** Every net name on the board: the net table plus every net resolved on a
+   *  pad, segment, via or zone. KiCad 10 keeps the table for net 0 only, so
+   *  the table alone would read as empty there. */
   netNames: string[];
   footprints: BoardFootprint[];
   segments: TrackSegment[];
@@ -437,11 +439,20 @@ export function parseBoard(text: string, filePath = ''): Board {
     }
   }
 
+  // The net table is not the whole story: KiCad 10 populates it with net 0
+  // alone and writes `(net "GND")` inline everywhere else, so the board's net
+  // names are the union of the table and every net resolved on an object.
+  const netNames = new Set(nets.names());
+  for (const fp of footprints) for (const pad of fp.pads) if (pad.net) netNames.add(pad.net);
+  for (const seg of segments) if (seg.net) netNames.add(seg.net);
+  for (const via of vias) if (via.net) netNames.add(via.net);
+  for (const zone of zones) if (zone.net) netNames.add(zone.net);
+
   return {
     filePath,
     generatorVersion: atom(child(root, 'generator_version'), 1) ?? null,
     copperLayers,
-    netNames: nets.names(),
+    netNames: [...netNames],
     footprints,
     segments,
     vias,

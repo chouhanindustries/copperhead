@@ -57,6 +57,10 @@ describe('kicad_pcb reader', () => {
     expect(b.segments[0]!.net).toBe('VCC');
     expect(b.vias[0]!.net).toBe('VCC');
     expect(b.zones[0]!.net).toBe('GND');
+    // KiCad 10's net table holds net 0 alone, so the board's net names must
+    // come from the objects, not the table (constraint-to-net matching
+    // resolves against them).
+    expect(b.netNames.sort()).toEqual(['GND', 'VCC']);
   });
 
   it('resolves the KiCad 8 numeric-net encoding through the board net table', () => {
