@@ -245,6 +245,8 @@ export interface CreateOptions {
   renderer?: ProgressRenderer;
   /** Command-level metadata; stage and brief identity are filled in per stage. */
   meta?: Omit<RunMetaInput, 'stage' | 'brief'>;
+  /** Test seam: bypass makeProvider for deterministic replay / cache-only runs. */
+  provider?: Provider;
 }
 
 /**
@@ -734,6 +736,7 @@ export async function runCreate(opts: CreateOptions): Promise<{ ok: boolean; com
         ...(opts.onBudgetExhausted ? { onBudgetExhausted: opts.onBudgetExhausted } : {}),
         log: opts.log,
         ...(opts.renderer ? { renderer: opts.renderer } : {}),
+        ...(opts.provider ? { provider: opts.provider } : {}),
         meta: {
           ...opts.meta,
           command: 'create',
