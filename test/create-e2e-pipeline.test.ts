@@ -373,9 +373,11 @@ describe('create pipeline — end-to-end (mocked provider)', () => {
       await writeFile(briefPath, '# A tiny device\n\nA USB-C power breakout board.\n', 'utf8');
 
     // Override mock to return empty symbols — simulating a false-green ERC
-    // on a schematic that has no real content
+    // on a schematic that has no real content.
+    // Use persistent mock (not Once) because isComplete is called twice:
+    // once before the agent runs (resume check) and once after.
     const { listSymbols } = await import('../src/kicad/sexp.js');
-    vi.mocked(listSymbols).mockResolvedValueOnce([]);
+    vi.mocked(listSymbols).mockResolvedValue([]);
 
       const lines: string[] = [];
       const res = await runCreate({ repoRoot: repo, briefPath, model: 'gpt-5', log: (s) => lines.push(s) });
