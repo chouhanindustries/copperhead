@@ -95,18 +95,19 @@ If `codex` is not on `PATH`, point `COPPERHEAD_CODEX_PATH` at an executable expl
 
 If none of these produce a model, the command exits with an error telling you the available ways to set one. `check` never needs a model, since it makes no LLM calls at all.
 
-Accepted model values (routing is by prefix; `makeProvider` checks `codex`, then `claude-code`, then `cursor`, then `claude`, then OpenAI):
+Accepted model values (routing is by prefix; `makeProvider` checks `grok`, then `codex`, then `claude-code`, then `cursor`, then `claude`, then OpenAI):
 
 | Value | Provider | Key |
 | --- | --- | --- |
-| `codex` / `codex:<id>` | Codex CLI, saved login | none (local Codex login) |
+| `codex` / `codex:<id>` | Codex CLI, saved login | none (uses your logged-in CLI) |
+| `grok` / `grok:<id>` | Grok Build CLI, saved login | none (uses your logged-in CLI) |
 | `claude-code` / `claude-code:<id>` | Claude Code, saved login | none (uses `CLAUDE_CODE_OAUTH_TOKEN` / your logged-in CLI) |
 | `cursor` / `cursor:<id>` | Cursor Agent CLI, saved login | none (`agent login`) |
 | `compat:<id>` | Any OpenAI-compatible endpoint (Groq, OpenRouter, Gemini, Ollama) | the variable named by `apiKeyEnv`; none for a local endpoint |
 | `claude` / `claude-<id>` | Anthropic API | `ANTHROPIC_API_KEY` |
 | `gpt-5` / anything else | OpenAI API | `OPENAI_API_KEY` |
 
-`claude-code` is matched before the `claude` prefix, so it is never captured by the Anthropic API route. Cursor runs report 0 token usage (CLI JSON has no usage fields).
+`claude-code` is matched before the `claude` prefix, so it is never captured by the Anthropic API route. Cursor and Grok runs report 0 token usage (CLI JSON has no usage fields).
 
 For `compat:<id>`, set `baseURL` and `apiKeyEnv` together — either as `COPPERHEAD_BASE_URL`/`COPPERHEAD_API_KEY_ENV`, or as `baseURL`/`apiKeyEnv` in `.copperhead/config.json`:
 
@@ -130,7 +131,7 @@ One-time setup:
 
 Authentication stays entirely with the CLI: copperhead never reads, copies, or logs the credential. A missing dependency or an unauthenticated install fails with an actionable message and leaves your tree untouched, and a rate-limited `claude-code` run never silently falls back to a billed API provider.
 
-### Saved login (Cursor Agent)
+### Saved login (Cursor Agent CLI)
 
 `--model cursor` drives the Cursor Agent CLI with your saved login from `agent login`, so you can run copperhead with **no model API keys**. Cursor runs in plan mode with sandbox enabled; copperhead maps tool calls through the same JSON prompt protocol as `claude-code` and keeps every mutation inside its own gated loop.
 
@@ -138,6 +139,10 @@ Authentication stays entirely with the CLI: copperhead never reads, copies, or l
 2. Run copperhead with `--model cursor` (use `--model cursor:<id>` for an explicit model).
 
 If `agent` is not on `PATH`, set `COPPERHEAD_CURSOR_PATH`. A rate-limited `cursor` run never silently falls back to a billed API provider.
+
+### Saved login (Grok Build CLI)
+
+`--model grok` drives the Grok Build CLI with your saved login from `grok login`, so you can run copperhead with **no model API keys**. Grok runs in plan mode; copperhead maps tool calls through the same JSON prompt protocol as `cursor` and keeps every mutation inside its own gated loop.
 
 ## Files copperhead writes
 

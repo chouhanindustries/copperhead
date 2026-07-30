@@ -41,6 +41,7 @@ Interactive agent shell (default when no command is given). On a TTY it takes ov
 copperhead
 copperhead "add reverse-polarity protection on VIN"   # seed request, then stay in the shell
 copperhead repl --model claude-code
+# or grok, codex, cursor, gpt-5, claude
 ```
 
 | Option | Description |
@@ -95,7 +96,7 @@ copperhead do "<change request>" [options]
 
 | Option | Description |
 | --- | --- |
-| `--model <model>` | `codex`, `cursor`, `gpt-5`, `claude`, `claude-code`, or a provider-specific model id. Saved-login providers: `codex` (Codex CLI), `cursor` (Cursor Agent CLI), `claude-code` (Claude Code). |
+| `--model <model>` | `grok`, `codex`, `cursor`, `gpt-5`, `claude`, `claude-code`, or a provider-specific model id. Saved-login providers: `grok` (Grok Build CLI), `codex` (Codex CLI), `cursor` (Cursor Agent CLI), `claude-code` (Claude Code). |
 | `--max-turns <n>` | Turn budget for this run. Overrides `maxTurns` from config. |
 | `--allow-dirty` | Permit a dirty working tree. The snapshot keeps tracked changes as a `git stash create` object and untracked files as a tree object, so a rollback restores both. |
 | `--dry-run` | Propose the diff and write nothing. |
@@ -135,7 +136,7 @@ Checks, in order:
 - **node** — at least the version copperhead requires.
 - **kicad-cli** — present on PATH (a missing binary is reported, not thrown).
 - **git** — present on PATH (copperhead snapshots and commits its work).
-- **provider** — resolves the model the same way a run does (`--model` > `COPPERHEAD_MODEL` > config > available key) and checks its credential. Saved-login providers (`codex`, `cursor`, `claude-code`) need no key and report `info`. For `compat:<id>` it checks the variable named by `apiKeyEnv`; a local endpoint needs no key.
+- **provider** — resolves the model the same way a run does (`--model` > `COPPERHEAD_MODEL` > config > available key) and checks its credential. Saved-login providers (`grok`, `codex`, `cursor`, `claude-code`) need no key and report `info`. For `compat:<id>` it checks the variable named by `apiKeyEnv`; a local endpoint needs no key.
 - **privacy** — `compat` only. `[warn]` when the endpoint's host is documented as training on submitted prompts; `[info]` naming the host when a remote endpoint has no known policy on record. Neither ever fails the check. A true loopback endpoint (`localhost`/`127.0.0.1`/`::1`) skips this line entirely; a `.local`/LAN host does not, since that traffic still leaves the machine.
 - **project** — informational: whether `.copperhead/config.json` exists and what it wires. Never blocks.
 
@@ -182,7 +183,7 @@ copperhead create --brief brief.md [--model <model>] [--interactive]
 | Option | Description |
 | --- | --- |
 | `--brief <file>` | **Required.** The product brief, in markdown. |
-| `--model <model>` | `codex`, `cursor`, `gpt-5`, `claude`, or `claude-code` (saved-login; no model API key for those three). |
+| `--model <model>` | `grok`, `codex`, `cursor`, `gpt-5`, `claude`, or `claude-code` (saved-login; no model API key for those four). |
 | `--interactive` | Re-enable the human gates: spec approval, and a pause before export. |
 
 Exits 1 if any stage fails to complete, 0 when the pipeline finishes.
