@@ -417,10 +417,11 @@ function scoreTerms(soft: SoftMetrics, hard: HardRow[], directness: ReturnType<t
   // On a populated board an n/a row forfeits the whole term. Excluding n/a
   // rows from the denominator let deleting the component a constraint polices
   // score HIGHER than misplacing it (the fail row vanished and the hard term
-  // sprang back to full marks), so an unanswerable requirement on a board with
-  // parts on it must cost strictly more than a failing one. The empty scaffold
-  // keeps the exclusion behaviour: with nothing placed yet, n/a is the honest
-  // default, and the placement and routing terms already hold its score down.
+  // sprang back to full marks). Forfeiting instead means an n/a row can never
+  // shrink the denominator and can never score above the same row failing, so
+  // deletion cannot improve the score. The empty scaffold keeps the exclusion
+  // behaviour: with nothing placed yet, n/a is the honest default, and the
+  // placement and routing terms already hold its score down.
   const hardFraction = fp
     ? hard.length === 0
       ? 1
