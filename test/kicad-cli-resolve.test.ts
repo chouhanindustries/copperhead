@@ -117,7 +117,7 @@ describe('kicad-cli binary resolution', () => {
       
       await rm(override, { force: true });
 
-      await expect(kicadCliVersion()).rejects.toBeInstanceOf(KicadCliBadOverrideError);
+      await expect(kicadCliVersion()).rejects.toBeInstanceOf(KicadCliMissingError);
 
       delete process.env.COPPERHEAD_KICAD_CLI;
       resetKicadCliCache();
