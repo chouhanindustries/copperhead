@@ -1,6 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import path from 'node:path';
-import { listSymbols, listNets, pinNets, parseSexp } from '../src/kicad/sexp.js';
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import { listSymbols, listNets, pinNets, parseSexp, listBoardFootprints } from '../src/kicad/sexp.js';
 import { FIXTURE, tempFixtureRepo } from './helpers.js';
 
 const SCH = path.join(FIXTURE, 'hardware', 'open-key.kicad_sch');
@@ -97,15 +99,12 @@ describe('sexp parser', () => {
       const { writeFile } = await import('node:fs/promises');
       await writeFile(customSch, content, 'utf8');
 
-      // 1. listSymbols: should EXCLUDE CustomPower:GND (only return R1)
       const syms = await listSymbols(customSch);
       expect(syms.map((s) => s.ref)).toEqual(['R1']);
 
-      // 2. listNets: should INCLUDE "GND"
       const nets = await listNets(customSch);
       expect(nets).toContain('GND');
 
-      // 3. pinNets: R1 pin 1 connected to GND should have net "GND"
       const pins = await pinNets(customSch);
       const r1Pins = pins.filter((p) => p.ref === 'R1');
       expect(r1Pins.find((p) => p.pinNumber === '1')?.net).toBe('GND');
@@ -160,11 +159,44 @@ describe('sexp parser', () => {
       const { writeFile } = await import('node:fs/promises');
       await writeFile(legacySch, content, 'utf8');
 
-      // power:GND must be excluded; only Device:C (C1) is a real component
       const syms = await listSymbols(legacySch);
       expect(syms.map((s) => s.ref)).toEqual(['C1']);
     } finally {
       await cleanup();
     }
+  });
+
+  it('lists board footprints accurately from a kicad_pcb structure', async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'copperhead-test-'));
+    const pcbFilePath = path.join(tmpDir, 'test.kicad_pcb');
+    
+    const samplePcbContent = `
+      (kicad_pcb (version 20240101) (generator "copperhead")
+        (footprint "Package_SO:SOIC-8_3.9x4.9mm_P1.27mm" (at 120 60 90) (layer "F.Cu")
+          (property "Reference" "U1" (at 0 0 0))
+          (property "Value" "NE5532" (at 0 0 0))
+        )
+        (footprint "Resistor_SMD:R_0603_1608Metric" (at 110 50 0) (layer "F.Cu")
+          (property "Reference" "R1" (at 0 0 0))
+          (property "Value" "10k" (at 0 0 0))
+        )
+      )
+    `;
+    
+    await fs.writeFile(pcbFilePath, samplePcbContent, 'utf8');
+
+    const footprints = await listBoardFootprints(pcbFilePath);
+    
+    expect(footprints.length).toBe(2);
+    expect(footprints[0].ref).toBe('R1');
+    expect(footprints[0].value).toBe('10k');
+    expect(footprints[0].at).toEqual({ x: 110, y: 50, rot: 0 });
+    
+    expect(footprints[1].ref).toBe('U1');
+    expect(footprints[1].value).toBe('NE5532');
+    expect(footprints[1].at).toEqual({ x: 120, y: 60, rot: 90 });
+    expect(footprints[1].layer).toBe('F.Cu');
+
+    await fs.rm(tmpDir, { recursive: true, force: true });
   });
 });
