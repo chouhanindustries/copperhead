@@ -6,9 +6,13 @@ import { loadConfig, resolveCompatSettings } from '../config.js';
 import { bootstrapKicadProject } from '../kicad/bootstrap.js';
 import { exportSvg, runErc } from '../kicad/cli.js';
 import { listSymbols } from '../kicad/sexp.js';
+import { readBoard } from '../kicad/pcb.js';
+import { computeLayoutMetrics } from '../kicad/layout-metrics.js';
+import { renderDraftQuality, upsertDraftQuality } from '../kicad/layout-report.js';
 import { isDirty, commitAll, changedFiles } from '../util/git.js';
 import type { CompatSettings, CopperheadConfig } from '../config.js';
 import { checkDrift } from '../memory/drift.js';
+import { loadConstraints } from '../memory/constraints.js';
 import { runAgentLoop, makeProvider, type BudgetExhaustedStats } from '../agent/loop.js';
 import { diagnoseStageFailure, transcriptExcerpt, withTimeout, type StageDiagnosis } from '../agent/recovery.js';
 import type { Provider } from '../agent/types.js';
@@ -194,7 +198,7 @@ export const STAGES: Stage[] = [
       return docHasContent(root, path.join(docs, 'LAYOUT.md'), '## Draft quality');
     },
     prompt: () =>
-      'Stage 5: first-draft layout. Rule-driven placement written as real coordinates: connectors on edges, decoupling at IC pins, ESD at connectors, keepouts honored. Route power and short critical nets; leave the rest as ratsnest. Every routed net must pass run_drc. Then write the "## Draft quality" section in LAYOUT.md: exactly what is fine and what a human or specialist tool should redo. Non-optimal is acceptable; unlabeled non-optimal is not.',
+      'Stage 5: first-draft layout. Rule-driven placement written as real coordinates: connectors on edges, decoupling at IC pins, ESD at connectors, keepouts honored. Route power and short critical nets; leave the rest as ratsnest. Every routed net must pass run_drc. Run layout_metrics after placing and again after routing: DRC only says the board is legal, layout_metrics says whether it is good — it names the nets that are still unrouted, scores the board 0-100, and reports every .copperhead/constraints.json key that maps to a measurable layout property as pass or fail. Fix what it flags rather than describing it. Then write the "## Draft quality" section in LAYOUT.md: exactly what is fine and what a human or specialist tool should redo. The computed block of that section is regenerated from layout_metrics after the stage, so put your judgement below the notes marker. Non-optimal is acceptable; unlabeled non-optimal is not.',
   },
   {
     name: 'outputs',
@@ -257,6 +261,47 @@ async function emitJlcpcbAfterOutputs(stageName: string, opts: CreateOptions): P
   if (stageName !== 'outputs') return;
   const out = await emitCreateJlcpcbBom(opts.repoRoot);
   if (out) opts.log(stageLine('outputs', `emitted ${out} (JLCPCB assembly BOM)`, 'ok'));
+}
+
+/**
+ * Regenerate the computed half of `docs/LAYOUT.md`'s `## Draft quality` section
+ * from `layout_metrics` once the layout stage's completion contract is met
+ * (design D11). The stage prompt's "unlabeled non-optimal is not acceptable"
+ * clause was an honour-system instruction; deriving the labels from the board
+ * file makes them a computed artifact instead. The model's own prose survives:
+ * `upsertDraftQuality` only rewrites the block above the notes marker.
+ *
+ * Runs on the pass that completes the stage and on any later resume, so the
+ * section tracks the board. Best-effort: a failure is logged, never fatal.
+ */
+export async function refreshDraftQuality(opts: CreateOptions, stageName: string): Promise<void> {
+  if (stageName !== 'layout-draft') return;
+  const config = await loadConfig(opts.repoRoot);
+  if (!config.board) return;
+  const boardPath = path.join(opts.repoRoot, config.board);
+  const layoutRel = path.join(config.docs, 'LAYOUT.md');
+  const layoutPath = path.join(opts.repoRoot, layoutRel);
+  if (!existsSync(boardPath) || !existsSync(layoutPath)) return;
+  try {
+    const board = await readBoard(boardPath);
+    const metrics = computeLayoutMetrics(
+      { ...board, filePath: config.board },
+      await loadConstraints(opts.repoRoot),
+    );
+    const doc = await readFile(layoutPath, 'utf8');
+    await writeFile(layoutPath, upsertDraftQuality(doc, renderDraftQuality(metrics)), 'utf8');
+    const failed = metrics.hard.filter((r) => r.status === 'fail').length;
+    opts.log(
+      stageLine(
+        stageName,
+        `regenerated "## Draft quality" in ${layoutRel}: score ${metrics.score}/100, ` +
+          `${metrics.soft.routedNets}/${metrics.soft.routableNets} nets routed, ${failed} hard constraint(s) failing`,
+        failed ? 'warn' : 'ok',
+      ),
+    );
+  } catch (e) {
+    opts.log(stageLine(stageName, `could not regenerate "## Draft quality" (${(e as Error).message})`, 'warn'));
+  }
 }
 
 /** Stages whose output is a KiCad file worth rendering to an image (5.4). */
@@ -680,6 +725,7 @@ export async function runCreate(opts: CreateOptions): Promise<{ ok: boolean; com
     }
     if (await stage.isComplete(opts.repoRoot, config.docs)) {
       opts.log(stageLine(stage.name, 'already complete (resuming past it)', 'ok'));
+      await refreshDraftQuality(opts, stage.name);
       await commitResumedStage(opts, config, stage.name);
       completed.push(stage.name);
       stageCosts.push({ name: stage.name, resumed: true, wallMs: 0, turns: 0, tokensIn: 0, tokensOut: 0, cacheHits: 0 });
@@ -818,6 +864,7 @@ export async function runCreate(opts: CreateOptions): Promise<{ ok: boolean; com
       return { ok: false, completed };
     }
     completed.push(stage.name);
+    await refreshDraftQuality(opts, stage.name);
     await renderStageArtifacts(opts, stage.name, stageTranscriptDir);
     await emitJlcpcbAfterOutputs(stage.name, opts);
     logCumulative(opts, stageCosts);

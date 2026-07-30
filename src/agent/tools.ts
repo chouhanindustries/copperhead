@@ -6,9 +6,12 @@ import { resolveInRepo, isKicadFile } from '../util/paths.js';
 import { runErc, runDrc, exportSvg, exportFab, kicadLoadError, isProbeableKicadFile } from '../kicad/cli.js';
 import { formatViolations, type CheckReport } from '../kicad/report.js';
 import { listSymbols, listNets } from '../kicad/sexp.js';
+import { readBoard } from '../kicad/pcb.js';
+import { computeLayoutMetrics } from '../kicad/layout-metrics.js';
+import { formatLayoutMetrics } from '../kicad/layout-report.js';
 import { verifySchematicSymbols } from '../kicad/symlib.js';
 import { checkDrift } from '../memory/drift.js';
-import { saveConstraint, classifyAffectsTarget, affectsTargetExists } from '../memory/constraints.js';
+import { saveConstraint, classifyAffectsTarget, affectsTargetExists, loadConstraints } from '../memory/constraints.js';
 import { openspecValidate } from '../openspec/cli.js';
 import { existsSync } from 'node:fs';
 import type { CopperheadConfig } from '../config.js';
@@ -359,6 +362,22 @@ export const TOOLS: ToolDef[] = [
       if (report.ok) ctx.ledger.clear('drc');
       else ctx.repairCycles++;
       return formatViolations(report);
+    },
+  },
+  {
+    schema: {
+      name: 'layout_metrics',
+      description:
+        'Score the board layout deterministically from the .kicad_pcb alone: a hard table of every .copperhead/constraints.json key that maps to a measurable layout property (trace width, board outline, keepout separation, mounting-hole clearance, decoupling distance, copper area) with pass/fail, plus a soft scorecard (routed-net fraction and the names of the unrouted nets, track length, segment/via counts, courtyard overlaps, off-board footprints, board area, placement density) rolled into a 0-100 score. DRC only says a board is legal; this says whether it is good. Run it after placing or routing, and again before writing the "## Draft quality" section.',
+      parameters: { type: 'object', properties: {}, required: [] },
+    },
+    requiresUnlock: false,
+    handler: async (ctx) => {
+      if (!ctx.config.board)
+        return 'no board configured; layout_metrics does not apply yet — skip it until a board exists and is set in .copperhead/config.json';
+      const board = await readBoard(path.join(ctx.repoRoot, ctx.config.board));
+      const metrics = computeLayoutMetrics({ ...board, filePath: ctx.config.board }, await loadConstraints(ctx.repoRoot));
+      return formatLayoutMetrics(metrics);
     },
   },
   {
