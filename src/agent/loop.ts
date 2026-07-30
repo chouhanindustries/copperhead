@@ -29,6 +29,7 @@ import { OpenAIProvider } from './providers/openai.js';
 import { AnthropicProvider } from './providers/anthropic.js';
 import { CodexProvider } from './providers/codex.js';
 import { ClaudeCodeProvider } from './providers/claude-code.js';
+import { GrokProvider } from './providers/grok.js';
 import { CursorProvider } from './providers/cursor.js';
 import { openSynapMemory, type RunRecord, type SynapMemory } from '../memory/synap.js';
 
@@ -135,6 +136,11 @@ export async function makeProvider(
         codexPathOverride: process.env.COPPERHEAD_CODEX_PATH || 'codex',
       }),
     });
+  }
+  if (model === 'grok' || model.startsWith('grok:')) {
+    const grokModel = model.startsWith('grok:') ? model.slice('grok:'.length) : undefined;
+    if (grokModel === '') throw new Error('grok model override cannot be empty; use "grok" or "grok:<model-id>"');
+    return new GrokProvider(grokModel, undefined, sessionResume);
   }
   // Match claude-code before the `claude*` prefix: both `claude-code` and
   // `claude-code:<id>` start with `claude` and would otherwise route to the
