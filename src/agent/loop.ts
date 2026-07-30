@@ -2,7 +2,7 @@ import path from 'node:path';
 import { readFile, writeFile } from 'node:fs/promises';
 import { execa } from 'execa';
 import type { Msg, Provider, Turn } from './types.js';
-import { availableTools, dispatchTool, type RunContext } from './tools.js';
+import { availableTools, dispatchTool, freshEditCounters, type RunContext } from './tools.js';
 import { CachingProvider } from './response-cache.js';
 import { withTimeout, TurnTimeoutError } from './recovery.js';
 import { buildSystemPrompt } from './prompts.js';
@@ -15,13 +15,24 @@ import {
   isCompatModel,
   type CompatSettings,
   type CopperheadConfig,
+  type StageBudget,
 } from '../config.js';
 import { Transcript, type ExitPath, type RunStats } from './transcript.js';
+import { editPressureOf, summarizeTurnCost, type TurnSample } from './turn-metrics.js';
 import { collectRunMeta, renderCliHeader, type RunMeta, type RunMetaInput } from './runmeta.js';
 import { plainRenderer, fmtDuration, fmtTokens, type ProgressRenderer } from './render.js';
 import { styleHeaderLines } from './theme.js';
 import { ObligationsLedger } from './ledger.js';
-import { gitPreflight, isDirty, snapshot, restore, commitAll, changedFiles, preserveFailedRun } from '../util/git.js';
+import {
+  gitPreflight,
+  isDirty,
+  snapshot,
+  restore,
+  commitAll,
+  commitPaths,
+  changedFiles,
+  preserveFailedRun,
+} from '../util/git.js';
 import { withRetry, isRateLimit, sessionLimit } from '../util/retry.js';
 import { openspecArchive } from '../openspec/cli.js';
 import { existsSync } from 'node:fs';
@@ -57,6 +68,12 @@ export interface RunOptions {
    * grant (0 fails the run as before). Absent means non-interactive: fail.
    */
   onBudgetExhausted?: (stats: BudgetExhaustedStats) => Promise<number>;
+  /**
+   * Spend limits for this run (issue #145 §C). The create pipeline passes the
+   * stage's `stageBudgets` entry. Turns are rationed separately by `maxTurns`;
+   * these ration the resources the observed failures actually consumed.
+   */
+  budget?: StageBudget;
   /** Extra prompt appended for pipeline stages (Mode A). */
   stagePrompt?: string;
   /** Test seam: bypass makeProvider. */
@@ -236,7 +253,10 @@ async function runWithMemory(
   const maxTurns = opts.maxTurns ?? config.maxTurns;
 
   await gitPreflight(repoRoot, { allowDirty: opts.allowDirty ?? false });
-  const snap = await snapshot(repoRoot);
+  // Not const: a checkpoint commit moves the rollback target forward, so a
+  // later failure restores to the last verified unit rather than to the start
+  // of the run (issue #145 §B4, design D6).
+  let snap = await snapshot(repoRoot);
 
   const transcript = new Transcript(repoRoot);
   await transcript.init();
@@ -257,6 +277,7 @@ async function runWithMemory(
     lastDrc: null,
     repairCycles: 0,
     finishRequest: null,
+    ...freshEditCounters(),
   };
 
   // Session resume for claude-code / cursor is only correct when the response
@@ -362,8 +383,10 @@ async function runWithMemory(
   let tokensIn = 0;
   let tokensOut = 0;
   let turnsUsed = 0;
-  const perTurn: { turn: number; in: number; out: number }[] = [];
+  const perTurn: TurnSample[] = [];
   let plan: string | null = null;
+  /** Verified units committed mid-run (design D6); read by fail()'s log line. */
+  let checkpoints = 0;
   let nudges = 0;
   let turnTimeouts = 0;
   const maxTurnTimeouts = 3;
@@ -378,6 +401,11 @@ async function runWithMemory(
     tokensOut,
     perTurn,
     durationMs: Date.now() - startMs,
+    // Every terminal branch goes through here, so a run that failed reports its
+    // concentration too — which is the whole point: the failed runs are the
+    // concentrated ones (issue #145 §A).
+    turnCost: summarizeTurnCost(perTurn),
+    editPressure: editPressureOf(ctx.editCounts),
   });
 
   /** One outcome line, printed last at every terminal branch (AC-8.5). */
@@ -428,6 +456,10 @@ async function runWithMemory(
     log(`run failed: ${reason}`);
     if (restoreError) {
       log(`WARNING: rollback failed (${restoreError}); the working tree may be in a partial state`);
+    } else if (checkpoints) {
+      log(
+        `working tree restored to the last checkpoint (${checkpoints} verified checkpoint commit(s) from this run are kept on HEAD)`,
+      );
     } else {
       log(`working tree restored to pre-run snapshot`);
     }
@@ -451,8 +483,64 @@ async function runWithMemory(
     };
   };
 
+  /**
+   * Commit the verified unit and move the rollback target onto it (design D6).
+   *
+   * Runs after any `run_erc`/`run_drc` that comes back clean with at least one
+   * edit behind it. Only `ctx.filesTouched` is staged: every create stage runs
+   * with `--allow-dirty`, so a `git add -A` here would sweep the operator's
+   * unrelated working changes into a copperhead commit each time a unit passed.
+   *
+   * Best-effort by construction — a checkpoint is an optimization against
+   * mid-response death, and failing to take one must never fail a run that is
+   * otherwise going fine.
+   */
+  const maybeCheckpoint = async (toolName: string): Promise<void> => {
+    if (opts.dryRun || !config.checkpointCommits) return;
+    const clean =
+      toolName === 'run_erc' ? ctx.lastErc?.ok : toolName === 'run_drc' ? ctx.lastDrc?.ok : undefined;
+    if (clean !== true || ctx.editsSinceCheckpoint <= 0) return;
+    const label = toolName === 'run_erc' ? 'ERC clean' : 'DRC clean';
+    const files = [...ctx.filesTouched];
+    try {
+      const sha = await commitPaths(
+        repoRoot,
+        files,
+        `copperhead: checkpoint — ${opts.request} (${label}, ${files.length} file(s))`,
+      );
+      if (!sha) return;
+      ctx.editsSinceCheckpoint = 0;
+      checkpoints++;
+      snap = await snapshot(repoRoot);
+      await transcript.event('checkpoint', { commit: sha, files, verification: label });
+      log(
+        `checkpoint ${sha.slice(0, 10)} (${label}, ${files.length} file(s)); a later failure now rolls back to here, not to the start of the run`,
+      );
+    } catch (err) {
+      const message = (err as Error).message;
+      await transcript.event('checkpoint-failed', { error: message });
+      log(`warning: checkpoint commit failed (${message}); the run continues without one`);
+    }
+  };
+
   let budget = maxTurns;
   for (let turn = 0; ; turn++) {
+    // Spend budgets are checked before the turn is bought, not after: the point
+    // is to stop before paying for another oversized emission. They are their
+    // own exit paths because the remedy differs from turn exhaustion — more
+    // turns is exactly the wrong answer to "this stage burned its tokens".
+    if (opts.budget?.maxTokensOut !== undefined && tokensOut >= opts.budget.maxTokensOut) {
+      return fail(
+        `output token budget exhausted (${tokensOut} / ${opts.budget.maxTokensOut} out tokens over ${turn} turn(s))`,
+        'token-budget-exhausted',
+      );
+    }
+    if (opts.budget?.maxWallMs !== undefined && Date.now() - startMs >= opts.budget.maxWallMs) {
+      return fail(
+        `wall-clock budget exhausted (${fmtDuration(Date.now() - startMs)} of ${fmtDuration(opts.budget.maxWallMs)} over ${turn} turn(s))`,
+        'wall-budget-exhausted',
+      );
+    }
     if (turn >= budget) {
       // Budget exhausted. In an attended run this is a user decision made with
       // the cost visible, not an unconditional rollback (issue #15).
@@ -579,8 +667,32 @@ async function runWithMemory(
     turnTimeouts = 0;
     tokensIn += res.usage.inputTokens;
     tokensOut += res.usage.outputTokens;
-    perTurn.push({ turn: turn + 1, in: res.usage.inputTokens, out: res.usage.outputTokens });
+    perTurn.push({
+      turn: turn + 1,
+      in: res.usage.inputTokens,
+      out: res.usage.outputTokens,
+      // Wall time per turn: the 10-minute single-turn stall was invisible in a
+      // run total, and the slowest turn is the one closest to the watchdog.
+      ms: Date.now() - turnStartMs,
+    });
     await transcript.event('assistant', { text: res.text, toolCalls: res.toolCalls });
+
+    // An oversized turn means the UNIT was too big, not that the stage is over.
+    // Aborting here would throw away a turn already paid for, so the run keeps
+    // going with a corrective message (issue #145 §C).
+    let splitHint: string | null = null;
+    if (opts.budget?.maxTurnOut !== undefined && res.usage.outputTokens > opts.budget.maxTurnOut) {
+      splitHint =
+        `That turn emitted ${res.usage.outputTokens} output tokens, over the ${opts.budget.maxTurnOut}-token per-turn budget. ` +
+        'Split the unit: do ONE part (or one net, or one placement group) per reply, verify it with run_erc/run_drc, then move on. ' +
+        'A long single response is the one thing every lost run in this repo had in common — small turns fail small.';
+      await transcript.event('turn-too-large', {
+        turn: turn + 1,
+        outputTokens: res.usage.outputTokens,
+        maxTurnOut: opts.budget.maxTurnOut,
+      });
+      log(`turn ${turn + 1} emitted ${res.usage.outputTokens} out tokens (> ${opts.budget.maxTurnOut}); asked the model to split the unit`);
+    }
 
     if (res.text) {
       if (!plan) plan = res.text;
@@ -598,7 +710,9 @@ async function runWithMemory(
         role: 'user',
         // A near-miss malformed tool call (#I10) gets a specific steer to re-emit
         // it; an ordinary tool-less turn gets the generic continue prompt.
-        content: res.nudge ?? 'Continue using tools, or call finish({outcome, summary}) to end the run.',
+        content: [res.nudge ?? 'Continue using tools, or call finish({outcome, summary}) to end the run.', splitHint]
+          .filter(Boolean)
+          .join('\n\n'),
       });
       continue;
     }
@@ -609,7 +723,12 @@ async function runWithMemory(
       await transcript.event('tool', { name: call.name, args: call.args, result });
       r.toolResult(call.name, result.split('\n')[0] ?? '');
       messages.push({ role: 'tool', toolCallId: call.id, content: result });
+      // Per call, not per turn: a reply that batches edit → run_erc → edit →
+      // run_erc checkpoints twice, which is the shape the quantum is meant to
+      // produce.
+      await maybeCheckpoint(call.name);
     }
+    if (splitHint) messages.push({ role: 'user', content: splitHint });
 
     if (ctx.repairCycles > config.maxRepairCycles) {
       return fail(`repair cycles exhausted (${config.maxRepairCycles}); violations persist`, 'repair-cycles-exhausted');

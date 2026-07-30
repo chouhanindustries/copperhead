@@ -363,6 +363,7 @@ interface Provider {
 ### 4.5 Budgets & failure modes
 
 - `maxTurns` default 40; `maxRepairCycles` 5; per-run token budget logged
+- Optional per-stage spend budgets (`stageBudgets`): cumulative output tokens (`maxTokensOut`) and wall clock (`maxWallMs`) end the run on their own exit paths, checked before each turn is bought; a single turn over `maxTurnOut` is told to split the unit and the run continues
 - On turn-budget exhaustion in an attended (TTY) run: print run stats (turns, files touched, open obligations, token usage) and ask whether to continue with more turns; declining, or a non-TTY run, fails as below. The extension can repeat; each is a fresh decision with fresh numbers.
 - On any unrecoverable failure: preserve the touched work as a git stash entry named `copperhead failed run <run-id>`, restore the snapshot, print the stash ref and transcript path, exit 1
 - Rate-limit (429): exponential backoff ×3, then fail over to the other **keyed** provider (`openai` ↔ `anthropic`) if a key exists; saved-login providers (`codex`, `claude-code`, `cursor`) never fail over to a keyed or alternate provider
@@ -380,11 +381,19 @@ interface Provider {
   "model": "gpt-5",
   "maxTurns": 40,
   "stageMaxTurns": { "spec-seed": 60 },
+  "stageBudgets": { "schematic": { "maxTokensOut": 120000, "maxWallMs": 2400000, "maxTurnOut": 8000 } },
+  "maxEditBytes": 8192,
+  "maxUnverifiedEdits": 1,
+  "checkpointCommits": true,
   "budgets": { "sleep_current_uA": 25 }
 }
 ```
 
 `budgets` is free-form; keys are surfaced verbatim into the system prompt so the agent treats them as hard constraints. `stageMaxTurns` is optional: per-stage turn budgets for the create pipeline, keyed by stage name; stages without an entry use `maxTurns`.
+
+`stageBudgets` is the *spend* budget, deliberately separate from `budgets` (a design constraint and a token limit must not be indistinguishable): per create-pipeline stage, `maxTokensOut` and `maxWallMs` end the run with exit path `token-budget-exhausted` / `wall-budget-exhausted`, while `maxTurnOut` treats an oversized turn as a unit that was too big — the run continues with an instruction to split it. Non-positive or non-integer entries are dropped.
+
+`maxEditBytes` (default 8192, `0` disables) caps a single `edit_file` payload on KiCad files only; `maxUnverifiedEdits` (default 1, `0` disables) caps how many KiCad edits of one kind may accumulate before `run_erc` (schematic) or `run_drc` (board) must run, resetting on pass or fail so repair is never deadlocked. `checkpointCommits` (default true) commits the run's touched paths whenever a check goes clean after an edit and moves the rollback target onto that commit.
 
 ---
 
@@ -492,13 +501,26 @@ Format: Given / When / Then. "Fixture" = the open-telegraph repo (or the tiny te
 - **AC-15.25 / AC-15.26 (drift bootstrap)** Zero-symbol schematics produce no drift mismatches; `check` surfaces a non-failing warning when an empty schematic coexists with a populated BOM.md.
 - **AC-15.27 (consecutive stalls)** Only consecutive tool-less turns count toward the stopped-without-finishing failure; the counter resets on any tool call.
 - **AC-15.28 (load-failure ERC/DRC)** A missing ERC/DRC report raises an error quoting kicad-cli's own output and naming the likely load failure.
+
+### AC-16 · Quantized stage work (issue #145)
+
+- **AC-16.1 (concentration is computed)** `summarizeTurnCost` over a run's per-turn rows yields `p50TurnOut`, `p95TurnOut`, `maxTurnOut`, `top5TurnShare` and `slowestTurnMs` by nearest rank; the 40 per-turn output values of run `2026-07-29T18-02-20-554Z` reproduce p50 177, max 43,629, top-5 share 0.89. An empty run is zeroed, not `NaN`; a zero-output run has a top-5 share of 0.
+- **AC-16.2 (reported on every path)** The `run-end` event and `summary.md`'s run-stats section carry the concentration figures and the run's edit pressure (`edits`, `editBytes`, `largestEditBytes`, `verifications`, `editBytesPerVerify`), including on a failed run; each `perTurn` row carries `ms`.
+- **AC-16.3 (historical runs are scorable)** Reading an existing run directory yields its concentration and edit-pressure figures from the recorded `run-end` and `tool` events alone; rows without `ms` report `slowestTurnMs: null`.
+- **AC-16.4 (per-stage concentration)** `report.json` and `REPORT.md` carry, per stage, `p50TurnOut`, `p95TurnOut`, `maxTurnOut`, `top5TurnShare`, `slowestTurnMs`, `editBytesPerVerify` and `largestEditBytes`; a resumed stage reports `null` for each.
+- **AC-16.5 (edit size cap)** `edit_file` refuses a `new_string` over `maxEditBytes` on a KiCad file, naming the cap, the attempted size, the config key and the current symbol/footprint count, and writes nothing. Non-KiCad files are unaffected; `0` disables.
+- **AC-16.6 (verify gate)** A second edit to a `.kicad_sch` without an intervening `run_erc` (or `.kicad_pcb` without `run_drc`) is refused past `maxUnverifiedEdits`; `edit → run_erc → edit` batched in one reply passes. The counter resets whether or not the check passed, so the repair edit is always allowed; `0` disables.
+- **AC-16.7 (checkpoint commits)** A clean ERC/DRC following at least one edit commits only `filesTouched` with a `copperhead: checkpoint —` prefix and re-snapshots, so a later failure rolls back to that point with the verified units still committed. Never on a dry run, never with `checkpointCommits: false`, never staging a path the run did not touch.
+- **AC-16.8 (spend budgets)** `stageBudgets[stage].maxTokensOut` / `maxWallMs` end the run with `token-budget-exhausted` / `wall-budget-exhausted`, distinct from `turn-budget-exhausted`; exceeding `maxTurnOut` injects a split-the-unit instruction and the run continues.
+- **AC-16.9 (computed stage progress)** The schematic and layout-draft stage prompts carry a computed line naming how many units are present and which refdes are missing, recomputed before each attempt; stages with no countable unit list are unchanged.
+
 ### AC-8 · Run observability (change: record-run-metadata)
 
 - **AC-8.1 (metadata completeness)** The `run-start` event of any agent-loop run contains: copperhead version + install path, `kicad-cli`/Node/platform versions, model id + provider + selection source (`flag`/`env`/`config`/`openai-key`/`anthropic-key`), run id + ISO timestamp + command, interactive flag, the resolved config snapshot (`schematic`, `board`, `docs`, effective `maxTurns`, `maxRepairCycles`, `budgets`), git commit/branch/dirty + uncommitted count, pre-commit-hook presence, and open-constraint + prior-run counts. The pre-existing `request`/`model`/`provider` fields keep their names. Collection is LLM-free and network-free.
 - **AC-8.2 (resolved, not raw)** `do "x" --max-turns 12` in a repo whose config says `maxTurns: 40` records turn budget **12**, and the selection source names the actual winner of flag > `COPPERHEAD_MODEL` > config > key-fallback. A repo with no schematic records `schematic: null` (key present).
 - **AC-8.3 (probe degradation)** A failing environment probe (e.g. git branch unavailable) yields `null` for that field only; all other fields populate and the run proceeds — a metadata failure never aborts or alters a run.
 - **AC-8.4 (three surfaces, one source)** `summary.md` contains an `## Environment` section whose values match the `run-start` event, and the CLI prints a header of ≤ 2 lines before the first turn showing at minimum: version, model + provider + selection source, stage `name (k/N)` when in a `create` pipeline, and turn budget.
-- **AC-8.5 (run-end addenda on every path)** Every terminal branch (success, refusal, turn-budget, repair-cycles, provider error, stall, commit failure) emits a `run-end` event and a `## Run stats` summary section with: exit path (`done`/`refused`/`turn-budget-exhausted`/`repair-cycles-exhausted`/`commit-failed`/`provider-error`/`stalled`), turns used vs budget, repair cycles used vs budget, token totals + per-turn breakdown, and wall-clock duration; the CLI prints one final outcome line (exit path, verification, commit hash if any, duration, tokens).
+- **AC-8.5 (run-end addenda on every path)** Every terminal branch (success, refusal, turn-budget, token-budget, wall-budget, repair-cycles, provider error, stall, commit failure) emits a `run-end` event and a `## Run stats` summary section with: exit path (`done`/`refused`/`turn-budget-exhausted`/`token-budget-exhausted`/`wall-budget-exhausted`/`repair-cycles-exhausted`/`commit-failed`/`provider-error`/`stalled`), turns used vs budget, repair cycles used vs budget, token totals + per-turn breakdown, and wall-clock duration; the CLI prints one final outcome line (exit path, verification, commit hash if any, duration, tokens).
 - **AC-8.6 (commit failure is an outcome)** When the end-of-run git commit fails (e.g. `git add -A` exits 128 on an embedded repo), the run rolls back per the snapshot contract and ends with `exitPath: commit-failed`; `summary.md` is still written and names the git error; no unhandled stack trace reaches the user.
 - **AC-8.7 (progress with tokens)** In plain mode, each turn's output is prefixed `[turn k/N · <in> in / <out> out]` with cumulative totals (compact `12.3k` formatting); tool results stay one line each.
 - **AC-8.8 (interactive on a TTY)** With stdout a TTY and neither `--json` nor `--plain`: a bottom-pinned status line redraws in place (spinner while a provider call is in flight, elapsed time, turn counter vs budget, cumulative tokens); assistant text and tool results scroll above it; the final outcome line replaces it; cursor and status line are restored/cleared on exit including Ctrl-C. A renderer reused across runs (the `create` pipeline) renders every stage: each outcome line releases the status line and the next stage re-establishes it. Interactive chrome may use muted SGR color (copper accent, dim secondary text, green/amber/red for outcome); color is never required for correctness.

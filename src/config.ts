@@ -2,6 +2,19 @@ import { readFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 
+/** Spend limits for one create-pipeline stage (issue #145 §C). */
+export interface StageBudget {
+  /** Cumulative output tokens; exceeding it ends the run `token-budget-exhausted`. */
+  maxTokensOut?: number;
+  /** Wall clock (ms); exceeding it ends the run `wall-budget-exhausted`. */
+  maxWallMs?: number;
+  /**
+   * Output tokens in a SINGLE turn. Exceeding it means the unit was too big, not
+   * that the stage is over, so it nudges the model to split rather than aborting.
+   */
+  maxTurnOut?: number;
+}
+
 export interface CopperheadConfig {
   schematic: string | null;
   board: string | null;
@@ -10,8 +23,37 @@ export interface CopperheadConfig {
   maxTurns: number;
   /** Per-stage overrides for the create pipeline, keyed by stage name. */
   stageMaxTurns?: Record<string, number>;
+  /**
+   * Per-stage spend budgets for the create pipeline (issue #145). Distinct from
+   * `budgets`, which holds *design* budgets (sleep current, …) and is rendered
+   * verbatim into the system prompt: overloading one map would make a hardware
+   * limit and a token limit indistinguishable.
+   */
+  stageBudgets?: Record<string, StageBudget>;
   maxRepairCycles: number;
   budgets: Record<string, number>;
+  /**
+   * Largest `new_string` (bytes) `edit_file` accepts for a KiCad file. The
+   * observed failure is a 17.9 kB single-block schematic write whose repair is
+   * another full-block rewrite; the cap turns "work ONE part at a time" from a
+   * prompt sentence into a mechanism. 8 kB rather than the 4 kB issue #145
+   * suggests, because one canonical `lib_symbols` entry for a wide connector
+   * legitimately exceeds 4 kB and an impossible edit is worse than a large one.
+   * `0` disables the cap. Docs are never capped.
+   */
+  maxEditBytes: number;
+  /**
+   * How many edits to a KiCad file kind may accumulate before the matching check
+   * must run: at the limit, `edit_file` refuses until `run_erc` (schematic) or
+   * `run_drc` (board) has run. `0` disables the gate.
+   */
+  maxUnverifiedEdits: number;
+  /**
+   * Commit the run's touched paths whenever ERC/DRC goes clean after an edit, and
+   * make that commit the rollback target. A provider error then costs one
+   * verified unit instead of the whole stage.
+   */
+  checkpointCommits: boolean;
   /** Per-turn watchdog (ms). A provider turn exceeding this is aborted and
    * retried, so a hung call can't stall the run forever. <=0 disables it. */
   turnTimeoutMs: number;
@@ -69,7 +111,36 @@ export const DEFAULTS: Omit<CopperheadConfig, 'schematic' | 'board'> = {
   heartbeatMs: 30000,
   maxStageRetries: 2,
   llmCache: true,
+  maxEditBytes: 8192,
+  maxUnverifiedEdits: 1,
+  checkpointCommits: true,
 };
+
+/** A non-negative integer, or undefined when the value is not usable as one. */
+function posInt(v: unknown): number | undefined {
+  return Number.isInteger(v) && (v as number) > 0 ? (v as number) : undefined;
+}
+
+/**
+ * Keep only the stage budgets that mean something. A zero or negative limit
+ * would end the run before its first turn, which is a config typo rather than an
+ * instruction; dropping it matches how `stageMaxTurns` already treats one.
+ */
+export function normalizeStageBudgets(raw: unknown): Record<string, StageBudget> {
+  if (!raw || typeof raw !== 'object') return {};
+  const out: Record<string, StageBudget> = {};
+  for (const [stage, value] of Object.entries(raw as Record<string, unknown>)) {
+    if (!value || typeof value !== 'object') continue;
+    const v = value as Record<string, unknown>;
+    const budget: StageBudget = {
+      ...(posInt(v.maxTokensOut) !== undefined ? { maxTokensOut: posInt(v.maxTokensOut)! } : {}),
+      ...(posInt(v.maxWallMs) !== undefined ? { maxWallMs: posInt(v.maxWallMs)! } : {}),
+      ...(posInt(v.maxTurnOut) !== undefined ? { maxTurnOut: posInt(v.maxTurnOut)! } : {}),
+    };
+    if (Object.keys(budget).length) out[stage] = budget;
+  }
+  return out;
+}
 
 export function configPath(repoRoot: string): string {
   return path.join(repoRoot, CONFIG_DIR, 'config.json');
@@ -86,6 +157,7 @@ export async function loadConfig(repoRoot: string): Promise<CopperheadConfig> {
   const stageMaxTurns = Object.fromEntries(
     Object.entries(raw.stageMaxTurns ?? {}).filter(([, v]) => Number.isInteger(v) && v > 0),
   );
+  const stageBudgets = normalizeStageBudgets(raw.stageBudgets);
   return {
     schematic: raw.schematic ?? null,
     board: raw.board ?? null,
@@ -93,8 +165,21 @@ export async function loadConfig(repoRoot: string): Promise<CopperheadConfig> {
     model: raw.model ?? null,
     maxTurns: raw.maxTurns ?? DEFAULTS.maxTurns,
     ...(Object.keys(stageMaxTurns).length ? { stageMaxTurns } : {}),
+    ...(Object.keys(stageBudgets).length ? { stageBudgets } : {}),
     maxRepairCycles: raw.maxRepairCycles ?? DEFAULTS.maxRepairCycles,
     budgets: raw.budgets ?? {},
+    // `0` is a meaningful value for both caps (disable), so a plain ?? would be
+    // wrong only for negatives — clamp those to the default rather than letting
+    // a typo produce a cap that refuses every edit.
+    maxEditBytes:
+      Number.isInteger(raw.maxEditBytes) && (raw.maxEditBytes as number) >= 0
+        ? (raw.maxEditBytes as number)
+        : DEFAULTS.maxEditBytes,
+    maxUnverifiedEdits:
+      Number.isInteger(raw.maxUnverifiedEdits) && (raw.maxUnverifiedEdits as number) >= 0
+        ? (raw.maxUnverifiedEdits as number)
+        : DEFAULTS.maxUnverifiedEdits,
+    checkpointCommits: raw.checkpointCommits !== false,
     turnTimeoutMs: typeof raw.turnTimeoutMs === 'number' ? raw.turnTimeoutMs : DEFAULTS.turnTimeoutMs,
     heartbeatMs: typeof raw.heartbeatMs === 'number' ? raw.heartbeatMs : DEFAULTS.heartbeatMs,
     maxStageRetries:

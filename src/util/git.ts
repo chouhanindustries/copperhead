@@ -358,6 +358,37 @@ export async function commitAll(repo: string, message: string): Promise<string> 
   return git(repo, ['rev-parse', 'HEAD']);
 }
 
+/**
+ * Commit an explicit path list, leaving everything else in the working tree
+ * untouched. This is what makes checkpoint commits safe under `--allow-dirty`
+ * (which every create-pipeline stage uses): `commitAll`'s `git add -A` would
+ * sweep a user's unrelated modified files into a copperhead commit every time a
+ * unit verified. Returns the new commit sha, or null when the listed paths held
+ * nothing to commit.
+ */
+export async function commitPaths(repo: string, paths: string[], message: string): Promise<string | null> {
+  const wanted = [...new Set(paths.filter(Boolean))];
+  if (!wanted.length) return null;
+  await ensureIgnored(repo, GIT_ADD_EXCLUDES);
+  // `git add` errors outright on a pathspec that matches nothing (a path the run
+  // touched and then rolled back), so add them one at a time and skip the misses
+  // rather than losing the whole checkpoint to one stale entry.
+  let staged = 0;
+  for (const p of wanted) {
+    try {
+      await git(repo, ['add', '--', p]);
+      staged++;
+    } catch {
+      /* path is gone or ignored; the rest of the checkpoint still stands */
+    }
+  }
+  if (!staged) return null;
+  const diff = await git(repo, ['diff', '--cached', '--name-only']);
+  if (!diff) return null;
+  await git(repo, ['commit', '-m', message]);
+  return git(repo, ['rev-parse', 'HEAD']);
+}
+
 export async function changedFiles(repo: string, sinceHead: string): Promise<string[]> {
   const tracked = await git(repo, ['diff', '--name-only', sinceHead]);
   const untracked = await git(repo, ['ls-files', '--others', '--exclude-standard']);

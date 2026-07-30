@@ -20,6 +20,14 @@ import { sweepStaleTempDirs, pruneHistoryDir } from '../util/tmp.js';
 import { assertDiskSpace, DEFAULT_MIN_FREE_BYTES } from '../util/preflight.js';
 import { runCheck } from './check.js';
 import { emitCreateJlcpcbBom } from './export.js';
+import { stageProgress } from './stage-progress.js';
+import {
+  addEditPressure,
+  summarizeTurnCost,
+  EMPTY_EDIT_PRESSURE,
+  type EditPressure,
+  type TurnSample,
+} from '../agent/turn-metrics.js';
 
 /**
  * Mode A (`copperhead create`, SPEC §2.5): staged pipeline, each stage a
@@ -416,6 +424,25 @@ interface StageCost {
   tokensIn: number;
   tokensOut: number;
   cacheHits: number;
+  /** Every attempt's per-turn rows, concatenated: the stage's true shape (§A). */
+  perTurn: TurnSample[];
+  /** Edit pressure folded across the stage's attempts. */
+  pressure: EditPressure;
+}
+
+/** A stage row with no cost of its own (it was already complete on entry). */
+function resumedCost(name: string): StageCost {
+  return {
+    name,
+    resumed: true,
+    wallMs: 0,
+    turns: 0,
+    tokensIn: 0,
+    tokensOut: 0,
+    cacheHits: 0,
+    perTurn: [],
+    pressure: EMPTY_EDIT_PRESSURE,
+  };
 }
 
 /** Quote a path/value for a copy-pasteable resume command (5.3). */
@@ -573,16 +600,29 @@ async function writeRunReport(opts: CreateOptions, stageCosts: StageCost[]): Pro
     stageCount: STAGES.length,
     ran: ran.length,
     resumed: stageCosts.length - ran.length,
-    stages: stageCosts.map((c) => ({
-      name: c.name,
-      resumed: c.resumed,
-      wallMs: c.wallMs,
-      turns: c.turns,
-      tokensIn: c.tokensIn,
-      tokensOut: c.tokensOut,
-      cacheHits: c.cacheHits,
-      cacheHitPct: c.resumed ? null : cachePct(c.cacheHits, c.turns),
-    })),
+    stages: stageCosts.map((c) => {
+      // Resumed stages ran nothing this invocation, so every derived figure is
+      // null rather than 0: a zeroed concentration would read as "perfectly
+      // spread", which is a claim about a stage that did not run (§A).
+      const t = c.resumed ? null : summarizeTurnCost(c.perTurn);
+      return {
+        name: c.name,
+        resumed: c.resumed,
+        wallMs: c.wallMs,
+        turns: c.turns,
+        tokensIn: c.tokensIn,
+        tokensOut: c.tokensOut,
+        cacheHits: c.cacheHits,
+        cacheHitPct: c.resumed ? null : cachePct(c.cacheHits, c.turns),
+        p50TurnOut: t ? t.p50TurnOut : null,
+        p95TurnOut: t ? t.p95TurnOut : null,
+        maxTurnOut: t ? t.maxTurnOut : null,
+        top5TurnShare: t ? Number(t.top5TurnShare.toFixed(4)) : null,
+        slowestTurnMs: t ? t.slowestTurnMs : null,
+        editBytesPerVerify: c.resumed ? null : Math.round(c.pressure.editBytesPerVerify),
+        largestEditBytes: c.resumed ? null : c.pressure.largestEditBytes,
+      };
+    }),
     total: { ...t, cacheHitPct: cachePct(t.cacheHits, t.turns) },
     slowestStage: slowest ? { name: slowest.name, wallMs: slowest.wallMs } : null,
     mostExpensiveStage: priciest ? { name: priciest.name, tokensOut: priciest.tokensOut } : null,
@@ -628,6 +668,34 @@ async function writeRunReport(opts: CreateOptions, stageCosts: StageCost[]): Pro
       '',
     );
   }
+  // The cost table above cannot tell a stage with one 43k-token turn from a
+  // stage with forty even ones, and the concentrated one is the one that dies.
+  // Top-5 share is the leading indicator: it reads 0.89 at turn five, where the
+  // wall-time total only reads at minute 66 (issue #145 §A).
+  lines.push(
+    '## Turn-cost concentration',
+    '',
+    'How evenly a stage spent its output. A high top-5 share means the stage is a few',
+    'large emissions, each of which must land whole or be lost whole.',
+    '',
+    row(['Stage', 'p50 out', 'p95 out', 'Max out', 'Top-5 share', 'Slowest turn', 'B/verify', 'Largest edit']),
+    row(['---', '---:', '---:', '---:', '---:', '---:', '---:', '---:']),
+    ...stageCosts.map((c) => {
+      if (c.resumed) return row([c.name, '—', '—', '—', '—', '—', '—', '—']);
+      const t = summarizeTurnCost(c.perTurn);
+      return row([
+        c.name,
+        String(t.p50TurnOut),
+        String(t.p95TurnOut),
+        String(t.maxTurnOut),
+        t.turns ? t.top5TurnShare.toFixed(2) : '—',
+        t.slowestTurnMs !== null ? fmtDuration(t.slowestTurnMs) : '—',
+        String(Math.round(c.pressure.editBytesPerVerify)),
+        String(c.pressure.largestEditBytes),
+      ]);
+    }),
+    '',
+  );
 
   try {
     await mkdir(runsDir, { recursive: true });
@@ -682,7 +750,7 @@ export async function runCreate(opts: CreateOptions): Promise<{ ok: boolean; com
       opts.log(stageLine(stage.name, 'already complete (resuming past it)', 'ok'));
       await commitResumedStage(opts, config, stage.name);
       completed.push(stage.name);
-      stageCosts.push({ name: stage.name, resumed: true, wallMs: 0, turns: 0, tokensIn: 0, tokensOut: 0, cacheHits: 0 });
+      stageCosts.push(resumedCost(stage.name));
       await emitJlcpcbAfterOutputs(stage.name, opts);
       continue;
     }
@@ -693,6 +761,7 @@ export async function runCreate(opts: CreateOptions): Promise<{ ok: boolean; com
     // stops and reports for a human — the loop keeps going by itself for the
     // recoverable cases without silently spinning on the dead-end ones.
     const stageTurns = config.stageMaxTurns?.[stage.name];
+    const stageBudget = config.stageBudgets?.[stage.name];
     const basePrompt = stage.prompt(brief);
     let guidance = '';
     let stageDone = false;
@@ -700,7 +769,17 @@ export async function runCreate(opts: CreateOptions): Promise<{ ok: boolean; com
     // Cost accumulates across all attempts of the stage, so a stage that took a
     // retry to complete shows its true total in the summary (5.2).
     const stageStart = Date.now();
-    const cost: StageCost = { name: stage.name, resumed: false, wallMs: 0, turns: 0, tokensIn: 0, tokensOut: 0, cacheHits: 0 };
+    const cost: StageCost = {
+      name: stage.name,
+      resumed: false,
+      wallMs: 0,
+      turns: 0,
+      tokensIn: 0,
+      tokensOut: 0,
+      cacheHits: 0,
+      perTurn: [],
+      pressure: EMPTY_EDIT_PRESSURE,
+    };
     for (let attempt = 1; ; attempt++) {
       // Re-scaffold before every attempt, not just once per stage. A previous
       // attempt that failed at the commit gate rolls the tree back
@@ -721,16 +800,23 @@ export async function runCreate(opts: CreateOptions): Promise<{ ok: boolean; com
           `running${attempt > 1 ? ` (attempt ${attempt}/${config.maxStageRetries + 1})` : ''}`,
         ),
       );
+      // Recomputed per attempt: a rolled-back or checkpointed attempt changes
+      // what is on disk, and a stale count would send the retry back over work
+      // that is already committed.
+      const progress = await stageProgress(opts.repoRoot, await loadConfig(opts.repoRoot), stage.name);
+      if (progress) opts.log(stageLine(stage.name, progress.line.split('.')[0] ?? progress.line));
+      const promptWithProgress = progress ? `${basePrompt}\n\n${progress.line}` : basePrompt;
       const res = await runAgentLoop({
         repoRoot: opts.repoRoot,
         model: opts.model,
         request: `create pipeline stage: ${stage.name}`,
         stagePrompt: guidance
-          ? `${basePrompt}\n\n## Recovery guidance (a previous attempt did not complete this stage — do this differently)\n${guidance}`
-          : basePrompt,
+          ? `${promptWithProgress}\n\n## Recovery guidance (a previous attempt did not complete this stage — do this differently)\n${guidance}`
+          : promptWithProgress,
         interactive: opts.interactive ?? false,
         allowDirty: true, // stages build on each other's uncommitted state within the pipeline
         ...(stageTurns !== undefined ? { maxTurns: stageTurns } : {}),
+        ...(stageBudget ? { budget: stageBudget } : {}),
         ...(opts.onBudgetExhausted ? { onBudgetExhausted: opts.onBudgetExhausted } : {}),
         log: opts.log,
         ...(opts.renderer ? { renderer: opts.renderer } : {}),
@@ -748,6 +834,8 @@ export async function runCreate(opts: CreateOptions): Promise<{ ok: boolean; com
       cost.tokensIn += res.stats?.tokensIn ?? 0;
       cost.tokensOut += res.stats?.tokensOut ?? 0;
       cost.cacheHits += res.cacheHits ?? 0;
+      cost.perTurn.push(...(res.stats?.perTurn ?? []));
+      cost.pressure = addEditPressure(cost.pressure, res.stats?.editPressure ?? EMPTY_EDIT_PRESSURE);
       stageTranscriptDir = res.transcriptDir; // last attempt's run dir (for SVG artifacts / report)
 
       // A successful run is not the same as a completed stage: an agent can

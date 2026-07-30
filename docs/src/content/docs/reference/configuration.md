@@ -17,6 +17,9 @@ Written by `copperhead init`. Every key is optional; the defaults below apply wh
   "model": null,
   "maxTurns": 40,
   "maxRepairCycles": 5,
+  "maxEditBytes": 8192,
+  "maxUnverifiedEdits": 1,
+  "checkpointCommits": true,
   "budgets": {
     "sleep_current_uA": 25
   }
@@ -31,6 +34,11 @@ Written by `copperhead init`. Every key is optional; the defaults below apply wh
 | `model` | `null` | Default model. Overridden by `--model` and `COPPERHEAD_MODEL`. |
 | `maxTurns` | `40` | Turn budget per run. |
 | `maxRepairCycles` | `5` | ERC/DRC repair attempts before the run rolls back to the git snapshot. |
+| `maxEditBytes` | `8192` | Largest single `edit_file` payload accepted for a KiCad file, in bytes. `0` disables. Docs are never capped. |
+| `maxUnverifiedEdits` | `1` | KiCad edits allowed per file kind before the matching check must run. `0` disables. |
+| `checkpointCommits` | `true` | Commit the run's touched paths whenever ERC/DRC goes clean after an edit, and roll back to there. |
+| `stageMaxTurns` | `{}` | Per-create-stage turn budgets, keyed by stage name. Stages without an entry use `maxTurns`. |
+| `stageBudgets` | `{}` | Per-create-stage spend limits: `maxTokensOut`, `maxWallMs`, `maxTurnOut`. |
 | `budgets` | `{}` | Free-form hard constraints, surfaced verbatim into every run's system prompt. |
 | `baseURL` | unset | Base URL of an OpenAI-compatible endpoint. Read **only** by the `compat` model route. |
 | `apiKeyEnv` | `OPENAI_API_KEY` | Name of the environment variable holding that endpoint's key. The name, never the key itself. |
@@ -51,6 +59,27 @@ Budgets are hard constraints, not hints. A change that would exceed one is refus
 ```
 
 The names are yours. copperhead passes them through verbatim and expects the units to be in the key, as in `sleep_current_uA`.
+
+### Spend budgets per create stage
+
+`budgets` above are design budgets. `stageBudgets` is the separate, machine-enforced spend limit for a stage of `copperhead create`:
+
+```json
+{
+  "stageBudgets": {
+    "schematic": { "maxTokensOut": 120000, "maxWallMs": 2400000, "maxTurnOut": 8000 },
+    "layout-draft": { "maxTokensOut": 80000, "maxWallMs": 1800000, "maxTurnOut": 8000 }
+  }
+}
+```
+
+`maxTokensOut` and `maxWallMs` end the stage with exit path `token-budget-exhausted` or `wall-budget-exhausted`. `maxTurnOut` is different in kind: exceeding it means the unit of work was too large, so the run continues with a message asking the model to split it. Entries that cannot mean anything (zero, negative, fractional) are ignored.
+
+### Working in small verified units
+
+`maxEditBytes` and `maxUnverifiedEdits` make "one part at a time" a mechanism rather than a request. A KiCad edit larger than the cap is refused with the cap, the attempted size, and how many symbols are already placed, and nothing is written. A second KiCad edit without an intervening `run_erc` (or `run_drc` for the board) is refused with the check to run: batching `edit_file`, `run_erc`, `edit_file` into one reply passes, two edits in a row does not. A failing check still clears the counter, so repairing a violation is never blocked.
+
+With `checkpointCommits` on, every clean ERC or DRC that follows an edit commits the paths that run touched, prefixed `copperhead: checkpoint —`, and moves the rollback target onto it. A provider error mid-stage then costs the current unit rather than everything since the stage began. Only paths the run itself touched are staged, so unrelated working changes are never swept in.
 
 ## `.copperhead/constraints.json`
 
