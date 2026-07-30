@@ -92,11 +92,20 @@ export async function syncVerify(repoRoot: string): Promise<SyncReport> {
     const header = await readFile(pinsH, 'utf8');
     const pinout = await readFile(path.join(docsDir, 'PINOUT.md'), 'utf8');
     const validNames = new Set<string>();
-    for (const { rows: tRows } of parseCanonicalTables(pinout)) {
+    const strip = (s: string | undefined): string => (s ?? '').replace(/`/g, '').trim();
+    for (const { header: tHeader, rows: tRows } of parseCanonicalTables(pinout)) {
+      const col = (re: RegExp): number => tHeader.cells.findIndex((c) => re.test(c));
+      const netI = col(/^net$/i);
+      const nameI = col(/^name$/i);
+      const signalI = col(/^signal$/i);
+      const pinI = col(/^pin$/i);
+      if (pinI < 0 || (netI < 0 && nameI < 0 && signalI < 0)) continue; // only read canonical pin-assignment tables
       for (const r of tRows) {
-        for (const cell of r.cells) {
-          const val = cell.replace(/`/g, '').trim();
-          if (val) validNames.add(val.toLowerCase());
+        for (const idx of [netI, nameI, signalI]) {
+          if (idx >= 0 && r.cells[idx]) {
+            const val = strip(r.cells[idx]);
+            if (val) validNames.add(val.toLowerCase());
+          }
         }
       }
     }
