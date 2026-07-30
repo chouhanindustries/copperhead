@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -424,9 +424,14 @@ describe('the synchronous SIGINT/SIGTERM primitives (AC-16.9, design D5)', () =>
   it('commitPathsSync makes a targeted, hook-bypassable commit', async () => {
     const { repo, cleanup } = await tempFixtureRepo();
     try {
-      // an installed hook that would otherwise fail the commit
+      // an installed hook that would otherwise fail the commit. Must be
+      // executable: unlike this environment's git, Linux git silently
+      // ignores a non-executable hook rather than refusing the commit,
+      // which is exactly the bug this line guards against (caught by CI,
+      // not by local Windows runs).
       const hook = path.join(repo, '.git', 'hooks', 'pre-commit');
       await writeFile(hook, '#!/bin/sh\nexit 1\n', 'utf8');
+      await chmod(hook, 0o755);
       const target = path.join(repo, '.copperhead', 'runs', 'x', 'summary.md');
       await mkdir(path.dirname(target), { recursive: true });
       await writeFile(target, '# summary\n', 'utf8');
