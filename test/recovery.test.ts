@@ -145,6 +145,10 @@ describe('CachingProvider', () => {
   });
 
   it('does not share cached turns across compat endpoints with the same model id', async () => {
+    // A model id like "compat:llama-3.1-8b-instant" is not unique across hosts
+    // (Groq, OpenRouter, etc. all serve overlapping model ids), so two
+    // providers pointed at different endpoints must never replay each other's
+    // cached turns even though modelId matches.
     const dir = await mkdtemp(path.join(tmpdir(), 'copperhead-cache-'));
     try {
       const groq = new CountingProvider(() => turn('groq answer'));
@@ -167,6 +171,11 @@ describe('CachingProvider', () => {
   });
 
   it('hits a pre-upgrade cache entry for a non-compat model (key shape unchanged)', async () => {
+    // Before baseURL existed in the key, a non-compat entry hashed exactly
+    // {model, messages, tools}. Writing a file under that same hash and
+    // confirming a fresh CachingProvider (no baseURL) still hits it proves the
+    // key is byte-identical post-upgrade, so existing users' caches are not
+    // stranded on the first run after upgrading.
     const dir = await mkdtemp(path.join(tmpdir(), 'copperhead-cache-'));
     try {
       const preUpgradeKey = createHash('sha256')
