@@ -84,6 +84,40 @@ describe('scorer metrics: hand-computed values', () => {
     expect(a.metrics.map((m) => m.name).sort()).toEqual(b.metrics.map((m) => m.name).sort());
   });
 
+  it('reads wrapped group rows in reading order, not left-to-right across rows', async () => {
+    // four groups on two rows; the net joins the two groups of the SECOND row,
+    // which are adjacent in reading order. Ordering every box by minX alone
+    // interleaves the rows (A, C, B, D) and reports that adjacency as a
+    // two-group hop against the flow.
+    const box = (x: number, y: number) =>
+      `(rectangle (start ${x} ${y}) (end ${x + 60} ${y + 30}) (stroke (width 0) (type solid)) (fill (type none)) (uuid "5c0e0000-0000-4000-8000-0000000r${x}${y}"))`;
+    const r = await scored(`
+      ${box(20, 20)} ${box(90, 20)} ${box(25, 60)} ${box(95, 60)}
+      (label "X" (at 50 70 0) (effects (font (size 1.27 1.27))) (uuid "5c0e0000-0000-4000-8000-00000000l001"))
+      (label "X" (at 120 70 0) (effects (font (size 1.27 1.27))) (uuid "5c0e0000-0000-4000-8000-00000000l002"))`);
+    expect(metric(r, 'flow-direction').raw).toBe(0);
+    expect(metric(r, 'flow-direction').score).toBe(1);
+  });
+
+  it('does not read a column across a row break', async () => {
+    // three evenly spaced symbols in the first row's group, one more at the
+    // same x a row below. The lone symbol belongs to the row below, not to the
+    // column above: counting it as a fourth entry turns the row gap into a
+    // wild "spacing" outlier.
+    const sym = (ref: string, x: number, y: number) =>
+      `(symbol (lib_id "Device:R") (at ${x} ${y} 0) (unit 1) (uuid "5c0e0000-0000-4000-8000-0000000s${ref}")
+         (property "Reference" "${ref}" (at ${x} ${y} 0) (effects (font (size 1.27 1.27))))
+         (property "Value" "10k" (at ${x} ${y} 0) (effects (font (size 1.27 1.27)))))`;
+    const rects = `
+      (rectangle (start 20 20) (end 80 50) (stroke (width 0) (type solid)) (fill (type none)) (uuid "5c0e0000-0000-4000-8000-00000000rc01"))
+      (rectangle (start 20 60) (end 80 90) (stroke (width 0) (type solid)) (fill (type none)) (uuid "5c0e0000-0000-4000-8000-00000000rc02"))`;
+    const r = await scored(`${rects}
+      ${sym('R1', 50, 25)} ${sym('R2', 50, 35)} ${sym('R3', 50, 45)} ${sym('R4', 50, 75)}`);
+    // the first row's three symbols are perfectly even, and the fourth is in
+    // its own row's column of one (too short to score)
+    expect(metric(r, 'spacing-uniformity').raw).toBe(1);
+  });
+
   it('weights are configurable and zeroing one removes its contribution', async () => {
     const dir = await mkdtemp(path.join(tmpdir(), 'copperhead-scorew-'));
     const file = path.join(dir, 'x.kicad_sch');

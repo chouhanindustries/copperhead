@@ -31,6 +31,8 @@ Commit the resulting diff and treat the render change as part of review.
 ## Boards
 
 - `ldo-demo/`: AP1117 LDO with input/output capacitors, power connector, and an LED indicator. Exercises: rail/ground classification from real pin types, PWR_FLAG synthesis on undriven rails only, decoupling-row placement, cross-group net labels, local wire routing, group boxes, content-derived paper.
+- `npn-switch/`: ATtiny85 driving an NPN low-side switch with a flyback diode, load header, and polarized bulk capacitor. Exercises: three groups with SUBSYSTEMS.md ordering, no-connect markers on unused MCU pins, letter pin numbers (Q_NPN's B/C/E), top/bottom pin stubs and side text slots, `Device:C_Polarized` decap detection with cross-group owner matching, multi-endpoint label fan-out when a net's span exceeds the wire budget, and content-derived A4 paper.
+- `buck-12v-5v/`: TPS54560B step-down converter, 12V to 5V at 4A, with an EN-divider UVLO, RT frequency resistor, type-II compensation network, bootstrap capacitor, Schottky catch diode, power inductor, feedback divider with feedforward capacitor, and a rail LED. The densest control board: 24 parts, 11 nets, 18 endpoints on GND. Exercises: stacked pins (the converter carries GND on both pin 7 and its thermal-pad pin 9, at one symbol coordinate), both `kind` overrides in one intent (`power` on a passive-only output rail that pin types would call a signal, `signal` on the switch node that `power_out` would call a rail), power-symbol value text on downward stubs, label nudging where a later net's trunk would otherwise run through an earlier net's label, and content-derived A3 paper.
 
 ## Licensing note
 
