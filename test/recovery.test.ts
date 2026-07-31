@@ -53,7 +53,14 @@ describe('parseDiagnosis', () => {
   it('parses an abort verdict and ignores guidance', () => {
     const d = parseDiagnosis('{"verdict":"abort","reason":"missing inputs","guidance":"n/a"}');
     expect(d.verdict).toBe('abort');
-    expect(d.guidance).toBeUndefined();
+    expect(d.guidance).undefined;
+  });
+
+  it('parses retry verdict when leading prose contains stray braces (Fixes #101)', () => {
+    const d = parseDiagnosis('Check {pins.h} before proceeding:\n{"verdict":"retry","reason":"dropped edit","guidance":"apply the edit"}');
+    expect(d.verdict).toBe('retry');
+    expect(d.reason).toBe('dropped edit');
+    expect(d.guidance).toBe('apply the edit');
   });
 
   it('fails safe to abort on non-JSON or missing verdict', () => {
@@ -131,10 +138,6 @@ describe('CachingProvider', () => {
   });
 
   it('does not share cached turns across compat endpoints with the same model id', async () => {
-    // A model id like "compat:llama-3.1-8b-instant" is not unique across hosts
-    // (Groq, OpenRouter, etc. all serve overlapping model ids), so two
-    // providers pointed at different endpoints must never replay each other's
-    // cached turns even though modelId matches.
     const dir = await mkdtemp(path.join(tmpdir(), 'copperhead-cache-'));
     try {
       const groq = new CountingProvider(() => turn('groq answer'));
@@ -157,11 +160,6 @@ describe('CachingProvider', () => {
   });
 
   it('hits a pre-upgrade cache entry for a non-compat model (key shape unchanged)', async () => {
-    // Before baseURL existed in the key, a non-compat entry hashed exactly
-    // {model, messages, tools}. Writing a file under that same hash and
-    // confirming a fresh CachingProvider (no baseURL) still hits it proves the
-    // key is byte-identical post-upgrade, so existing users' caches are not
-    // stranded on the first run after upgrading.
     const dir = await mkdtemp(path.join(tmpdir(), 'copperhead-cache-'));
     try {
       const preUpgradeKey = createHash('sha256')

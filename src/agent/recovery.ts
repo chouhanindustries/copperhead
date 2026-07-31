@@ -53,11 +53,14 @@ export interface StageDiagnosis {
  * as "abort" so an ambiguous diagnosis never loops the pipeline forever. */
 export function parseDiagnosis(text: string | null): StageDiagnosis {
   if (!text) return { verdict: 'abort', reason: 'no diagnosis produced' };
-  const start = text.indexOf('{');
-  if (start >= 0) {
+
+  for (let start = 0; start < text.length; start++) {
+    if (text[start] !== '{') continue;
+
     let depth = 0;
     let inStr = false;
     let esc = false;
+
     for (let i = start; i < text.length; i++) {
       const ch = text[i];
       if (inStr) {
@@ -70,21 +73,26 @@ export function parseDiagnosis(text: string | null): StageDiagnosis {
       else if (ch === '{') depth++;
       else if (ch === '}' && --depth === 0) {
         try {
-          const o = JSON.parse(text.slice(start, i + 1)) as Partial<StageDiagnosis>;
-          const verdict = o.verdict === 'retry' ? 'retry' : 'abort';
-          return {
-            verdict,
-            reason: typeof o.reason === 'string' ? o.reason : 'no reason given',
-            ...(verdict === 'retry' && typeof o.guidance === 'string' && o.guidance.trim()
-              ? { guidance: o.guidance.trim() }
-              : {}),
-          };
+          const candidate = text.slice(start, i + 1);
+          const o = JSON.parse(candidate) as Partial<StageDiagnosis>;
+          if (typeof o === 'object' && o !== null && (o.verdict === 'retry' || o.verdict === 'abort')) {
+            const verdict = o.verdict === 'retry' ? 'retry' : 'abort';
+            return {
+              verdict,
+              reason: typeof o.reason === 'string' ? o.reason : 'no reason given',
+              ...(verdict === 'retry' && typeof o.guidance === 'string' && o.guidance.trim()
+                ? { guidance: o.guidance.trim() }
+                : {}),
+            };
+          }
         } catch {
+          // Not valid JSON starting at this brace; break inner loop to try next candidate '{'
           break;
         }
       }
     }
   }
+
   return { verdict: 'abort', reason: 'diagnosis was not valid JSON' };
 }
 
