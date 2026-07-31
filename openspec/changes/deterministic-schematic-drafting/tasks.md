@@ -35,69 +35,69 @@
 
 ## 5. Deterministic emitter (src/kicad/emit.ts)
 
-- [ ] 5.1 Canonical text emission: fixed section order, fixed indentation, KiCad number formatting, header template with the pinned format version
-- [ ] 5.2 UUIDv5 derivation from semantic paths (project namespace; `sheet/<ref>`, `sheet/<ref>/pin/<n>`, `wire/<net>/<i>`, labels, junctions) and canonical element sort orders
-- [ ] 5.3 Hermetic symbol vendoring: copy each used symbol's `.kicad_sym` source into the committed project cache on first use; drafts read the vendored copy; explicit refresh path with reviewable diff; `verify_symbols` still compares against installed libs
-- [ ] 5.4 Verbatim `lib_symbols` embedding: copy the `(symbol …)` block byte-for-byte from the vendored source with only the lib_id rename
-- [ ] 5.5 Emit symbols (properties, per-pin uuids, per-symbol `(instances …)`), wires, junctions, labels, power symbols, `(no_connect …)` markers, `PWR_FLAG`s, group rectangles and captions, title block
-- [ ] 5.6 Golden tests: byte-exact diff against a KiCad-saved reference; `kicad-cli` loads the output and ERC runs; byte-identical re-emission
-- [ ] 5.7 Cross-check tests: parse emitter output with the read-only parser; pin positions and inferred nets match the input model
+- [x] 5.1 Canonical text emission: fixed section order, fixed indentation, KiCad number formatting, header template with the pinned format version
+- [x] 5.2 UUIDv5 derivation from semantic paths (project namespace; `sheet/<ref>`, `sheet/<ref>/pin/<n>`, `wire/<net>/<i>`, labels, junctions) and canonical element sort orders
+- [x] 5.3 Hermetic symbol vendoring: copy each used symbol's `.kicad_sym` source into the committed project cache on first use; drafts read the vendored copy; explicit refresh path with reviewable diff; `verify_symbols` still compares against installed libs
+- [x] 5.4 Verbatim `lib_symbols` embedding: copy the `(symbol …)` block byte-for-byte from the vendored source with only the lib_id rename
+- [x] 5.5 Emit symbols (properties, per-pin uuids, per-symbol `(instances …)`), wires, junctions, labels, power symbols, `(no_connect …)` markers, `PWR_FLAG`s, group rectangles and captions, title block
+- [x] 5.6 Golden tests: byte-exact diff against a KiCad-saved reference; `kicad-cli` loads the output and ERC runs; byte-identical re-emission
+- [x] 5.7 Cross-check tests: parse emitter output with the read-only parser; pin positions and inferred nets match the input model
 
 ## 6. Netlist-intent IR (src/kicad/draft/ir.ts)
 
-- [ ] 6.1 Versioned IR schema (parts, connections, groups, no-connects, net kinds, hints) with TypeScript types; documented in docs/reference
-- [ ] 6.2 Validation: lib_id resolution (reuse symlib), pin existence, minimum net endpoints, exactly-one-group per non-power part against SUBSYSTEMS.md, no-connect consistency, BOM.md cross-check (refdes present, value matching), unsupported-version refusal
-- [ ] 6.3 Validation failures as a numbered finding list in the `verify_symbols` shape; a failed draft never touches the schematic on disk
-- [ ] 6.4 Unit tests: one failing fixture per validation rule, plus a clean fixture
+- [x] 6.1 Versioned IR schema (parts, connections, groups, no-connects, net kinds, hints) with TypeScript types; documented in docs/reference
+- [x] 6.2 Validation: lib_id resolution (reuse symlib), pin existence, minimum net endpoints, exactly-one-group per non-power part against SUBSYSTEMS.md, no-connect consistency, BOM.md cross-check (refdes present, value matching), unsupported-version refusal
+- [x] 6.3 Validation failures as a numbered finding list in the `verify_symbols` shape; a failed draft never touches the schematic on disk
+- [x] 6.4 Unit tests: one failing fixture per validation rule, plus a clean fixture
 
 ## 7. Drafting engine (src/kicad/draft/)
 
-- [ ] 7.1 Reductions: deterministic power-class recognition (pin electrical types with IR override, resolved classes in the draft report), stripping to per-pin power symbols (rails up, grounds down), decoupling-cap classification with the deterministic ownership tie-break, connector edge assignment, group partition
-- [ ] 7.1a Gate-resolvability synthesis: `(no_connect …)` markers for declared no-connects, one `PWR_FLAG` per undriven power-class net at a deterministic location
-- [ ] 7.2 Group layout: flow ordering from the directed pin-type graph with SUBSYSTEMS.md order as tie-break, group box sizing from summed extents including power symbols, decoupling rows, and text slots (reuse the checker's C2 math), captioned rectangles per the standard
-- [ ] 7.3 In-group placement: longest-path layering, barycenter ordering, integer 1.27mm grid throughout, refdes/value text slots that never collide
-- [ ] 7.4 Wiring policy: local nets up to four endpoints within one group and the distance budget wired orthogonally in reserved inter-column channels (never crossing a body box), junction synthesis, net labels (horizontal-preferred) for everything else
+- [x] 7.1 Reductions: deterministic power-class recognition (pin electrical types with IR override, resolved classes in the draft report), stripping to per-pin power symbols (rails up, grounds down), decoupling-cap classification with the deterministic ownership tie-break, connector edge assignment, group partition
+- [x] 7.1a Gate-resolvability synthesis: `(no_connect …)` markers for declared no-connects, one `PWR_FLAG` per undriven power-class net at a deterministic location
+- [x] 7.2 Group layout: flow ordering from the directed pin-type graph with SUBSYSTEMS.md order as tie-break, group box sizing from summed extents including power symbols, decoupling rows, and text slots (reuse the checker's C2 math), captioned rectangles per the standard
+- [x] 7.3 In-group placement: longest-path layering, barycenter ordering, integer 1.27mm grid throughout, refdes/value text slots that never collide
+- [x] 7.4 Wiring policy: local nets up to four endpoints within one group and the distance budget wired orthogonally in reserved inter-column channels (never crossing a body box), junction synthesis, net labels (horizontal-preferred) for everything else
 - [ ] 7.5 Idiom micro-templates: pull-up/pull-down stubs, crystal flanking, connector edge placement
 - [ ] 7.5a Alignment and balance pass: shared column axes, uniform sibling gaps, collinear passive chains (zero-bend wires between aligned pins), mirror-symmetric pairs, centered group contents, page-balance distribution; preserves grid, connectivity, and gating invariants
-- [ ] 7.6 Determinism audit: no `Date`, no `Math.random`, no filesystem-order or locale dependence; property test drafting the same IR twice yields identical bytes
-- [ ] 7.7 Engine acceptance: every Tier C reference IR drafts with zero error-severity legibility findings and clean ERC
+- [x] 7.6 Determinism audit: no `Date`, no `Math.random`, no filesystem-order or locale dependence; property test drafting the same IR twice yields identical bytes
+- [x] 7.7 Engine acceptance: every Tier C reference IR drafts with zero error-severity legibility findings and clean ERC
 
 ## 8. Scoring tool (src/kicad/score.ts)
 
-- [ ] 8.1 Metrics: wire crossings, bends, total wire length, alignment consistency, page utilization, label-to-wire ratio, group cohesion, flow-direction violations, axis-alignment ratio, spacing uniformity, straight-wire ratio, label alignment, whitespace balance, pair symmetry, checker finding counts; full pre-rounding precision
-- [ ] 8.2 Weighted composite with weights from the `legibility` config block and the error-severity cap below the Tier A floor
-- [ ] 8.3 Always-on per-metric breakdown (raw value, weight, contribution, applied cap) in human and JSON output; populate `check --json`'s `legibility.score`
-- [ ] 8.4 Unit tests per metric against constructed fixtures with hand-computed expected values
+- [x] 8.1 Metrics: wire crossings, bends, total wire length, alignment consistency, page utilization, label-to-wire ratio, group cohesion, flow-direction violations, axis-alignment ratio, spacing uniformity, straight-wire ratio, label alignment, whitespace balance, pair symmetry, checker finding counts; full pre-rounding precision
+- [x] 8.2 Weighted composite with weights from the `legibility` config block and the error-severity cap below the Tier A floor
+- [x] 8.3 Always-on per-metric breakdown (raw value, weight, contribution, applied cap) in human and JSON output; populate `check --json`'s `legibility.score`
+- [x] 8.4 Unit tests per metric against constructed fixtures with hand-computed expected values
 
 ## 9. Golden benchmark corpus (test/fixtures/golden/)
 
-- [ ] 9.1 Tier A: known-good hand-drawn sheets (KiCad demo projects with compatible licenses plus the repo fixture), each with a provenance note; pin zero error findings and the score floor
-- [ ] 9.2 Tier B: the #136 run's sheet plus one synthetic fixture per gating family; pin exact finding lists and the score ceiling
-- [ ] 9.3 Tier C: reference IRs (small MCU board, sensor node, power-only board); pin byte-exact drafted output and full score JSON
-- [ ] 9.4 `--update-goldens` regeneration in the test harness; suite fails on mismatch without it and never writes goldens implicitly
+- [x] 9.1 Tier A: known-good hand-drawn sheets (KiCad demo projects with compatible licenses plus the repo fixture), each with a provenance note; pin zero error findings and the score floor
+- [x] 9.2 Tier B: the #136 run's sheet plus one synthetic fixture per gating family; pin exact finding lists and the score ceiling
+- [x] 9.3 Tier C: reference IRs (small MCU board, sensor node, power-only board); pin byte-exact drafted output and full score JSON
+- [x] 9.4 `--update-goldens` regeneration in the test harness; suite fails on mismatch without it and never writes goldens implicitly
 - [ ] 9.5 CI wiring: run all tiers, render each to SVG as a CI artifact, fail on any pin violation
 
 ## 10. CLI and agent tools
 
-- [ ] 10.1 `copperhead draft`: IR through engine and emitter, draft report, non-zero exit with findings on validation failure; LLM-free and network-free
-- [ ] 10.2 `copperhead score`: score JSON, exit code independent of the composite; LLM-free and network-free
-- [ ] 10.3 `draft_schematic` tool: validate + draft + report with embedded checker findings and score, updating the legibility ledger obligation; spec-gated; failed draft leaves the schematic untouched
-- [ ] 10.4 `score_schematic` tool: composite + breakdown + cap, graceful no-schematic path
-- [ ] 10.5 Drafting-mode guard: refuse `edit_file`/`write_file` against an engine-drafted schematic, naming `draft_schematic`; `copperhead do` on human-drawn sheets untouched
-- [ ] 10.6 Command and tool tests covering the cli-surface and agent-core delta scenarios
+- [x] 10.1 `copperhead draft`: IR through engine and emitter, draft report, non-zero exit with findings on validation failure; LLM-free and network-free
+- [x] 10.2 `copperhead score`: score JSON, exit code independent of the composite; LLM-free and network-free
+- [x] 10.3 `draft_schematic` tool: validate + draft + report with embedded checker findings and score, updating the legibility ledger obligation; spec-gated; failed draft leaves the schematic untouched
+- [x] 10.4 `score_schematic` tool: composite + breakdown + cap, graceful no-schematic path
+- [x] 10.5 Drafting-mode guard: refuse `edit_file`/`write_file` against an engine-drafted schematic, naming `draft_schematic`; `copperhead do` on human-drawn sheets untouched
+- [x] 10.6 Command and tool tests covering the cli-surface and agent-core delta scenarios
 
 ## 11. Stage-4 restructure (src/commands/create.ts)
 
-- [ ] 11.1 Rewrite the schematic stage instruction: author intent, never coordinates; repair through the IR; run `check_legibility` and `score_schematic` before finishing
-- [ ] 11.2 Extend the completion contract: drafted sheet matches a re-draft of the current IR (staleness check), score recorded in the run summary; keep symbol/drift/ERC/legibility conditions
-- [ ] 11.3 Persist `schematic.intent.json` alongside the schematic and commit both together
-- [ ] 11.4 Integration test: scripted stage-4 run in drafting mode completes, records the score, and refuses geometry edits
-- [ ] 11.5 Rollback check: reverting the stage-4 wiring restores the model-authored flow with the checker still gating and `draft`/`score` functional standalone
+- [x] 11.1 Rewrite the schematic stage instruction: author intent, never coordinates; repair through the IR; run `check_legibility` and `score_schematic` before finishing
+- [x] 11.2 Extend the completion contract: drafted sheet matches a re-draft of the current IR (staleness check), score recorded in the run summary; keep symbol/drift/ERC/legibility conditions
+- [x] 11.3 Persist `schematic.intent.json` alongside the schematic and commit both together
+- [x] 11.4 Integration test: scripted stage-4 run in drafting mode completes, records the score, and refuses geometry edits
+- [x] 11.5 Rollback check: reverting the stage-4 wiring restores the model-authored flow with the checker still gating and `draft`/`score` functional standalone
 
 ## 12. Docs and spec
 
-- [ ] 12.1 Keep docs/reference/schematic-legibility.md in sync with implementation; write docs/reference/schematic-drafting.md explaining the engine's inner workings and rules
-- [ ] 12.2 Document the IR schema, `draft`/`score` commands, and the golden corpus workflow (including `--update-goldens`)
-- [ ] 12.3 Update .copperhead/README.md scaffold text for the `legibility` config block including score weights
+- [x] 12.1 Keep docs/reference/schematic-legibility.md in sync with implementation; write docs/reference/schematic-drafting.md explaining the engine's inner workings and rules
+- [x] 12.2 Document the IR schema, `draft`/`score` commands, and the golden corpus workflow (including `--update-goldens`)
+- [x] 12.3 Update .copperhead/README.md scaffold text for the `legibility` config block including score weights
 - [ ] 12.4 Merge delta specs into SPEC.md on archive; the AC-16.x criteria (AC-16.1 through AC-16.32, tagged on the delta-spec scenarios) join SPEC.md's acceptance-criteria table
 - [ ] 12.5 Close #136 and #159 when archived; note the elkjs escape hatch and template-corpus successor in ROADMAP.md

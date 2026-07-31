@@ -7,6 +7,8 @@ import { runErc, runDrc, exportSvg, exportFab, kicadLoadError, isProbeableKicadF
 import { formatViolations, type CheckReport } from '../kicad/report.js';
 import { listSymbols, listNets } from '../kicad/sexp.js';
 import { checkLegibility, formatLegibility } from '../kicad/legibility.js';
+import { scoreSchematic, formatScore } from '../kicad/score.js';
+import { runDraft, defaultIntentPath, formatDraftReport } from '../kicad/draft/draft.js';
 import { verifySchematicSymbols } from '../kicad/symlib.js';
 import { checkDrift } from '../memory/drift.js';
 import { saveConstraint, classifyAffectsTarget, affectsTargetExists } from '../memory/constraints.js';
@@ -39,6 +41,8 @@ export interface RunContext {
   lastDrc: CheckReport | null;
   /** Last check_legibility counts; feeds the run summary's verification section. */
   lastLegibility: { error: number; advisory: number } | null;
+  /** Last score composite (AC-16.21); recorded in the run summary. */
+  lastScore: number | null;
   repairCycles: number;
   finishRequest: FinishRequest | null;
 }
@@ -242,6 +246,17 @@ export const TOOLS: ToolDef[] = [
       if (corrupt) return corrupt;
       const rel = str(args, 'path');
       const abs = resolveInRepo(ctx.repoRoot, rel);
+      // Engine-drafted sheets are regenerated wholesale from the IR: a hand
+      // edit would be destroyed by the next re-draft and would break the
+      // byte-identical staleness check. Geometry repairs go through the IR
+      // (design D5). Hand-drawn schematics never carry the draft generator
+      // marker, so `do` on existing repos is untouched by this guard.
+      if (rel.endsWith('.kicad_sch') && existsSync(abs)) {
+        const head = (await readFile(abs, 'utf8')).slice(0, 400);
+        if (head.includes('(generator "copperhead-draft")')) {
+          return `refused: ${rel} is engine-drafted from ${defaultIntentPath(rel)}. Revise the intent (edit_file on the intent JSON) and call draft_schematic to regenerate the sheet; direct geometry edits would be lost on the next re-draft.`;
+        }
+      }
       // Text edits can corrupt an s-expression file in ways the editor cannot
       // see; a corrupted file then fails every later ERC/DRC with an opaque
       // error. Validate loadability with KiCad itself and roll the edit back
@@ -345,6 +360,78 @@ export const TOOLS: ToolDef[] = [
       const lines = findings.map((f) => `  - [${f.kind}] ${f.detail}`);
       const mismatches = findings.filter((f) => f.kind !== 'no-library').length;
       return `verify_symbols: ${checked} verified, ${skipped} unverifiable (library not installed), ${mismatches} issue(s) to reconcile:\n${lines.join('\n')}`;
+    },
+  },
+  {
+    schema: {
+      name: 'draft_schematic',
+      description:
+        'Regenerate the schematic deterministically from the netlist-intent IR (schematic.intent.json beside the schematic). Pass intent_json to write a new IR first, or omit it to re-draft the existing file. The engine computes ALL geometry (placement, wires, labels, power symbols, group boxes); never author coordinates. The report embeds the legibility findings and score for the fresh sheet. A failed validation leaves the previous schematic untouched.',
+      parameters: {
+        type: 'object',
+        properties: {
+          intent_json: { type: 'string', description: 'full IR document as JSON text (optional: omit to re-draft the current IR)' },
+        },
+        required: [],
+      },
+    },
+    requiresUnlock: true,
+    handler: async (ctx, args) => {
+      if (!ctx.config.schematic) return 'no schematic configured; set one in .copperhead/config.json first';
+      const intentRel = defaultIntentPath(ctx.config.schematic);
+      if (typeof args.intent_json === 'string' && args.intent_json.trim()) {
+        const corrupt = corruptionError({ intent_json: args.intent_json });
+        if (corrupt) return corrupt;
+        try {
+          JSON.parse(args.intent_json);
+        } catch (e) {
+          return `intent_json is not valid JSON (${(e as Error).message}); nothing written`;
+        }
+        await writeFile(resolveInRepo(ctx.repoRoot, intentRel), args.intent_json, 'utf8');
+        ctx.filesTouched.add(intentRel);
+      }
+      const res = await runDraft({
+        repoRoot: ctx.repoRoot,
+        schematic: ctx.config.schematic,
+        intentPath: intentRel,
+        docsDir: ctx.config.docs,
+      });
+      if (!res.ok) return res.message;
+      markTouched(ctx, ctx.config.schematic);
+      // embed the checker and score in the draft report (design D5): a
+      // draft-check-score iteration costs one tool call, and the embedded
+      // checker result drives the ledger obligation exactly like check_legibility
+      const docsAbs = path.join(ctx.repoRoot, ctx.config.docs);
+      const leg = await checkLegibility(res.schematicPath, {
+        docsDir: docsAbs,
+        ...(ctx.config.legibility ? { config: ctx.config.legibility } : {}),
+      });
+      ctx.lastLegibility = leg.counts;
+      ctx.ledger.onLegibilityResult(leg.counts.error);
+      const score = await scoreSchematic(res.schematicPath, {
+        docsDir: docsAbs,
+        ...(ctx.config.legibility ? { config: ctx.config.legibility } : {}),
+      });
+      ctx.lastScore = score.composite;
+      return [formatDraftReport(res.report), formatLegibility(leg), formatScore(score)].join('\n');
+    },
+  },
+  {
+    schema: {
+      name: 'score_schematic',
+      description:
+        'Deterministic quantitative legibility score for the schematic: composite 0-100 with the per-metric breakdown (crossings, bends, alignment, spacing, symmetry, balance, …). Error-severity legibility findings cap the composite. Advisory: informs, never gates by itself.',
+      parameters: { type: 'object', properties: {}, required: [] },
+    },
+    requiresUnlock: false,
+    handler: async (ctx) => {
+      if (!ctx.config.schematic) return 'no schematic configured; score_schematic does not apply yet';
+      const report = await scoreSchematic(path.join(ctx.repoRoot, ctx.config.schematic), {
+        docsDir: path.join(ctx.repoRoot, ctx.config.docs),
+        ...(ctx.config.legibility ? { config: ctx.config.legibility } : {}),
+      });
+      ctx.lastScore = report.composite;
+      return formatScore(report);
     },
   },
   {

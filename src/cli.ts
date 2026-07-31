@@ -180,6 +180,68 @@ program
   .action(checkAction);
 
 program
+  .command('draft')
+  .description('draft the schematic deterministically from schematic.intent.json; no LLM, no network')
+  .option('--intent <path>', 'repo-relative intent file (default: schematic.intent.json beside the schematic)')
+  .action(async (opts: { intent?: string }) => {
+    const repo = repoOf(program.opts());
+    const json = Boolean(program.opts().json);
+    try {
+      const { loadConfig } = await import('./config.js');
+      const { runDraft, defaultIntentPath, formatDraftReport } = await import('./kicad/draft/draft.js');
+      const config = await loadConfig(repo);
+      if (!config.schematic) {
+        console.error('no schematic configured in .copperhead/config.json');
+        process.exit(1);
+      }
+      const res = await runDraft({
+        repoRoot: repo,
+        schematic: config.schematic,
+        intentPath: opts.intent ?? defaultIntentPath(config.schematic),
+        docsDir: config.docs,
+      });
+      if (!res.ok) {
+        if (json) console.log(JSON.stringify({ ok: false, findings: res.findings }, null, 2));
+        else console.error(res.message);
+        process.exit(1);
+      }
+      if (json) console.log(JSON.stringify({ ok: true, report: res.report }, null, 2));
+      else console.log(formatDraftReport(res.report));
+      process.exit(0);
+    } catch (err) {
+      console.error((err as Error).message);
+      process.exit(1);
+    }
+  });
+
+program
+  .command('score')
+  .description('quantitative legibility score for the schematic; advisory exit code; no LLM, no network')
+  .action(async () => {
+    const repo = repoOf(program.opts());
+    const json = Boolean(program.opts().json);
+    try {
+      const { loadConfig } = await import('./config.js');
+      const { scoreSchematic, formatScore } = await import('./kicad/score.js');
+      const path = await import('node:path');
+      const config = await loadConfig(repo);
+      if (!config.schematic) {
+        console.error('no schematic configured in .copperhead/config.json');
+        process.exit(1);
+      }
+      const report = await scoreSchematic(path.join(repo, config.schematic), {
+        docsDir: path.join(repo, config.docs),
+        ...(config.legibility ? { config: config.legibility } : {}),
+      });
+      console.log(json ? JSON.stringify(report, null, 2) : formatScore(report));
+      process.exit(0); // the exit code never depends on the composite (AC-16.26 family)
+    } catch (err) {
+      console.error((err as Error).message);
+      process.exit(1);
+    }
+  });
+
+program
   .command('doctor')
   .description('env preflight: kicad-cli, git, node, and the model provider credential; no LLM, no network')
   .option('--model <model>', 'model to check the provider credential for (default: resolved like a run)')
