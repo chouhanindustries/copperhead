@@ -44,7 +44,7 @@ Each finding carries a stable kind identifier. Error-severity families gate the 
 
 The split is deliberate: every gating family has an unambiguous answer and a single resolving move, while the advisory families rest on thresholds, and gating on a threshold invites the repair loop to thrash against a number instead of fixing a defect.
 
-What the checker deliberately excludes: pin name and pin number text participate in no collision test (they sit inside IC outlines by design), a label never collides with the wire it is attached to, and text extents are estimated below the true average so the checker misses marginal collisions rather than inventing them.
+What the checker deliberately excludes: pin name and pin number text participate in no collision test (they sit inside IC outlines by design), a label never collides with the wire it is attached to, and text extents are estimated at a fixed 0.6 × font height per character, below the stroke font's average advance, so the checker misses marginal collisions rather than inventing them.
 
 ## Where the checks bind
 

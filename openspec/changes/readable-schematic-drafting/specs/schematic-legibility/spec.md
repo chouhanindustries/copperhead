@@ -76,7 +76,7 @@ Connections that leave a group SHALL be made with net labels rather than long wi
 
 ### Requirement: Deterministic read-only legibility checker
 
-The checker SHALL be implemented as a read-only module over the existing s-expression parser. It SHALL NOT serialize s-expressions, SHALL NOT modify any file, SHALL make no network calls, and SHALL invoke no language model. It SHALL derive symbol body bounding boxes from the `lib_symbols` graphic items of each instantiated symbol, transformed by the instance's position, rotation, and mirror, and SHALL approximate text extents from the item's font height using a fixed per-character advance ratio.
+The checker SHALL be implemented as a read-only module over the existing s-expression parser. It SHALL NOT serialize s-expressions, SHALL NOT modify any file, SHALL make no network calls, and SHALL invoke no language model. It SHALL derive symbol body bounding boxes from the `lib_symbols` graphic items of each instantiated symbol, transformed by the instance's position, rotation, and mirror. It SHALL approximate a text item's extent as `characters × 0.6 × font height` wide by the font height tall: the advance ratio is fixed at 0.6 (a dimensionless fraction of the font height per character), deliberately below the KiCad stroke font's average advance so marginal collisions are missed rather than invented. Every geometric comparison SHALL apply a fixed 0.01 mm tolerance so file-precision noise cannot flip a finding.
 
 #### Scenario: Checker leaves the schematic untouched
 
@@ -90,7 +90,7 @@ The checker SHALL be implemented as a read-only module over the existing s-expre
 
 ### Requirement: Check families and severities
 
-The checker SHALL evaluate these families, each carrying a stable kind identifier: `symbol-overlap`, `text-collision`, `off-grid`, `label-orientation`, `out-of-frame`, `low-utilization`, `crowding`, `ungrouped-symbol`, `unlabeled-group`, `group-overlap`, `cross-group-wire`, `wire-through-symbol`, and `empty-title-block`. Each family SHALL carry a default severity of `error` or `advisory`. The `text-collision` family SHALL test Reference and Value property text, net and hierarchical label text, and free `(text …)` items against symbol body boxes, wire segments, and one another; pin name and pin number text SHALL participate on neither side of the test, matching their exclusion from the body box, and a label SHALL NOT collide with the wire it is attached to. `symbol-overlap`, `text-collision`, `off-grid`, `out-of-frame`, `ungrouped-symbol`, `unlabeled-group`, `group-overlap`, `wire-through-symbol`, and `empty-title-block` SHALL default to `error`; `label-orientation`, `low-utilization`, `crowding`, and `cross-group-wire` SHALL default to `advisory`.
+The checker SHALL evaluate these families, each carrying a stable kind identifier: `symbol-overlap`, `text-collision`, `off-grid`, `label-orientation`, `out-of-frame`, `low-utilization`, `crowding`, `ungrouped-symbol`, `unlabeled-group`, `group-overlap`, `cross-group-wire`, `wire-through-symbol`, and `empty-title-block`. Each family SHALL carry a default severity of `error` or `advisory`. The `text-collision` family SHALL test Reference and Value property text, net and hierarchical label text, and free `(text …)` items against symbol body boxes, wire segments, and one another; pin name and pin number text SHALL participate on neither side of the test, matching their exclusion from the body box, and a label SHALL NOT collide with the wire it is attached to. The `off-grid` family SHALL test symbol origins, wire endpoints, and net and hierarchical label positions against the configured grid pitch, and `off-grid` findings SHALL be ordered before every other family in the report, because a repair nudge that leaves the grid silently breaks connectivity. The `crowding` family SHALL report a pair of symbols on the same sheet whose body bounding boxes sit closer, edge to edge, than the configured minimum readable pitch; the finding SHALL name both refdes and state the measured distance against the threshold. `symbol-overlap`, `text-collision`, `off-grid`, `out-of-frame`, `ungrouped-symbol`, `unlabeled-group`, `group-overlap`, `wire-through-symbol`, and `empty-title-block` SHALL default to `error`; `label-orientation`, `low-utilization`, `crowding`, and `cross-group-wire` SHALL default to `advisory`.
 
 #### Scenario: Text over a symbol body is an error
 
@@ -112,6 +112,21 @@ The checker SHALL evaluate these families, each carrying a stable kind identifie
 - **WHEN** a wire endpoint is not a multiple of 1.27mm on either axis
 - **THEN** an `off-grid` finding is reported at error severity with the coordinate and the nearest on-grid point
 
+#### Scenario: Off-grid symbol origin and label position are errors
+
+- **WHEN** a symbol origin or a net label position is not a multiple of the grid pitch on either axis
+- **THEN** an `off-grid` finding is reported at error severity for each, with the coordinate and the nearest on-grid point
+
+#### Scenario: Grid findings lead the report
+
+- **WHEN** a sheet has both `off-grid` findings and findings from other families
+- **THEN** the `off-grid` findings appear before every other family in the report
+
+#### Scenario: Crowded neighbours are advised
+
+- **WHEN** two symbols' body bounding boxes sit closer edge to edge than the configured minimum readable pitch without intersecting
+- **THEN** a `crowding` finding is reported at advisory severity naming both refdes and the measured distance against the threshold
+
 #### Scenario: Rotated label where horizontal fits is advisory
 
 - **WHEN** a label is drawn at 90 or 270 degrees and the same label drawn horizontally would collide with nothing
@@ -129,12 +144,17 @@ The checker SHALL evaluate these families, each carrying a stable kind identifie
 
 ### Requirement: Finding format and bounded output
 
-Each finding SHALL carry `{kind, severity, sheet, at: {x, y}, refs, detail}`, where `detail` states the defect and the concrete fix. Pairwise families SHALL report each unordered pair at most once. The checker SHALL cap findings per family per sheet at a configured limit and SHALL append an explicit count of suppressed findings, so a single crowded cluster cannot emit a quadratic report or silently hide the remainder.
+Each finding SHALL carry `{kind, severity, sheet, at: {x, y}, refs, detail}`, where `detail` states the defect and the concrete fix. `refs` SHALL be populated for every finding with the entities involved, and is not limited to refdes: symbol-anchored findings carry the affected refdes, group-anchored findings carry the group captions (`group-overlap` carries both), `empty-title-block` carries the names of the empty fields, and page-level findings (`low-utilization`, and `out-of-frame` when no single item is at fault) carry the sheet name. Pairwise families SHALL report each unordered pair at most once. The checker SHALL cap findings per family per sheet at a configured limit and SHALL append an explicit count of suppressed findings, so a single crowded cluster cannot emit a quadratic report or silently hide the remainder.
 
 #### Scenario: Pair reported once
 
 - **WHEN** symbols R1 and R2 overlap each other
 - **THEN** exactly one `symbol-overlap` finding is produced, naming both refdes
+
+#### Scenario: Non-symbol findings carry refs
+
+- **WHEN** a `group-overlap`, an `empty-title-block`, and a `low-utilization` finding are produced
+- **THEN** their `refs` name the two group captions, the empty field names, and the sheet name respectively
 
 #### Scenario: Truncation is stated, not silent
 

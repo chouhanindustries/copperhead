@@ -4,7 +4,7 @@
 
 ### Requirement: `check_legibility` tool
 
-The tool list SHALL include `check_legibility`, available in the same phase as `verify_symbols` and taking no required arguments. It SHALL run the deterministic legibility checker against the configured schematic and return either a statement that no findings exist or a numbered list of findings, each naming its kind, severity, sheet, coordinates, affected refdes, and the concrete fix. When no schematic is configured, it SHALL say so rather than failing.
+The tool list SHALL include `check_legibility`, available in the same phase as `verify_symbols` and taking no required arguments. It SHALL run the deterministic legibility checker against the configured schematic and return either a statement that no findings exist or a numbered list of findings, each naming its kind, severity, sheet, coordinates, affected references, and the concrete fix. References are the finding's `refs` and are not limited to refdes: a `group-overlap` finding names the two group captions, `empty-title-block` names the empty fields, and page-level findings such as `low-utilization` name the sheet, so a finding with no symbol involved still says what it is about. When no schematic is configured, it SHALL say so rather than failing.
 
 #### Scenario: Clean schematic
 
@@ -20,6 +20,20 @@ The tool list SHALL include `check_legibility`, available in the same phase as `
 
 - **WHEN** `check_legibility` runs in a repo whose config names no schematic
 - **THEN** the result states that no schematic is configured and the run continues
+
+#### Scenario: Non-symbol finding is still actionable
+
+- **WHEN** the checker finds an empty title block
+- **THEN** the numbered finding names the empty fields as its references and states what to fill in, with no refdes required
+
+### Requirement: `check_legibility` joins the verification sequence
+
+The agent loop's stated workflow SHALL include `check_legibility` in the verification steps that precede `finish`, alongside ERC, DRC, and the drift check: after schematic edits, the prompt SHALL direct the agent to run `check_legibility` and reconcile error-severity findings in the same loop that already requires a clean ERC, rather than leaving the checker as a tool the agent may never call.
+
+#### Scenario: Prompt names the checker before finish
+
+- **WHEN** the agent loop's prompt states the verification steps a schematic-editing run must complete before `finish`
+- **THEN** `check_legibility` is listed with `run_erc` and `check_drift`, with the instruction to reconcile error-severity findings
 
 ### Requirement: Legibility findings feed the sync-obligations ledger
 
