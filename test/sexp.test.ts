@@ -192,23 +192,27 @@ describe('sexp parser', () => {
     const footprints = await listBoardFootprints(pcbFilePath);
     
     expect(footprints.length).toBe(3);
+    expect(footprints.map(f => f.ref)).toEqual(['C99', 'R1', 'U1']);
 
     const c99 = footprints.find(f => f.ref === 'C99');
     expect(c99).toBeDefined();
     expect(c99?.value).toBe('100nF');
     expect(c99?.layer).toBe('B.Cu');
     expect(c99?.at).toEqual({ x: 100.5, y: 50.5, rot: 0 });
+    expect(c99?.footprintId).toBe('Legacy:C_0402');
     
     const r1 = footprints.find(f => f.ref === 'R1');
     expect(r1).toBeDefined();
     expect(r1?.value).toBe('10k');
     expect(r1?.at).toEqual({ x: 110, y: 50, rot: 0 });
+    expect(r1?.footprintId).toBe('Resistor_SMD:R_0603_1608Metric');
     
     const u1 = footprints.find(f => f.ref === 'U1');
     expect(u1).toBeDefined();
     expect(u1?.value).toBe('NE5532');
     expect(u1?.at).toEqual({ x: 120, y: 60, rot: 90 });
     expect(u1?.layer).toBe('F.Cu');
+    expect(u1?.footprintId).toBe('Package_SO:SOIC-8_3.9x4.9mm_P1.27mm');
 
     await fs.rm(tmpDir, { recursive: true, force: true });
   });
