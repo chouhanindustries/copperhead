@@ -180,6 +180,10 @@ describe('sexp parser', () => {
           (property "Reference" "R1" (at 0 0 0))
           (property "Value" "10k" (at 0 0 0))
         )
+        (footprint "Legacy:C_0402" (at 100.5 50.5) (layer "B.Cu")
+          (fp_text reference "C99" (at 0 0) (layer "B.SilkS"))
+          (fp_text value "100nF" (at 0 0) (layer "B.Fab"))
+        )
       )
     `;
     
@@ -187,15 +191,24 @@ describe('sexp parser', () => {
 
     const footprints = await listBoardFootprints(pcbFilePath);
     
-    expect(footprints.length).toBe(2);
-    expect(footprints[0].ref).toBe('R1');
-    expect(footprints[0].value).toBe('10k');
-    expect(footprints[0].at).toEqual({ x: 110, y: 50, rot: 0 });
+    expect(footprints.length).toBe(3);
+
+    const c99 = footprints.find(f => f.ref === 'C99');
+    expect(c99).toBeDefined();
+    expect(c99?.value).toBe('100nF');
+    expect(c99?.layer).toBe('B.Cu');
+    expect(c99?.at).toEqual({ x: 100.5, y: 50.5, rot: 0 });
     
-    expect(footprints[1].ref).toBe('U1');
-    expect(footprints[1].value).toBe('NE5532');
-    expect(footprints[1].at).toEqual({ x: 120, y: 60, rot: 90 });
-    expect(footprints[1].layer).toBe('F.Cu');
+    const r1 = footprints.find(f => f.ref === 'R1');
+    expect(r1).toBeDefined();
+    expect(r1?.value).toBe('10k');
+    expect(r1?.at).toEqual({ x: 110, y: 50, rot: 0 });
+    
+    const u1 = footprints.find(f => f.ref === 'U1');
+    expect(u1).toBeDefined();
+    expect(u1?.value).toBe('NE5532');
+    expect(u1?.at).toEqual({ x: 120, y: 60, rot: 90 });
+    expect(u1?.layer).toBe('F.Cu');
 
     await fs.rm(tmpDir, { recursive: true, force: true });
   });

@@ -359,7 +359,7 @@ export async function listBoardFootprints(boardPath: string): Promise<BoardFootp
   const abs = path.resolve(boardPath);
   const text = await readFile(abs, 'utf8');
   const roots = parseSexp(text);
-  const boardNode = roots.find((r) => tag(r) === 'kicad_pcb') ?? roots[0];
+  const boardNode = roots.find((r) => tag(r) === 'kicad_pcb');
   if (!boardNode || !isList(boardNode)) return [];
 
   const out: BoardFootprint[] = [];
