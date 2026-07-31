@@ -227,6 +227,23 @@ describe('legibility wiring', () => {
     expect(ledger.openOfKind('legibility')).toHaveLength(0); // board edits do not re-open it
   });
 
+  it('a checker result with errors re-opens the obligation; clean clears it', () => {
+    const ledger = new ObligationsLedger();
+    ledger.onLegibilityResult(3);
+    expect(ledger.openOfKind('legibility')[0]?.detail).toContain('3 error-severity');
+    ledger.onLegibilityResult(0);
+    expect(ledger.openOfKind('legibility')).toHaveLength(0);
+  });
+
+  it('hand-drawn repos are informed, never wedged: ungated ledger opens nothing (C6)', () => {
+    const ledger = new ObligationsLedger(false);
+    ledger.onKicadEdit('hardware/x.kicad_sch');
+    expect(ledger.openOfKind('legibility')).toHaveLength(0);
+    expect(ledger.openOfKind('erc')).toHaveLength(1); // electrical gates are unaffected
+    ledger.onLegibilityResult(5);
+    expect(ledger.openOfKind('legibility')).toHaveLength(0);
+  });
+
   it('check --json carries legibility with every family skipped when no schematic is configured', async () => {
     const dir = await mkdtemp(path.join(tmpdir(), 'copperhead-nocfg-'));
     try {

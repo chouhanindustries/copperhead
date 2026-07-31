@@ -368,14 +368,7 @@ export const TOOLS: ToolDef[] = [
         ...(ctx.config.legibility ? { config: ctx.config.legibility } : {}),
       });
       ctx.lastLegibility = report.counts;
-      ctx.ledger.clear('legibility');
-      if (report.counts.error > 0) {
-        ctx.ledger.add(
-          'legibility',
-          `${report.counts.error} error-severity legibility finding(s) unreconciled`,
-          'check_legibility',
-        );
-      }
+      ctx.ledger.onLegibilityResult(report.counts.error);
       return formatLegibility(report);
     },
   },

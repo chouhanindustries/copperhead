@@ -7,6 +7,7 @@ import { CachingProvider } from './response-cache.js';
 import { withTimeout, TurnTimeoutError } from './recovery.js';
 import { buildSystemPrompt } from './prompts.js';
 import { loadConstraints, reopenDeferredAffects } from '../memory/constraints.js';
+import { isCreateProducedRepo } from '../kicad/fab.js';
 import {
   loadConfig,
   CONFIG_DIR,
@@ -244,7 +245,9 @@ async function runWithMemory(
     repoRoot,
     config,
     transcript,
-    ledger: new ObligationsLedger(),
+    // Legibility gates finish only where copperhead authored the sheet; a
+    // hand-drawn repo gets findings as information, never as a wedge (C6).
+    ledger: new ObligationsLedger(isCreateProducedRepo(config)),
     runId: path.basename(transcript.dir),
     interactive: opts.interactive ?? false,
     confirm: opts.confirm ?? (async () => true),

@@ -48,7 +48,7 @@ What the checker deliberately excludes: pin name and pin number text participate
 
 ## Where the checks bind
 
-- **`copperhead create` gates.** The schematic stage completes only when the sheet has symbols, BOM/PINOUT are drift-clean, ERC passes, and zero error-severity legibility findings remain. Error findings also feed the sync-obligations ledger, so `finish` refuses while any are outstanding. Editing the schematic re-opens the obligation; a clean `check_legibility` run clears it.
+- **`copperhead create` gates.** The schematic stage completes only when the sheet has symbols, BOM/PINOUT are drift-clean, ERC passes, and zero error-severity legibility findings remain. Error findings also feed the sync-obligations ledger, so `finish` refuses while any are outstanding. Editing the schematic re-opens the obligation; a clean `check_legibility` run clears it. The ledger obligation binds only on repos copperhead created: a `do` run on a hand-drawn schematic gets the same findings as information, never as a block, since a pre-existing sheet should not have to be redrawn to accept a one-line edit.
 - **`copperhead check` reports.** Findings print grouped by severity, and the exit code is unaffected at every severity: hand-drawn schematics in existing repos gain information, not a new failure class. `check --json` carries a `legibility` object with the findings, per-severity counts, and any skipped or disabled families. The key is always present, even when clean or when no schematic is configured.
 - **Loud skips, never silent.** An unrecognized `(paper)` size skips the page-relative checks with a stated reason. A missing SUBSYSTEMS.md or BOM.md skips caption validation the same way, while the geometric group checks still run.
 
