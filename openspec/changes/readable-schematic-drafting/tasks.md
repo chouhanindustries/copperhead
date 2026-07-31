@@ -41,7 +41,7 @@
 - [ ] 6.1 Add a well-drafted fixture schematic (captioned group boxes, tiled blocks, labels between groups, filled title block) that reports zero findings
 - [ ] 6.2 Add an illegible variant exercising every family, plus a hierarchical fixture with a defect only on a sub-sheet
 - [ ] 6.3 Tests: per-family detection, conservative-extent behavior (marginal case is not reported), pair dedup, cap with stated suppressed count, severity override and `off`, unknown paper skip, power-symbol group exemption
-- [ ] 6.4 Tests: checker leaves file bytes unchanged, makes no subprocess or network call, and `check` exit code is unaffected by findings
+- [ ] 6.4 Tests: checker leaves file bytes unchanged, makes no subprocess or network call, and `check` exit code is unaffected by findings; `check --json` `legibility` object matches the cli-surface contract (finding shape, per-severity counts, empty findings with zero counts when clean, skipped and disabled families recorded, all families skipped when no schematic is configured)
 - [ ] 6.5 Tests: stage-4 completion contract fails on error findings and passes with advisories only; `finish` lists outstanding findings as unmet obligations
 
 ## 7. Docs and spec
