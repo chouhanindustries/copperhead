@@ -1,0 +1,327 @@
+import { readFile, writeFile, mkdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import path from 'node:path';
+import { parseSexp, children, child, isList, type SexpNode, type Bounds } from '../sexp.js';
+import { symbolSearchDirs, findLibraryFile } from '../symlib.js';
+import { EMIT_VERSION } from '../emit.js';
+
+/**
+ * Symbol resolution for the drafting engine, with hermetic vendoring (design
+ * D4): on first use a symbol's `(symbol …)` source block is copied verbatim
+ * from the installed `.kicad_sym` into a committed project cache, and every
+ * later draft reads the vendored copy. A KiCad library upgrade therefore
+ * cannot change drafted output until the cache is deliberately refreshed;
+ * `verify_symbols` keeps comparing against the installed libraries, so genuine
+ * library drift stays visible rather than silently frozen.
+ */
+
+export const SYM_CACHE_DIR = 'sym-lib-cache';
+
+const atomAt = (node: SexpNode[] | undefined, idx: number): string | undefined => {
+  const v = node?.[idx];
+  return typeof v === 'string' ? v : undefined;
+};
+const tag = (n: SexpNode): string | null => (isList(n) && typeof n[0] === 'string' ? n[0] : null);
+const num = (n: SexpNode[] | undefined, idx: number, fb = 0): number => {
+  const v = atomAt(n, idx);
+  return v === undefined ? fb : parseFloat(v);
+};
+
+export interface DraftPin {
+  number: string;
+  name: string;
+  /** electrical type: passive | power_in | power_out | input | output | … */
+  etype: string;
+  /** Connection point, symbol space. */
+  x: number;
+  y: number;
+  /** Pin direction angle (deg): the pin line runs from (x,y) toward the body. */
+  angle: number;
+}
+
+export interface ResolvedSymbol {
+  libId: string;
+  /** Verbatim `(symbol "Name" …)` block from the vendored source. */
+  sourceText: string;
+  pins: DraftPin[];
+  /** Union of body graphic items, symbol space; null for graphics-free symbols. */
+  body: Bounds | null;
+  isPower: boolean;
+}
+
+/** Extract the top-level `(symbol "name" …)` block from library text, verbatim. */
+export function extractSymbolBlock(libText: string, name: string): string | null {
+  const needle = `(symbol "${name}"`;
+  let idx = -1;
+  // match only top-level entries: preceded by newline + whitespace, depth 1
+  for (let from = 0; ; ) {
+    idx = libText.indexOf(needle, from);
+    if (idx === -1) return null;
+    const lineStart = libText.lastIndexOf('\n', idx) + 1;
+    if (libText.slice(lineStart, idx).trim() === '') break;
+    from = idx + needle.length;
+  }
+  let depth = 0;
+  let inString = false;
+  for (let i = idx; i < libText.length; i++) {
+    const c = libText[i]!;
+    if (inString) {
+      if (c === '\\') i++;
+      else if (c === '"') inString = false;
+    } else if (c === '"') inString = true;
+    else if (c === '(') depth++;
+    else if (c === ')') {
+      depth--;
+      if (depth === 0) return libText.slice(idx, i + 1);
+    }
+  }
+  return null;
+}
+
+function parseSymbolNode(block: string): SexpNode[] {
+  const node = parseSexp(block)[0];
+  if (node === undefined || !isList(node)) throw new Error('unparseable symbol block');
+  return node;
+}
+
+function pinsOf(sym: SexpNode[]): DraftPin[] {
+  const pins: DraftPin[] = [];
+  const walk = (n: SexpNode): void => {
+    if (!isList(n)) return;
+    if (tag(n) === 'pin') {
+      const at = child(n, 'at');
+      const numAtom = atomAt(child(n, 'number'), 1);
+      if (at && numAtom !== undefined) {
+        pins.push({
+          number: numAtom,
+          name: atomAt(child(n, 'name'), 1) ?? '~',
+          etype: typeof n[1] === 'string' ? n[1] : 'passive',
+          x: num(at, 1),
+          y: num(at, 2),
+          angle: num(at, 3),
+        });
+      }
+    }
+    for (const c of n) walk(c);
+  };
+  walk(sym);
+  return pins;
+}
+
+function bodyOf(sym: SexpNode[]): Bounds | null {
+  let b: Bounds | null = null;
+  const extend = (x: number, y: number): void => {
+    if (!b) b = { minX: x, minY: y, maxX: x, maxY: y };
+    else {
+      b.minX = Math.min(b.minX, x);
+      b.minY = Math.min(b.minY, y);
+      b.maxX = Math.max(b.maxX, x);
+      b.maxY = Math.max(b.maxY, y);
+    }
+  };
+  const walk = (n: SexpNode): void => {
+    if (!isList(n)) return;
+    const t = tag(n);
+    if (t === 'rectangle') {
+      const s = child(n, 'start');
+      const e = child(n, 'end');
+      extend(num(s, 1), num(s, 2));
+      extend(num(e, 1), num(e, 2));
+    } else if (t === 'circle') {
+      const c = child(n, 'center');
+      const r = num(child(n, 'radius'), 1);
+      extend(num(c, 1) - r, num(c, 2) - r);
+      extend(num(c, 1) + r, num(c, 2) + r);
+    } else if (t === 'arc') {
+      for (const part of ['start', 'mid', 'end']) {
+        const p = child(n, part);
+        if (p) extend(num(p, 1), num(p, 2));
+      }
+    } else if (t === 'polyline') {
+      for (const xy of children(child(n, 'pts') ?? [], 'xy')) extend(num(xy, 1), num(xy, 2));
+    }
+    if (t !== 'pin' && t !== 'text') for (const c of n) walk(c);
+  };
+  walk(sym);
+  return b;
+}
+
+/** One vendored file per library nickname, so a project `sym-lib-table` can
+ * point KiCad (and ERC's lib_symbol_issues check) at the vendored sources. */
+const vendorFileName = (lib: string): string => `${lib.replace(/[^A-Za-z0-9_.+-]/g, '_')}.kicad_sym`;
+
+const emptyVendorLib = (): string =>
+  `(kicad_symbol_lib\n\t(version ${EMIT_VERSION})\n\t(generator "copperhead-vendor")\n)\n`;
+
+/** Insert a symbol block before the wrapper's closing paren. */
+function appendToVendorLib(libText: string, block: string): string {
+  const end = libText.lastIndexOf(')');
+  return libText.slice(0, end) + block + '\n' + libText.slice(end);
+}
+
+export class SymbolResolutionError extends Error {
+  constructor(
+    public readonly libId: string,
+    public readonly reason: 'no-library' | 'no-symbol' | 'derived-unsupported',
+    public readonly candidates: string[] = [],
+  ) {
+    super(
+      reason === 'no-library'
+        ? `library for "${libId}" is not installed and not vendored`
+        : reason === 'derived-unsupported'
+          ? `"${libId}" is a derived (extends) symbol, which the drafting engine does not support yet; use the base symbol`
+          : `"${libId}" does not exist in the library${candidates.length ? ` — closest: ${candidates.join(', ')}` : ''}`,
+    );
+  }
+}
+
+export class SymbolSource {
+  private cache = new Map<string, ResolvedSymbol>();
+
+  /**
+   * @param repoRoot project root; the vendored cache lives at `<root>/sym-lib-cache/`
+   * @param searchDirs override for the installed-library search path (tests)
+   */
+  constructor(
+    private readonly repoRoot: string,
+    private readonly searchDirs?: string[],
+  ) {}
+
+  cacheDir(): string {
+    return path.join(this.repoRoot, SYM_CACHE_DIR);
+  }
+
+  /** Library nicknames vendored (or generated) so far, for the sym-lib-table. */
+  private readonly libs = new Set<string>();
+
+  vendoredLibs(): string[] {
+    return [...this.libs].sort();
+  }
+
+  /** Write an engine-generated symbol block into the vendored cache (power lib). */
+  async vendorGenerated(libId: string, block: string): Promise<void> {
+    const lib = libId.slice(0, libId.indexOf(':'));
+    const name = libId.slice(libId.indexOf(':') + 1);
+    const file = path.join(this.cacheDir(), vendorFileName(lib));
+    await mkdir(this.cacheDir(), { recursive: true });
+    const text = existsSync(file) ? await readFile(file, 'utf8') : emptyVendorLib();
+    if (!extractSymbolBlock(text, name)) await writeFile(file, appendToVendorLib(text, block), 'utf8');
+    this.libs.add(lib);
+  }
+
+  /** Resolve a lib_id: vendored copy first, else installed library (then vendor it). */
+  async resolve(libId: string): Promise<ResolvedSymbol> {
+    const hit = this.cache.get(libId);
+    if (hit) return hit;
+
+    const lib = libId.includes(':') ? libId.slice(0, libId.indexOf(':')) : '';
+    const name = libId.includes(':') ? libId.slice(libId.indexOf(':') + 1) : libId;
+    const vendored = path.join(this.cacheDir(), vendorFileName(lib));
+    let block: string | null = null;
+    if (existsSync(vendored)) {
+      block = extractSymbolBlock(await readFile(vendored, 'utf8'), name);
+      if (block) this.libs.add(lib);
+    }
+    if (!block) {
+      const dirs = this.searchDirs ?? (await symbolSearchDirs());
+      const file = await findLibraryFile(lib, dirs);
+      if (!file) throw new SymbolResolutionError(libId, 'no-library');
+      const libText = await readFile(file, 'utf8');
+      block = extractSymbolBlock(libText, name);
+      if (!block) {
+        const names = [...libText.matchAll(/^\s*\(symbol\s+"([^"]+)"/gm)].map((m) => m[1]!);
+        const q = name.toLowerCase();
+        const candidates = names.filter((k) => k.toLowerCase().includes(q) || q.includes(k.toLowerCase())).slice(0, 8);
+        throw new SymbolResolutionError(libId, 'no-symbol', candidates);
+      }
+      await mkdir(this.cacheDir(), { recursive: true });
+      const existing = existsSync(vendored) ? await readFile(vendored, 'utf8') : emptyVendorLib();
+      await writeFile(vendored, appendToVendorLib(existing, block), 'utf8');
+      this.libs.add(lib);
+    }
+
+    const node = parseSymbolNode(block);
+    if (child(node, 'extends')) throw new SymbolResolutionError(libId, 'derived-unsupported');
+    const resolved: ResolvedSymbol = {
+      libId,
+      sourceText: block,
+      pins: pinsOf(node),
+      body: bodyOf(node),
+      isPower: child(node, 'power') !== undefined || libId.startsWith('power:'),
+    };
+    this.cache.set(libId, resolved);
+    return resolved;
+  }
+}
+
+/**
+ * Engine-authored power-port and PWR_FLAG symbols (design D6a). Authored here,
+ * not copied from a library: the engine must be able to satisfy ERC's
+ * undriven-rail check on any machine without depending on the installed power
+ * library's naming. Pin at the origin; the body draws above (rail) or below
+ * (ground) it.
+ */
+export function powerSymbolSource(net: string, kind: 'rail' | 'ground'): { libId: string; sourceText: string } {
+  const name = net.replace(/[^A-Za-z0-9_+.-]/g, '_');
+  const libId = `copperhead_power:${name}`;
+  // Symbol space is Y-up and the schematic transform flips it: negative-Y
+  // graphics here render BELOW the connection point on the sheet. Ground bars
+  // hang below their pin (angle 270 = line toward -Y body); rail bars sit
+  // above (angle 90).
+  const body =
+    kind === 'ground'
+      ? `\t(symbol "${name}_0_1"
+\t\t(polyline (pts (xy -1.27 -1.27) (xy 1.27 -1.27)) (stroke (width 0.254) (type default)) (fill (type none)))
+\t\t(polyline (pts (xy -0.762 -1.778) (xy 0.762 -1.778)) (stroke (width 0.254) (type default)) (fill (type none)))
+\t\t(polyline (pts (xy -0.254 -2.286) (xy 0.254 -2.286)) (stroke (width 0.254) (type default)) (fill (type none)))
+\t)
+\t(symbol "${name}_1_1"
+\t\t(pin power_in line (at 0 0 270) (length 1.27)
+\t\t\t(name "${net}" (effects (font (size 1.27 1.27))))
+\t\t\t(number "1" (effects (font (size 1.27 1.27))))
+\t\t)
+\t)`
+      : `\t(symbol "${name}_0_1"
+\t\t(polyline (pts (xy -1.27 1.27) (xy 1.27 1.27)) (stroke (width 0.254) (type default)) (fill (type none)))
+\t)
+\t(symbol "${name}_1_1"
+\t\t(pin power_in line (at 0 0 90) (length 1.27)
+\t\t\t(name "${net}" (effects (font (size 1.27 1.27))))
+\t\t\t(number "1" (effects (font (size 1.27 1.27))))
+\t\t)
+\t)`;
+  const sourceText = `(symbol "${name}"
+\t(power)
+\t(pin_names (offset 0))
+\t(exclude_from_sim yes)
+\t(in_bom no)
+\t(on_board no)
+\t(property "Reference" "#PWR" (at 0 0 0) (effects (font (size 1.27 1.27)) hide))
+\t(property "Value" "${net}" (at 0 ${kind === 'ground' ? '-3.556' : '3.556'} 0) (effects (font (size 1.27 1.27)) hide))
+${body}
+)`;
+  return { libId, sourceText };
+}
+
+export function pwrFlagSource(): { libId: string; sourceText: string } {
+  const libId = 'copperhead_power:PWR_FLAG';
+  const sourceText = `(symbol "PWR_FLAG"
+\t(power)
+\t(pin_names (offset 0))
+\t(exclude_from_sim yes)
+\t(in_bom no)
+\t(on_board no)
+\t(property "Reference" "#FLG" (at 0 0 0) (effects (font (size 1.27 1.27)) hide))
+\t(property "Value" "PWR_FLAG" (at 0 -3.556 0) (effects (font (size 1.27 1.27)) hide))
+\t(symbol "PWR_FLAG_0_1"
+\t\t(polyline (pts (xy 0 1.27) (xy -1.016 1.905) (xy 0 2.54) (xy 1.016 1.905) (xy 0 1.27)) (stroke (width 0.254) (type default)) (fill (type none)))
+\t)
+\t(symbol "PWR_FLAG_1_1"
+\t\t(pin power_out line (at 0 0 90) (length 1.27)
+\t\t\t(name "pwr" (effects (font (size 1.27 1.27))))
+\t\t\t(number "1" (effects (font (size 1.27 1.27))))
+\t\t)
+\t)
+)`;
+  return { libId, sourceText };
+}

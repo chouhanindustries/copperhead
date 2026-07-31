@@ -7,6 +7,7 @@ import { bootstrapKicadProject } from '../kicad/bootstrap.js';
 import { exportSvg, runErc } from '../kicad/cli.js';
 import { listSymbols } from '../kicad/sexp.js';
 import { checkLegibility } from '../kicad/legibility.js';
+import { draftToText, defaultIntentPath } from '../kicad/draft/draft.js';
 import { isDirty, commitAll, changedFiles } from '../util/git.js';
 import type { CompatSettings, CopperheadConfig } from '../config.js';
 import { checkDrift } from '../memory/drift.js';
@@ -184,10 +185,26 @@ export const STAGES: Stage[] = [
         docsDir: path.join(root, config.docs),
         ...(config.legibility ? { config: config.legibility } : {}),
       });
-      return legibility.counts.error === 0;
+      if (legibility.counts.error !== 0) return false;
+      // Drafting mode: the schematic must match a re-draft of the current IR
+      // (AC-16.20) — an intent edited after the last draft_schematic call means
+      // the sheet on disk no longer reflects the design and the stage stays
+      // active until a re-draft.
+      const intentRel = defaultIntentPath(config.schematic);
+      if (existsSync(path.join(root, intentRel))) {
+        const dry = await draftToText({
+          repoRoot: root,
+          schematic: config.schematic,
+          intentPath: intentRel,
+          docsDir: config.docs,
+        });
+        if (!dry.ok) return false;
+        if (dry.text !== (await readFile(p, 'utf8'))) return false;
+      }
+      return true;
     },
     prompt: () =>
-      'Stage 4: schematic. An empty KiCad project has already been scaffolded and wired into .copperhead/config.json (an empty schematic and a blank board with a default outline). Populate the existing schematic with edit_file — write_file refuses KiCad files, so add lib_symbols, symbols, and connectivity by anchored edits into the file that already exists. Work ONE part at a time, not in large blocks: add a symbol (its lib_symbols entry if new, then its placement), run run_erc, fix any violation, then move to the next part — small incremental edits keep a geometry or grid slip local instead of forcing a full-block rewrite. When you add a lib_symbols entry, use the exact canonical KiCad lib_id (e.g. Device:R, Connector:USB_C_Receptacle_USB2.0_16P) and reproduce the real part\'s pins faithfully — never invent pin numbers, names, or electrical types. Once symbols are placed, run verify_symbols and reconcile every divergence it reports (a wrong lib_id or pin set passes ERC but is still wrong); if it flags a renamed symbol, adopt the real name it suggests. Build subsystem by subsystem from BOM.md and SUBSYSTEMS.md. Same net names and refdes everywhere. Two KiCad rules the pipeline has repeatedly tripped on: (1) a net label placed on a pin only NAMES the net — it is NOT an electrical connection unless a wire actually reaches the pin; ERC will report the pin unconnected until you draw the wire. (2) Place every symbol origin and every wire endpoint on the 1.27mm (50mil) grid; an off-grid pin silently fails to connect and costs turns to diagnose. Update PINOUT.md as you assign pins; check the strapping table first. THE SHEET MUST READ LIKE A HUMAN DRAFTED IT — the drafting standard, checked mechanically by check_legibility and gating this stage: (a) one drawn group box per subsystem from SUBSYSTEMS.md — a (rectangle …) outline with a (text …) caption inside its top edge naming the subsystem (solid stroke for functional blocks, dashed for annotation clusters like a decoupling bank); every non-power symbol sits inside exactly one group. (b) Groups tile the sheet in columns without overlapping; a large MCU or connector gets its own full-height column. (c) Signal flow runs left to right inside a group, power rails point up, grounds point down at uniform heights. (d) Keep symbol pitch generous enough that refdes/value text never lands on a neighbour. (e) Wires stay short and local INSIDE a group; connections BETWEEN groups use matching net labels, drawn horizontal wherever horizontal fits. (f) Content fills the frame and stays clear of the title block; fill in the title block (title, revision, date). After placing symbols run check_legibility and reconcile EVERY error-severity finding before finishing — fix off-grid findings first (an off-grid nudge silently breaks connectivity), then re-run run_erc in the same pass.',
+      'Stage 4: schematic. An empty KiCad project has already been scaffolded and wired into .copperhead/config.json. You author INTENT, never geometry: write the netlist-intent IR and call draft_schematic — the deterministic engine computes every coordinate, wire, label, power symbol, and group box, and the sheet it draws satisfies the drafting standard by construction (captioned group boxes per SUBSYSTEMS.md subsystem, left-to-right flow, rails up and grounds down, net labels between groups, filled title block). The IR (schematic.intent.json) is JSON: {"version": 1, "parts": [{"ref", "libId", "value", "footprint", "group"}], "nets": [{"name", "pins": ["REF.PIN", …], "kind"?}], "noConnect": ["REF.PIN", …], "hints"?: {"groupOrder"?, "paper"?, "date"?}}. Build it from BOM.md (same refdes and values — validation cross-checks and refuses mismatches) and SUBSYSTEMS.md (every non-power part names one subsystem heading as its group). Use exact canonical KiCad lib_ids (e.g. Device:R) and REAL pin numbers from the library — validation lists a part\'s actual pins when you name one that does not exist. Declare every deliberately unused pin in noConnect; power rails are recognized from pin types automatically (override with "kind" only when the inference is wrong — the draft report lists every net\'s resolved class). Pass the full IR as intent_json to draft_schematic; the report embeds the legibility findings and the score for the fresh sheet. To repair ANY finding (ERC, legibility, validation), fix the IR and call draft_schematic again — edit_file is refused on the drafted sheet. When the draft is clean run run_erc and check_drift, update PINOUT.md to match the IR\'s pin assignments, and finish.',
   },
   {
     name: 'layout-draft',
@@ -318,7 +335,10 @@ function isManagedPath(f: string, config: CopperheadConfig): boolean {
     f.startsWith('openspec/') ||
     f.startsWith('outputs/') ||
     f.startsWith('firmware/') ||
+    f.startsWith('sym-lib-cache/') ||
     f === '.gitignore' ||
+    path.basename(f) === 'sym-lib-table' ||
+    path.basename(f) === 'schematic.intent.json' ||
     /\.(kicad_sch|kicad_pcb|kicad_pro|kicad_prl)$/.test(f)
   );
 }

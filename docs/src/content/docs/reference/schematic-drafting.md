@@ -36,6 +36,28 @@ schematic.intent.json          (model writes this: parts, nets, groups, hints)
    .kicad_sch    then: ERC, the legibility checker, and the score
 ```
 
+## The intent file
+
+`schematic.intent.json`, versioned, living beside the schematic:
+
+```json
+{
+  "version": 1,
+  "parts": [
+    { "ref": "U1", "libId": "CopperMCU:MCU8", "value": "MCU8",
+      "footprint": "Package_SO:SOIC-8_3.9x4.9mm_P1.27mm", "group": "MCU" }
+  ],
+  "nets": [
+    { "name": "VCC", "pins": ["J1.1", "U1.1", "C1.1"] },
+    { "name": "DIV", "pins": ["R1.2", "R2.1", "U1.3"], "kind": "signal" }
+  ],
+  "noConnect": ["U1.4", "U1.5"],
+  "hints": { "groupOrder": ["Power", "MCU"], "paper": "A4", "date": "2026-07-31" }
+}
+```
+
+Every part names its subsystem group (a SUBSYSTEMS.md heading) and is cross-checked against BOM.md at validation, so a transcription slip dies before anything is drawn. `kind` overrides the automatic power-net recognition when the inference is wrong; the draft report always lists every net's resolved class. `hints.date` fills the title block: it belongs to the intent, not the wall clock, so the same intent emits the same bytes on any day.
+
 ## What the model controls, and what it cannot
 
 The intent file (`schematic.intent.json`) carries parts (library id, refdes, value), connections (net name to a list of `refdes.pin` endpoints), one subsystem group per part taken from SUBSYSTEMS.md, and optional hints: port direction, group ordering, paper size. It contains no coordinates, and the engine ignores none of its rules in favor of a hint.

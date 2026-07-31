@@ -16,6 +16,11 @@ export interface LegibilityUserConfig {
     familyCap?: number;
   };
   severity?: Record<string, 'error' | 'advisory' | 'off'>;
+  /** Scorer tuning: per-metric weights and the known-good composite floor. */
+  score?: {
+    weights?: Record<string, number>;
+    floor?: number;
+  };
 }
 
 export interface CopperheadConfig {

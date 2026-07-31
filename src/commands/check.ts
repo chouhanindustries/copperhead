@@ -5,7 +5,8 @@ import { runErc, runDrc } from '../kicad/cli.js';
 import { formatViolations, type CheckReport } from '../kicad/report.js';
 import { checkDrift, emptySchematicWarning, type DriftMismatch } from '../memory/drift.js';
 import { loadConstraints, checkForbiddenPins, type ConstraintViolation } from '../memory/constraints.js';
-import { pinNets } from '../kicad/sexp.js';
+import { pinNets, readSheetGeometry } from '../kicad/sexp.js';
+import { scoreFromGeometry, type ScoreReport } from '../kicad/score.js';
 import { checkLegibility, formatLegibility, LEGIBILITY_FAMILIES, type LegibilityFinding } from '../kicad/legibility.js';
 import { openspecValidate } from '../openspec/cli.js';
 
@@ -31,8 +32,8 @@ export interface CheckResult {
     skipped: { family: string; reason: string }[];
     disabled: string[];
     suppressed: { family: string; sheet: string; count: number }[];
-    /** Reserved for the quantitative scorer (schematic-scoring delta); null until it lands. */
-    score: null;
+    /** Advisory quantitative score; null when no schematic is configured. */
+    score: ScoreReport | null;
   };
 }
 
@@ -80,15 +81,21 @@ export async function runCheck(repoRoot: string, log: (s: string) => void): Prom
       docsDir: path.join(repoRoot, config.docs),
       ...(config.legibility ? { config: config.legibility } : {}),
     });
+    const score = scoreFromGeometry(
+      await readSheetGeometry(path.join(repoRoot, config.schematic)),
+      report,
+      config.legibility,
+    );
     legibility = {
       findings: report.findings,
       counts: report.counts,
       skipped: report.skipped,
       disabled: report.disabled,
       suppressed: report.suppressed,
-      score: null,
+      score,
     };
     log(formatLegibility(report));
+    log(`legibility score: ${score.composite}/100${score.cap ? ` (capped: ${score.cap.reason})` : ''}`);
   } else {
     legibility = {
       findings: [],
