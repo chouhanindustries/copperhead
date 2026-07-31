@@ -87,7 +87,7 @@ invented rows.
 
 #### Scenario: Deleting the policed component forfeits the hard term
 
-- **WHEN** the decoupling capacitors a decoupling-distance constraint polices are deleted from a populated board
+- **WHEN** the decoupling capacitors policed by a decoupling-distance constraint are deleted from a populated board
 - **THEN** the decoupling row is `n/a` and the hard term is forfeited rather than springing back to full marks
 
 ### Requirement: The agent can measure a layout
