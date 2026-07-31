@@ -126,13 +126,11 @@ export function draftPlacement(validated: ValidatedIntent, projectName: string, 
 
   // ---------- reductions: decoupling caps and connectors ----------
   const isCap = (p: IntentPart): boolean => /^Device:C(_|$)|^Device:C$/.test(p.libId) || p.libId === 'Device:C_Polarized';
-  const railOf = (ref: string): string | null => {
-    for (const net of powerNets) {
-      if (netClasses.get(net.name)!.cls !== 'rail') continue;
-      if (net.pins.some((ep) => ep.startsWith(`${ref}.`))) return net.name;
-    }
-    return null;
-  };
+  const railsOf = (ref: string): string[] =>
+    powerNets
+      .filter((net) => netClasses.get(net.name)!.cls === 'rail' && net.pins.some((ep) => ep.startsWith(`${ref}.`)))
+      .map((net) => net.name);
+  const railOf = (ref: string): string | null => railsOf(ref)[0] ?? null;
   const touchesGround = (ref: string): boolean =>
     powerNets.some((n) => netClasses.get(n.name)!.cls === 'ground' && n.pins.some((ep) => ep.startsWith(`${ref}.`)));
 
@@ -145,7 +143,7 @@ export function draftPlacement(validated: ValidatedIntent, projectName: string, 
     // owner: an IC (3+ pins) on the same rail — same group first, then most
     // shared nets, then refdes order (deterministic tie-break, engine spec)
     const candidates = intent.parts
-      .filter((c) => c.ref !== p.ref && (symbols.get(c.ref)?.pins.length ?? 0) >= 3 && railOf(c.ref) === rail)
+      .filter((c) => c.ref !== p.ref && (symbols.get(c.ref)?.pins.length ?? 0) >= 3 && railsOf(c.ref).includes(rail))
       .map((c) => ({
         ref: c.ref,
         sameGroup: c.group === p.group ? 1 : 0,
@@ -358,7 +356,10 @@ export function draftPlacement(validated: ValidatedIntent, projectName: string, 
         refAt: { x: stubEnd.x, y: stubEnd.y },
         valueAt: { x: stubEnd.x, y: stubEnd.y + (cls === 'ground' ? 3.556 : -3.556) },
         hideRef: true,
-        hideValue: true,
+        // the net name IS the flag's meaning: an anonymous bar tells a
+        // reviewer nothing, so the value stays visible like stock power
+        // symbols (the checker verifies it collides with nothing)
+        hideValue: false,
         pinNumbers: ['1'],
       });
       if (i === 0 && !hasDriver) {
