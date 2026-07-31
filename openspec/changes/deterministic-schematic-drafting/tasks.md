@@ -4,34 +4,34 @@
 
 ## 1. Legibility geometry primitives
 
-- [ ] 1.1 Extend `src/kicad/sexp.ts` with the read-only accessors the checker needs: sheet graphic items (`rectangle`, `text`, `polyline`, `circle`, `arc`), wire segments with endpoints, label items with position and rotation, `(paper …)`, and `(title_block …)` fields
-- [ ] 1.2 Implement symbol body bounding boxes in `src/kicad/legibility.ts`: union the `lib_symbols` graphic items of the instance's library entry, exclude pin name/number text, transform by `at`/rotation/mirror reusing the existing pin transform
-- [ ] 1.3 Implement conservative stroke-font text extents (0.6 × height advance ratio per C3) for property text, labels, and free text; unit tests pinning the ratio and the resulting boxes
-- [ ] 1.4 Implement the standard paper-size table, frame border, and reserved title-block rectangle; usable-area computation; unknown-size returns skipped rather than passing
+- [x] 1.1 Extend `src/kicad/sexp.ts` with the read-only accessors the checker needs: sheet graphic items (`rectangle`, `text`, `polyline`, `circle`, `arc`), wire segments with endpoints, label items with position and rotation, `(paper …)`, and `(title_block …)` fields
+- [x] 1.2 Implement symbol body bounding boxes in `src/kicad/legibility.ts`: union the `lib_symbols` graphic items of the instance's library entry, exclude pin name/number text, transform by `at`/rotation/mirror reusing the existing pin transform
+- [x] 1.3 Implement conservative stroke-font text extents (0.6 × height advance ratio per C3) for property text, labels, and free text; unit tests pinning the ratio and the resulting boxes
+- [x] 1.4 Implement the standard paper-size table, frame border, and reserved title-block rectangle; usable-area computation; unknown-size returns skipped rather than passing
 
 ## 2. Check families
 
-- [ ] 2.1 Group model: extract group rectangles and captions, resolve symbol membership by geometric containment (innermost wins), exempt power-port symbols; families `ungrouped-symbol`, `unlabeled-group`, `group-overlap`; caption validation against SUBSYSTEMS.md and BOM.md with loud skip when absent
-- [ ] 2.2 Collision families: `symbol-overlap`, `text-collision`, `wire-through-symbol`
-- [ ] 2.3 Grid and frame families: `off-grid` (symbol origins, wire endpoints, label positions) reported first per C9; `out-of-frame`
-- [ ] 2.4 Advisory families: `low-utilization`, `crowding`, `label-orientation`, `cross-group-wire`; `empty-title-block` over title, revision, and date
-- [ ] 2.5 Finding shape `{kind, severity, sheet, at, refs, detail}` with the concrete fix in `detail`; unordered-pair dedup; per-family per-sheet cap with an explicit suppressed count
-- [ ] 2.6 Walk the full sheet hierarchy from the root schematic; attribute every finding to its sheet; page checks use each sheet's own paper value
-- [ ] 2.7 Add the optional `legibility` config block (per-family severity including `off`, thresholds, caps) with documented defaults; document it in the generated `.copperhead/README.md`
+- [x] 2.1 Group model: extract group rectangles and captions, resolve symbol membership by geometric containment (innermost wins), exempt power-port symbols; families `ungrouped-symbol`, `unlabeled-group`, `group-overlap`; caption validation against SUBSYSTEMS.md and BOM.md with loud skip when absent
+- [x] 2.2 Collision families: `symbol-overlap`, `text-collision`, `wire-through-symbol`
+- [x] 2.3 Grid and frame families: `off-grid` (symbol origins, wire endpoints, label positions) reported first per C9; `out-of-frame`
+- [x] 2.4 Advisory families: `low-utilization`, `crowding`, `label-orientation`, `cross-group-wire`; `empty-title-block` over title, revision, and date
+- [x] 2.5 Finding shape `{kind, severity, sheet, at, refs, detail}` with the concrete fix in `detail`; unordered-pair dedup; per-family per-sheet cap with an explicit suppressed count
+- [x] 2.6 Walk the full sheet hierarchy from the root schematic; attribute every finding to its sheet; page checks use each sheet's own paper value
+- [x] 2.7 Add the optional `legibility` config block (per-family severity including `off`, thresholds, caps) with documented defaults; document it in the generated `.copperhead/README.md`
 
 ## 3. Checker wiring (agent, pipeline, check)
 
-- [ ] 3.1 Add the `check_legibility` tool to `src/agent/tools.ts`, shaped like `verify_symbols`; graceful message when no schematic is configured
-- [ ] 3.2 Feed outstanding error-severity findings into the sync-obligations ledger so `finish` refuses while the sheet is illegible; edits and drafts re-open the obligation, a clean run clears it
-- [ ] 3.3 Add the drafting-standard block and the reconcile instruction to the stage-4 prompt in `src/commands/create.ts`
-- [ ] 3.4 Extend the schematic stage completion contract with zero error-severity findings; unmet contract halts with finding counts and a resume hint; advisories recorded in the run summary
-- [ ] 3.5 Run the checker in `src/commands/check.ts` (findings grouped by severity, exit code unaffected); add the `legibility` object to `check --json` (score field null until group 8 lands)
+- [x] 3.1 Add the `check_legibility` tool to `src/agent/tools.ts`, shaped like `verify_symbols`; graceful message when no schematic is configured
+- [x] 3.2 Feed outstanding error-severity findings into the sync-obligations ledger so `finish` refuses while the sheet is illegible; edits and drafts re-open the obligation, a clean run clears it
+- [x] 3.3 Add the drafting-standard block and the reconcile instruction to the stage-4 prompt in `src/commands/create.ts`
+- [x] 3.4 Extend the schematic stage completion contract with zero error-severity findings; unmet contract halts with finding counts and a resume hint; advisories recorded in the run summary
+- [x] 3.5 Run the checker in `src/commands/check.ts` (findings grouped by severity, exit code unaffected); add the `legibility` object to `check --json` (score field null until group 8 lands)
 
 ## 4. Checker fixtures and tests
 
-- [ ] 4.1 Well-drafted fixture schematic reporting zero findings; illegible variant exercising every family; hierarchical fixture with a defect only on a sub-sheet
-- [ ] 4.2 Tests: per-family detection, conservative-extent behavior, pair dedup, cap with stated suppressed count, severity override and `off`, unknown paper skip, power-symbol group exemption
-- [ ] 4.3 Tests: checker leaves file bytes unchanged, makes no subprocess or network call; `check` exit code unaffected; `--json` contract; stage-4 contract fails on errors, passes with advisories; `finish` lists outstanding findings
+- [x] 4.1 Well-drafted fixture schematic reporting zero findings; illegible variant exercising every family; hierarchical fixture with a defect only on a sub-sheet
+- [x] 4.2 Tests: per-family detection, conservative-extent behavior, pair dedup, cap with stated suppressed count, severity override and `off`, unknown paper skip, power-symbol group exemption
+- [x] 4.3 Tests: checker leaves file bytes unchanged, makes no subprocess or network call; `check` exit code unaffected; `--json` contract; stage-4 contract fails on errors, passes with advisories; `finish` lists outstanding findings
 
 ## 5. Deterministic emitter (src/kicad/emit.ts)
 

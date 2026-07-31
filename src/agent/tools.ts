@@ -6,6 +6,7 @@ import { resolveInRepo, isKicadFile } from '../util/paths.js';
 import { runErc, runDrc, exportSvg, exportFab, kicadLoadError, isProbeableKicadFile } from '../kicad/cli.js';
 import { formatViolations, type CheckReport } from '../kicad/report.js';
 import { listSymbols, listNets } from '../kicad/sexp.js';
+import { checkLegibility, formatLegibility } from '../kicad/legibility.js';
 import { verifySchematicSymbols } from '../kicad/symlib.js';
 import { checkDrift } from '../memory/drift.js';
 import { saveConstraint, classifyAffectsTarget, affectsTargetExists } from '../memory/constraints.js';
@@ -36,6 +37,8 @@ export interface RunContext {
   decisions: string[];
   lastErc: CheckReport | null;
   lastDrc: CheckReport | null;
+  /** Last check_legibility counts; feeds the run summary's verification section. */
+  lastLegibility: { error: number; advisory: number } | null;
   repairCycles: number;
   finishRequest: FinishRequest | null;
 }
@@ -342,6 +345,38 @@ export const TOOLS: ToolDef[] = [
       const lines = findings.map((f) => `  - [${f.kind}] ${f.detail}`);
       const mismatches = findings.filter((f) => f.kind !== 'no-library').length;
       return `verify_symbols: ${checked} verified, ${skipped} unverifiable (library not installed), ${mismatches} issue(s) to reconcile:\n${lines.join('\n')}`;
+    },
+  },
+  {
+    schema: {
+      name: 'check_legibility',
+      description:
+        'Run the deterministic legibility checker against the schematic: group boxes and captions, symbol/text collisions, grid alignment, frame and title-block use. Returns numbered findings with coordinates and the concrete fix, or "no findings". Error-severity findings must be reconciled before finish; clears the legibility obligation when clean.',
+      parameters: { type: 'object', properties: {}, required: [] },
+    },
+    requiresUnlock: false,
+    handler: async (ctx) => {
+      // Mirrors check_drift's vacuous path: with no schematic configured there is
+      // nothing to be illegible, and leaving the obligation open would deadlock
+      // any stage that edited a stray .kicad_sch without config wiring.
+      if (!ctx.config.schematic) {
+        ctx.ledger.clear('legibility');
+        return 'no schematic configured; legibility does not apply yet';
+      }
+      const report = await checkLegibility(path.join(ctx.repoRoot, ctx.config.schematic), {
+        docsDir: path.join(ctx.repoRoot, ctx.config.docs),
+        ...(ctx.config.legibility ? { config: ctx.config.legibility } : {}),
+      });
+      ctx.lastLegibility = report.counts;
+      ctx.ledger.clear('legibility');
+      if (report.counts.error > 0) {
+        ctx.ledger.add(
+          'legibility',
+          `${report.counts.error} error-severity legibility finding(s) unreconciled`,
+          'check_legibility',
+        );
+      }
+      return formatLegibility(report);
     },
   },
   {

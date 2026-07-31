@@ -6,6 +6,7 @@ import { formatViolations, type CheckReport } from '../kicad/report.js';
 import { checkDrift, emptySchematicWarning, type DriftMismatch } from '../memory/drift.js';
 import { loadConstraints, checkForbiddenPins, type ConstraintViolation } from '../memory/constraints.js';
 import { pinNets } from '../kicad/sexp.js';
+import { checkLegibility, formatLegibility, LEGIBILITY_FAMILIES, type LegibilityFinding } from '../kicad/legibility.js';
 import { openspecValidate } from '../openspec/cli.js';
 
 /**
@@ -19,6 +20,20 @@ export interface CheckResult {
   drift: { ok: boolean; mismatches: DriftMismatch[]; warning?: string };
   openspec: { ok: boolean; detail: string } | null;
   constraints: { ok: boolean; violations: ConstraintViolation[] };
+  /**
+   * Advisory at every severity (design C6): findings inform, the exit code
+   * never depends on them, so existing repos gain information, not failures.
+   * Always present — all families skipped when no schematic is configured.
+   */
+  legibility: {
+    findings: LegibilityFinding[];
+    counts: { error: number; advisory: number };
+    skipped: { family: string; reason: string }[];
+    disabled: string[];
+    suppressed: { family: string; sheet: string; count: number }[];
+    /** Reserved for the quantitative scorer (schematic-scoring delta); null until it lands. */
+    score: null;
+  };
 }
 
 export async function runCheck(repoRoot: string, log: (s: string) => void): Promise<CheckResult> {
@@ -59,6 +74,33 @@ export async function runCheck(repoRoot: string, log: (s: string) => void): Prom
     log(res.ok ? 'openspec ✓' : `openspec: ${res.output}`);
   }
 
+  let legibility: CheckResult['legibility'];
+  if (config.schematic && existsSync(path.join(repoRoot, config.schematic))) {
+    const report = await checkLegibility(path.join(repoRoot, config.schematic), {
+      docsDir: path.join(repoRoot, config.docs),
+      ...(config.legibility ? { config: config.legibility } : {}),
+    });
+    legibility = {
+      findings: report.findings,
+      counts: report.counts,
+      skipped: report.skipped,
+      disabled: report.disabled,
+      suppressed: report.suppressed,
+      score: null,
+    };
+    log(formatLegibility(report));
+  } else {
+    legibility = {
+      findings: [],
+      counts: { error: 0, advisory: 0 },
+      skipped: LEGIBILITY_FAMILIES.map((family) => ({ family, reason: 'no schematic configured' })),
+      disabled: [],
+      suppressed: [],
+      score: null,
+    };
+    log('legibility skipped (no schematic configured)');
+  }
+
   let constraintViolations: ConstraintViolation[] = [];
   if (config.schematic && existsSync(path.join(repoRoot, config.schematic))) {
     const registry = await loadConstraints(repoRoot);
@@ -87,5 +129,6 @@ export async function runCheck(repoRoot: string, log: (s: string) => void): Prom
     drift: { ok: drift.length === 0, mismatches: drift, ...(driftWarning ? { warning: driftWarning } : {}) },
     openspec,
     constraints: { ok: constraintViolations.length === 0, violations: constraintViolations },
+    legibility,
   };
 }

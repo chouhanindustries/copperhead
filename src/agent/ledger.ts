@@ -7,6 +7,7 @@ export type ObligationKind =
   | 'erc'
   | 'drc'
   | 'drift'
+  | 'legibility'
   | 'changelog'
   | 'decision-log'
   | 'constraint-dual-write'
@@ -45,6 +46,9 @@ export class ObligationsLedger {
   onKicadEdit(file: string): void {
     this.add('erc', 'ERC must pass after schematic edits', file);
     if (file.endsWith('.kicad_pcb')) this.add('drc', 'DRC must pass after board edits', file);
+    if (file.endsWith('.kicad_sch')) {
+      this.add('legibility', 'check_legibility must run clean after schematic edits', file);
+    }
     this.add('drift', 'check_drift must run clean after KiCad edits', file);
     this.add('changelog', 'CHANGELOG.md entry for this run', file);
   }

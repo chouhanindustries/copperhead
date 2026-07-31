@@ -372,3 +372,34 @@ describe('devplan isComplete', () => {
     });
   });
 });
+
+// ---------------------------------------------------------------------------
+// Stage 4: schematic — legibility joins the contract (AC-16.22)
+// ---------------------------------------------------------------------------
+describe('schematic isComplete: legibility gate', () => {
+  it('error-severity findings keep the stage active; a clean sheet completes', async () => {
+    const { tempFixtureRepo } = await import('./helpers.js');
+    const { runInit } = await import('../src/memory/scaffold.js');
+    const { readFile, writeFile: wf } = await import('node:fs/promises');
+    const { repo, cleanup } = await tempFixtureRepo();
+    try {
+      await runInit({ repoRoot: repo });
+      // the fixture's caption must name a documented subsystem
+      const subsPath = path.join(repo, 'docs', 'SUBSYSTEMS.md');
+      await wf(subsPath, (await readFile(subsPath, 'utf8')) + '\n## Keyer\n\nKey input block.\n', 'utf8');
+      const isComplete = stageNamed('schematic');
+      expect(await isComplete(repo, DOCS)).toBe(true);
+
+      // strip the group box: every symbol becomes ungrouped (error severity),
+      // while symbols, drift, and ERC stay green — only legibility blocks now
+      const schPath = path.join(repo, 'hardware', 'open-key.kicad_sch');
+      const sch = await readFile(schPath, 'utf8');
+      const stripped = sch.replace(/  \(rectangle \(start 80 84\)[\s\S]*?\n  \)\n/, '');
+      expect(stripped).not.toBe(sch);
+      await wf(schPath, stripped, 'utf8');
+      expect(await isComplete(repo, DOCS)).toBe(false);
+    } finally {
+      await cleanup();
+    }
+  }, 60000);
+});
