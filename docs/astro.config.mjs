@@ -101,6 +101,7 @@ export default defineConfig({
             { label: 'CLI', link: '/reference/cli/' },
             { label: 'Configuration', link: '/reference/configuration/' },
             { label: 'Schematic legibility rules', link: '/reference/schematic-legibility/' },
+            { label: 'How schematics are drafted', link: '/reference/schematic-drafting/' },
           ],
         },
         {

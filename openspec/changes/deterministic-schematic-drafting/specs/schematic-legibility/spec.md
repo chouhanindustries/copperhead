@@ -78,12 +78,12 @@ Connections that leave a group SHALL be made with net labels rather than long wi
 
 The checker SHALL be implemented as a read-only module over the existing s-expression parser. It SHALL NOT serialize s-expressions, SHALL NOT modify any file, SHALL make no network calls, and SHALL invoke no language model. It SHALL derive symbol body bounding boxes from the `lib_symbols` graphic items of each instantiated symbol, transformed by the instance's position, rotation, and mirror. It SHALL approximate a text item's extent as `characters × 0.6 × font height` wide by the font height tall: the advance ratio is fixed at 0.6 (a dimensionless fraction of the font height per character), deliberately below the KiCad stroke font's average advance so marginal collisions are missed rather than invented. Every geometric comparison SHALL apply a fixed 0.01 mm tolerance so file-precision noise cannot flip a finding.
 
-#### Scenario: Checker leaves the schematic untouched
+#### Scenario: Checker leaves the schematic untouched (AC-16.28)
 
 - **WHEN** the checker runs against a schematic
 - **THEN** the file's bytes are unchanged and no subprocess or network call is made
 
-#### Scenario: Clean fixture produces no findings
+#### Scenario: Clean fixture produces no findings (AC-16.27)
 
 - **WHEN** the checker runs against the well-drafted fixture schematic
 - **THEN** it reports zero findings at every severity
@@ -117,7 +117,7 @@ The checker SHALL evaluate these families, each carrying a stable kind identifie
 - **WHEN** a symbol origin or a net label position is not a multiple of the grid pitch on either axis
 - **THEN** an `off-grid` finding is reported at error severity for each, with the coordinate and the nearest on-grid point
 
-#### Scenario: Grid findings lead the report
+#### Scenario: Grid findings lead the report (AC-16.29)
 
 - **WHEN** a sheet has both `off-grid` findings and findings from other families
 - **THEN** the `off-grid` findings appear before every other family in the report
@@ -170,7 +170,7 @@ Thresholds (grid pitch, minimum readable symbol pitch, utilization fraction, max
 - **WHEN** no `legibility` block is present in the config
 - **THEN** the checker runs every family at its default severity and documented default thresholds
 
-#### Scenario: Family can be disabled
+#### Scenario: Family can be disabled (AC-16.30)
 
 - **WHEN** the config sets `legibility.severity.crowding` to `off`
 - **THEN** no `crowding` findings are produced and the family is listed as disabled in the report
