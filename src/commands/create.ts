@@ -6,6 +6,7 @@ import { loadConfig, resolveCompatSettings } from '../config.js';
 import { bootstrapKicadProject } from '../kicad/bootstrap.js';
 import { exportSvg, runErc } from '../kicad/cli.js';
 import { listSymbols } from '../kicad/sexp.js';
+import { checkLegibility } from '../kicad/legibility.js';
 import { isDirty, commitAll, changedFiles } from '../util/git.js';
 import type { CompatSettings, CopperheadConfig } from '../config.js';
 import { checkDrift } from '../memory/drift.js';
@@ -200,10 +201,19 @@ export const STAGES: Stage[] = [
       // schematic, advancing the pipeline against unverified work. Returning
       // false here keeps the stage active so it re-runs, fixes ERC, and commits
       // through the normal finish gate.
-      return (await runErc(p)).ok;
+      if (!(await runErc(p)).ok) return false;
+      // Legibility is the one stage-4 output no electrical gate sees (AC-16.22):
+      // an ERC-clean sheet with text over symbol bodies passes everything above
+      // while being unreviewable. Error-severity findings keep the stage active;
+      // advisories never block.
+      const legibility = await checkLegibility(p, {
+        docsDir: path.join(root, config.docs),
+        ...(config.legibility ? { config: config.legibility } : {}),
+      });
+      return legibility.counts.error === 0;
     },
     prompt: () =>
-      'Stage 4: schematic. An empty KiCad project has already been scaffolded and wired into .copperhead/config.json (an empty schematic and a blank board with a default outline). Populate the existing schematic with edit_file — write_file refuses KiCad files, so add lib_symbols, symbols, and connectivity by anchored edits into the file that already exists. Work ONE part at a time, not in large blocks: add a symbol (its lib_symbols entry if new, then its placement), run run_erc, fix any violation, then move to the next part — small incremental edits keep a geometry or grid slip local instead of forcing a full-block rewrite. When you add a lib_symbols entry, use the exact canonical KiCad lib_id (e.g. Device:R, Connector:USB_C_Receptacle_USB2.0_16P) and reproduce the real part\'s pins faithfully — never invent pin numbers, names, or electrical types. Once symbols are placed, run verify_symbols and reconcile every divergence it reports (a wrong lib_id or pin set passes ERC but is still wrong); if it flags a renamed symbol, adopt the real name it suggests. Build subsystem by subsystem from BOM.md and SUBSYSTEMS.md. Same net names and refdes everywhere. Two KiCad rules the pipeline has repeatedly tripped on: (1) a net label placed on a pin only NAMES the net — it is NOT an electrical connection unless a wire actually reaches the pin; ERC will report the pin unconnected until you draw the wire. (2) Place every symbol origin and every wire endpoint on the 1.27mm (50mil) grid; an off-grid pin silently fails to connect and costs turns to diagnose. Update PINOUT.md as you assign pins; check the strapping table first.',
+      'Stage 4: schematic. An empty KiCad project has already been scaffolded and wired into .copperhead/config.json (an empty schematic and a blank board with a default outline). Populate the existing schematic with edit_file — write_file refuses KiCad files, so add lib_symbols, symbols, and connectivity by anchored edits into the file that already exists. Work ONE part at a time, not in large blocks: add a symbol (its lib_symbols entry if new, then its placement), run run_erc, fix any violation, then move to the next part — small incremental edits keep a geometry or grid slip local instead of forcing a full-block rewrite. When you add a lib_symbols entry, use the exact canonical KiCad lib_id (e.g. Device:R, Connector:USB_C_Receptacle_USB2.0_16P) and reproduce the real part\'s pins faithfully — never invent pin numbers, names, or electrical types. Once symbols are placed, run verify_symbols and reconcile every divergence it reports (a wrong lib_id or pin set passes ERC but is still wrong); if it flags a renamed symbol, adopt the real name it suggests. Build subsystem by subsystem from BOM.md and SUBSYSTEMS.md. Same net names and refdes everywhere. Two KiCad rules the pipeline has repeatedly tripped on: (1) a net label placed on a pin only NAMES the net — it is NOT an electrical connection unless a wire actually reaches the pin; ERC will report the pin unconnected until you draw the wire. (2) Place every symbol origin and every wire endpoint on the 1.27mm (50mil) grid; an off-grid pin silently fails to connect and costs turns to diagnose. Update PINOUT.md as you assign pins; check the strapping table first. THE SHEET MUST READ LIKE A HUMAN DRAFTED IT — the drafting standard, checked mechanically by check_legibility and gating this stage: (a) one drawn group box per subsystem from SUBSYSTEMS.md — a (rectangle …) outline with a (text …) caption inside its top edge naming the subsystem (solid stroke for functional blocks, dashed for annotation clusters like a decoupling bank); every non-power symbol sits inside exactly one group. (b) Groups tile the sheet in columns without overlapping; a large MCU or connector gets its own full-height column. (c) Signal flow runs left to right inside a group, power rails point up, grounds point down at uniform heights. (d) Keep symbol pitch generous enough that refdes/value text never lands on a neighbour. (e) Wires stay short and local INSIDE a group; connections BETWEEN groups use matching net labels, drawn horizontal wherever horizontal fits. (f) Content fills the frame and stays clear of the title block; fill in the title block (title, revision, date). After placing symbols run check_legibility and reconcile EVERY error-severity finding before finishing — fix off-grid findings first (an off-grid nudge silently breaks connectivity), then re-run run_erc in the same pass.',
   },
   {
     name: 'layout-draft',
@@ -283,6 +293,36 @@ async function emitJlcpcbAfterOutputs(stageName: string, opts: CreateOptions): P
   if (stageName !== 'outputs') return;
   const out = await emitCreateJlcpcbBom(opts.repoRoot);
   if (out) opts.log(stageLine('outputs', `emitted ${out} (JLCPCB assembly BOM)`, 'ok'));
+}
+
+/**
+ * The generic "contract not met" line names no defect. For the schematic stage
+ * the most common gap after the electrical gates go green is legibility, so
+ * name the finding counts by kind — the resume then starts on the actual work
+ * instead of rediscovering it.
+ */
+async function contractGapDetail(stageName: string, root: string, config: CopperheadConfig): Promise<string> {
+  const generic = 'the run finished but the stage completion contract is not met — no usable artifact was produced';
+  if (stageName !== 'schematic' || !config.schematic) return generic;
+  const p = path.join(root, config.schematic);
+  if (!existsSync(p)) return generic;
+  try {
+    const report = await checkLegibility(p, {
+      docsDir: path.join(root, config.docs),
+      ...(config.legibility ? { config: config.legibility } : {}),
+    });
+    if (report.counts.error > 0) {
+      const byKind = new Map<string, number>();
+      for (const f of report.findings.filter((f) => f.severity === 'error')) {
+        byKind.set(f.kind, (byKind.get(f.kind) ?? 0) + 1);
+      }
+      const counts = [...byKind].map(([k, n]) => `${k}: ${n}`).join(', ');
+      return `the schematic stage contract is not met: ${report.counts.error} error-severity legibility finding(s) remain (${counts}); resume to reconcile them`;
+    }
+  } catch {
+    // fall through: an unreadable schematic already fails earlier contract steps
+  }
+  return generic;
 }
 
 /** Stages whose output is a KiCad file worth rendering to an image (5.4). */
@@ -803,7 +843,7 @@ export async function runCreate(opts: CreateOptions): Promise<{ ok: boolean; com
         res.outcome !== 'success'
           ? `the run ended as "${res.outcome}" (${res.exitPath})`
           : !(await stage.isComplete(opts.repoRoot, config.docs))
-            ? 'the run finished but the stage completion contract is not met — no usable artifact was produced'
+            ? await contractGapDetail(stage.name, opts.repoRoot, config)
             : null;
       if (!failure) {
         stageDone = true;
