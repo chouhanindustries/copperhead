@@ -55,7 +55,8 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "docs:dev": "npm --prefix docs run dev",
     "docs:build": "npm --prefix docs run build",
-    "docs:preview": "npm --prefix docs run preview"
+    "docs:preview": "npm --prefix docs run preview",
+    "control": "bash scripts/draft-control.sh"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.113.0",
