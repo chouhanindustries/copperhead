@@ -25,6 +25,11 @@ const GROUP_GAP = 8;
 const MAX_WIRED_ENDPOINTS = 4;
 /** Wire-span budget in mm beyond which a net becomes labels. */
 const MAX_WIRE_SPAN = 50.8;
+/** Label text metrics, matching the legibility checker's conservative box. */
+const LABEL_HEIGHT = 1.27;
+const LABEL_ADVANCE = 0.6;
+/** How far a colliding label may ride its stub outward, in grid units. */
+const MAX_LABEL_NUDGE = 4;
 
 const ceilU = (mm: number): number => Math.ceil(mm / U - 1e-9);
 const grid = (units: number): number => Math.round(units) * U;
@@ -98,6 +103,9 @@ function classifyNet(net: IntentNet, pinsOf: (ep: string) => DraftPin | null): {
   if (!touchesPower) return { cls: 'signal', overridden: false };
   return { cls: /gnd|vss/i.test(net.name) ? 'ground' : 'rail', overridden: false };
 }
+
+const boundsOverlap = (a: Bounds, b: Bounds): boolean =>
+  a.minX < b.maxX - 0.01 && a.maxX > b.minX + 0.01 && a.minY < b.maxY - 0.01 && a.maxY > b.minY + 0.01;
 
 const segCrossesBody = (x1: number, y1: number, x2: number, y2: number, b: Bounds): boolean => {
   const inX = Math.max(Math.min(x1, x2), b.minX) < Math.min(Math.max(x1, x2), b.maxX) - 0.01;
@@ -300,6 +308,90 @@ export function draftPlacement(validated: ValidatedIntent, projectName: string, 
     }
   }
 
+  // ---------- shelf-wrap: reflow the group ribbon into rows (design D12) ----------
+  // Groups tile left-to-right above, which on a design with many subsystems
+  // yields a ribbon: this repo's light controller came out 750 x 83 mm, a 9:1
+  // strip that forces A1 and leaves 85% of the sheet empty. Wrapping that into
+  // rows is what a human drafter does, and it costs nothing in readability as
+  // long as the reading order is preserved — groups keep their declared order
+  // and fill left-to-right, then top-to-bottom, exactly like text.
+  //
+  // Runs BEFORE the wire/label pass so spans are measured on final coordinates:
+  // a shorter sheet turns some label pairs back into real wires.
+  const paperHint = intent.hints?.paper;
+  if (paperHint && !PAPERS.some((p) => p.name === paperHint)) {
+    notes.push(`paper hint "${paperHint}" is not a standard size; deriving paper from content`);
+  }
+  const hinted = paperHint ? PAPERS.find((p) => p.name === paperHint) : undefined;
+  // A hint pins the width budget; otherwise try every sheet, smallest first.
+  const candidates = hinted ? [hinted] : PAPERS;
+  const gap = GROUP_GAP * U;
+
+  // Nothing to reflow below two groups: one group is already its own row, and
+  // an intent whose parts are all power symbols has no group rect to measure
+  // from at all.
+  if (groupRects.length > 1) {
+    /**
+     * Shelf-wrap the group rects to a width budget; returns per-group offsets.
+     *
+     * Offsets are relative to where the single-row pass already put each group,
+     * never absolute targets: a row that does not wrap gets dx = dy = 0 and its
+     * geometry is bit-for-bit what it was. Re-deriving absolute positions here
+     * would re-round every group's width through the grid and shift
+     * long-standing layouts by a unit for no reason.
+     */
+    const wrapTo = (budgetW: number): { deltas: { dx: number; dy: number }[]; w: number; h: number } => {
+      const originX = groupRects[0]!.x1;
+      const deltas: { dx: number; dy: number }[] = [];
+      let rowOriginX = originX;
+      let dyUnits = 0;
+      let rowH = 0;
+      for (const r of groupRects) {
+        // A group wider than the whole budget still starts its own row; it will
+        // overflow, and the caller rejects this paper for it.
+        if (r.x1 > rowOriginX && r.x2 - rowOriginX > budgetW) {
+          dyUnits += Math.ceil((rowH + gap) / U);
+          rowOriginX = r.x1;
+          rowH = 0;
+        }
+        deltas.push({ dx: grid(Math.round((originX - rowOriginX) / U)), dy: dyUnits * U });
+        rowH = Math.max(rowH, r.y2 - r.y1);
+      }
+      const xs = groupRects.flatMap((r, i) => [r.x1 + deltas[i]!.dx, r.x2 + deltas[i]!.dx]);
+      const ys = groupRects.flatMap((r, i) => [r.y1 + deltas[i]!.dy, r.y2 + deltas[i]!.dy]);
+      return { deltas, w: Math.max(...xs) - Math.min(...xs), h: Math.max(...ys) - Math.min(...ys) };
+    };
+
+    let wrap = wrapTo(candidates[candidates.length - 1]!.w - 2 * FRAME);
+    for (const p of candidates) {
+      const w = wrapTo(p.w - 2 * FRAME);
+      if (w.w <= p.w - 2 * FRAME && w.h <= p.h - 2 * FRAME - TITLE_STRIP) {
+        wrap = w;
+        break;
+      }
+    }
+    const rows = new Set(wrap.deltas.map((d) => d.dy)).size;
+    if (rows > 1) notes.push(`groups wrapped onto ${rows} rows to fit the sheet`);
+    groupRects.forEach((r, i) => {
+      const d = wrap.deltas[i]!;
+      if (!d.dx && !d.dy) return;
+      for (const ref of [...groupOf.entries()].filter(([, g]) => g === r.name).map(([ref]) => ref)) {
+        const pl = placed.get(ref);
+        if (!pl) continue;
+        pl.x += d.dx;
+        pl.y += d.dy;
+        pl.body.minX += d.dx;
+        pl.body.maxX += d.dx;
+        pl.body.minY += d.dy;
+        pl.body.maxY += d.dy;
+      }
+      r.x1 += d.dx;
+      r.x2 += d.dx;
+      r.y1 += d.dy;
+      r.y2 += d.dy;
+    });
+  }
+
   // ---------- stubs, power symbols, labels, wires (design D2/D6a) ----------
   const wires: PlacementModel['wires'] = [];
   const labels: PlacementModel['labels'] = [];
@@ -307,6 +399,8 @@ export function draftPlacement(validated: ValidatedIntent, projectName: string, 
   const extraSymbols: EmitSymbol[] = [];
   const libSymbols = new Map<string, string>();
   const pwrFlags: string[] = [];
+  /** Labels sitting at a stub end, with the stub they may ride outward. */
+  const stubbedLabels: { label: number; wire: number; o: { dx: number; dy: number } }[] = [];
   let wireIdx = new Map<string, number>();
   const addWire = (net: string, x1: number, y1: number, x2: number, y2: number): void => {
     if (x1 === x2 && y1 === y2) return;
@@ -317,8 +411,8 @@ export function draftPlacement(validated: ValidatedIntent, projectName: string, 
 
   let pwrSeq = 0;
   let flgSeq = 0;
-  const endpointsOf = (net: IntentNet): { ref: string; pin: DraftPin; at: { x: number; y: number } }[] =>
-    net.pins
+  const endpointsOf = (net: IntentNet): { ref: string; pin: DraftPin; at: { x: number; y: number } }[] => {
+    const eps = net.pins
       .map((ep) => {
         const m = /^([^.]+)\.(.+)$/.exec(ep)!;
         const pl = placed.get(m[1]!);
@@ -328,6 +422,14 @@ export function draftPlacement(validated: ValidatedIntent, projectName: string, 
       })
       .filter((e): e is NonNullable<typeof e> => e !== null)
       .sort((a, b) => a.ref.localeCompare(b.ref, undefined, { numeric: true }) || a.pin.number.localeCompare(b.pin.number, undefined, { numeric: true }));
+    // Stacked pins are one point on the sheet: KiCad symbols routinely repeat a
+    // pin at the same coordinate (a thermal pad carried as a second GND pin, a
+    // doubled supply pin). Drafting per PIN would stack a stub, a power symbol,
+    // and its value text exactly on top of an identical one — invisible in the
+    // render, an overlap to the checker, redundant to a reviewer. One item per
+    // POINT; connectivity is unchanged because the pins share the point.
+    return eps.filter((e, i) => eps.findIndex((o) => o.at.x === e.at.x && o.at.y === e.at.y) === i);
+  };
 
   // power-class nets: per-pin power symbols, rails up, grounds down; one
   // PWR_FLAG per net without a power_out driver (design D6a). The stub runs in
@@ -354,7 +456,14 @@ export function draftPlacement(validated: ValidatedIntent, projectName: string, 
         footprint: '',
         at: { x: stubEnd.x, y: stubEnd.y, rot: 0 },
         refAt: { x: stubEnd.x, y: stubEnd.y },
-        valueAt: { x: stubEnd.x, y: stubEnd.y + (cls === 'ground' ? 3.556 : -3.556) },
+        // The bar is drawn on a fixed side of its own pin (rails above, grounds
+        // below), but a stub leaves its pin in whatever direction the pin
+        // faces. Offsetting the value by class alone therefore throws the text
+        // back across the stub and into the part whenever the two disagree —
+        // a rail hanging off a downward pin puts "+5V" on the symbol above it.
+        // The text follows the stub outward, so it always lands on the far
+        // side of the symbol from the part it serves.
+        valueAt: { x: stubEnd.x, y: stubEnd.y + (o.dy !== 0 ? o.dy * 3.556 : cls === 'ground' ? 3.556 : -3.556) },
         hideRef: true,
         // the net name IS the flag's meaning: an anonymous bar tells a
         // reviewer nothing, so the value stays visible like stock power
@@ -456,8 +565,51 @@ export function draftPlacement(validated: ValidatedIntent, projectName: string, 
         // labels are always horizontal (drafting standard): leftward pins read
         // outward to the left, everything else extends to the right
         labels.push({ name: net.name, x: s.end.x, y: s.end.y, rot: s.o.dx === -1 ? 180 : 0 });
+        stubbedLabels.push({ label: labels.length - 1, wire: wires.length - 1, o: s.o });
         labelled++;
       }
+    }
+  }
+
+  // Nets are drafted in name order, so a net can only avoid what is already on
+  // the sheet: "COMP" cannot see the trunk "COMP_Z" is about to run through the
+  // very point its label occupies. This pass runs once the routing is complete
+  // and walks each stub-anchored label outward a grid unit at a time until its
+  // text box clears every foreign wire and body. The anchor rides the stub it
+  // extends, so the label stays attached and connectivity never changes.
+  const labelTextBox = (name: string, x: number, y: number, rot: number): Bounds => {
+    const w = Math.max(1, name.length) * LABEL_ADVANCE * LABEL_HEIGHT;
+    const h = LABEL_HEIGHT / 2;
+    return rot === 180
+      ? { minX: x - w, minY: y - h, maxX: x, maxY: y + h }
+      : { minX: x, minY: y - h, maxX: x + w, maxY: y + h };
+  };
+  const segHitsBox = (w: { x1: number; y1: number; x2: number; y2: number }, b: Bounds): boolean =>
+    Math.min(w.x1, w.x2) < b.maxX - 0.01 &&
+    Math.max(w.x1, w.x2) > b.minX + 0.01 &&
+    Math.min(w.y1, w.y2) < b.maxY - 0.01 &&
+    Math.max(w.y1, w.y2) > b.minY + 0.01;
+  for (const rec of stubbedLabels) {
+    const lb = labels[rec.label]!;
+    const stub = wires[rec.wire]!;
+    const clearAt = (x: number, y: number): boolean => {
+      const box = labelTextBox(lb.name, x, y, lb.rot);
+      if (bodies.some((b) => boundsOverlap(box, b))) return false;
+      return !wires.some((w, i) => i !== rec.wire && segHitsBox(w, box));
+    };
+    if (clearAt(lb.x, lb.y)) continue;
+    for (let extra = 1; extra <= MAX_LABEL_NUDGE; extra++) {
+      const x = lb.x + rec.o.dx * extra * U;
+      const y = lb.y + rec.o.dy * extra * U;
+      // an extension that would run the stub through a symbol is no better
+      // than the collision it fixes
+      if (bodies.some((b) => segCrossesBody(stub.x1, stub.y1, x, y, b))) break;
+      if (!clearAt(x, y)) continue;
+      stub.x2 = x;
+      stub.y2 = y;
+      lb.x = x;
+      lb.y = y;
+      break;
     }
   }
 
@@ -526,12 +678,12 @@ export function draftPlacement(validated: ValidatedIntent, projectName: string, 
   const allY = [...groupRects.map((r) => r.y1), ...groupRects.map((r) => r.y2)];
   const contentW = allX.length ? Math.max(...allX) - Math.min(...allX) : 0;
   const contentH = allY.length ? Math.max(...allY) - Math.min(...allY) : 0;
-  const paperName = intent.hints?.paper;
+  // `hinted` and the note for an unknown hint are resolved by the shelf-wrap
+  // above, which needed the width budget to reflow against.
   const paper =
-    (paperName ? PAPERS.find((p) => p.name === paperName) : undefined) ??
+    hinted ??
     PAPERS.find((p) => contentW <= p.w - 2 * FRAME && contentH <= p.h - 2 * FRAME - TITLE_STRIP) ??
     PAPERS[PAPERS.length - 1]!;
-  if (paperName && !PAPERS.some((p) => p.name === paperName)) notes.push(`paper hint "${paperName}" is not a standard size; using ${paper.name}`);
 
   // offset so content sits centered in the usable area (whitespace balance,
   // design D11), snapped to the grid so origins stay grid-true

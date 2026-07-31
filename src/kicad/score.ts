@@ -49,6 +49,8 @@ const DEFAULT_WEIGHTS: Record<string, number> = {
 /** Composite is capped this far below the Tier A floor when errors exist. */
 const DEFAULT_FLOOR = 85;
 const ERROR_CAP = 40;
+/** Top-edge spread (mm) within which two group boxes count as the same row. */
+const ROW_BAND = 12;
 
 const PAPER: Record<string, { w: number; h: number }> = {
   A5: { w: 210, h: 148 },
@@ -146,17 +148,33 @@ export function scoreFromGeometry(
   const meanPair = pairDists.length ? pairDists.reduce((a, b) => a + b, 0) / pairDists.length : 0;
 
   // flow-direction: cross-group label nets should connect adjacent groups in
-  // the left-to-right tiling; a hop across intervening groups reads as
-  // against-the-flow wiring
+  // reading order; a hop across intervening groups reads as against-the-flow
+  // wiring
   const rects = sheets.flatMap((s) => s.rectangles.map((r) => ({
     minX: Math.min(r.x1, r.x2),
     maxX: Math.max(r.x1, r.x2),
     minY: Math.min(r.y1, r.y2),
     maxY: Math.max(r.y1, r.y2),
   })));
-  const ordered = [...rects].sort((a, b) => a.minX - b.minX);
+  // Reading order is rows first, then left-to-right within a row. Ordering by
+  // minX alone was correct only while every group sat in one band; on a sheet
+  // whose groups wrap onto several rows it interleaves row 2 back into row 1
+  // and reports flow violations for a drawing that reads perfectly.
+  const byRow = [...rects].sort((a, b) => a.minY - b.minY || a.minX - b.minX);
+  const rows: (typeof rects)[] = [];
+  for (const r of byRow) {
+    const row = rows[rows.length - 1];
+    // Rows are separated by a group box height; members of one row share a top
+    // edge to within a symbol cell, so a generous band still cannot merge two.
+    if (row && r.minY - row[0]!.minY <= ROW_BAND) row.push(r);
+    else rows.push([r]);
+  }
+  const ordered = rows.flatMap((row) => [...row].sort((a, b) => a.minX - b.minX));
   const groupIdx = (x: number, y: number): number =>
     ordered.findIndex((r) => x > r.minX && x < r.maxX && y > r.minY && y < r.maxY);
+  /** Which wrapped row a point falls in; -1 when it is in no group box. */
+  const rowIdx = (x: number, y: number): number =>
+    rows.findIndex((row) => row.some((r) => x > r.minX && x < r.maxX && y > r.minY && y < r.maxY));
   let crossNets = 0;
   let flowViolations = 0;
   for (const pts of byName.values()) {
@@ -200,7 +218,11 @@ export function scoreFromGeometry(
   // spacing uniformity: variance of consecutive gaps within shared-x columns
   const cols = new Map<string, number[]>();
   for (const s of realSyms) {
-    const k = `${s.sheet}:${Math.round(s.at.x * 100)}`;
+    // Keyed by row as well as x: a column is a vertical run the eye reads as
+    // one stack. Once groups wrap, two symbols in different rows can share an x
+    // while sitting a whole row apart, and treating that jump as a "gap" pushes
+    // the coefficient of variation — and the score — off a cliff.
+    const k = `${s.sheet}:${Math.round(s.at.x * 100)}:${rowIdx(s.at.x, s.at.y)}`;
     cols.set(k, [...(cols.get(k) ?? []), s.at.y]);
   }
   const gapCVs: number[] = [];
