@@ -8,6 +8,10 @@ Sandboxes for exercising the CLI end to end, by hand, against a real git reposit
 - An API key in the environment for the LLM-backed commands: `ANTHROPIC_API_KEY` or `OPENAI_API_KEY`, or a saved-login provider (`--model codex`, `--model cursor`, `--model claude-code`)
 - `npm install` done at the repo root
 
+## Control boards
+
+`manual-tests/control/` holds committed reference projects for the deterministic drafting engine, with symbols vendored from the real KiCad libraries. `npm run control` re-drafts each board, byte-compares against its reference, and renders a PNG for visual comparison; `npm run control -- --update` regenerates the references after a deliberate engine change. The byte contract also runs in CI (`test/draft-control.test.ts`). See [control/README.md](control/README.md).
+
 ## Variants
 
 Each variant materializes a self-contained git repository under `manual-tests/runs/` (gitignored). Run everything from the repo root.
