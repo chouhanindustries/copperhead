@@ -6,7 +6,7 @@ sidebar:
 ---
 
 :::note
-Specified by the `readable-schematic-drafting` OpenSpec change. This page describes the contract; the checker and the gate land with that change's implementation.
+Specified by the `deterministic-schematic-drafting` OpenSpec change. This page describes the contract; the checker and the gate land with that change's implementation. How generated sheets come to satisfy these rules by construction is described in [How copperhead drafts schematics](/reference/schematic-drafting/).
 :::
 
 ERC verifies the net graph, and `verify_symbols` verifies the parts, but neither says anything about how the drawing reads. The schematic is the primary human review surface for everything the agent designs, so legibility is checked the same way: a deterministic, read-only checker (`check_legibility`) that reports findings the agent must reconcile before the schematic stage of `create` can complete.
