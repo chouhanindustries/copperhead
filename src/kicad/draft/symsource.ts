@@ -276,7 +276,7 @@ export function powerSymbolSource(net: string, kind: 'rail' | 'ground'): { libId
 \t\t(polyline (pts (xy -0.254 -2.286) (xy 0.254 -2.286)) (stroke (width 0.254) (type default)) (fill (type none)))
 \t)
 \t(symbol "${name}_1_1"
-\t\t(pin power_in line (at 0 0 270) (length 1.27)
+\t\t(pin power_in line (at 0 0 270) (length 0) hide
 \t\t\t(name "${net}" (effects (font (size 1.27 1.27))))
 \t\t\t(number "1" (effects (font (size 1.27 1.27))))
 \t\t)
@@ -285,7 +285,7 @@ export function powerSymbolSource(net: string, kind: 'rail' | 'ground'): { libId
 \t\t(polyline (pts (xy -1.27 1.27) (xy 1.27 1.27)) (stroke (width 0.254) (type default)) (fill (type none)))
 \t)
 \t(symbol "${name}_1_1"
-\t\t(pin power_in line (at 0 0 90) (length 1.27)
+\t\t(pin power_in line (at 0 0 90) (length 0) hide
 \t\t\t(name "${net}" (effects (font (size 1.27 1.27))))
 \t\t\t(number "1" (effects (font (size 1.27 1.27))))
 \t\t)
@@ -317,7 +317,7 @@ export function pwrFlagSource(): { libId: string; sourceText: string } {
 \t\t(polyline (pts (xy 0 1.27) (xy -1.016 1.905) (xy 0 2.54) (xy 1.016 1.905) (xy 0 1.27)) (stroke (width 0.254) (type default)) (fill (type none)))
 \t)
 \t(symbol "PWR_FLAG_1_1"
-\t\t(pin power_out line (at 0 0 90) (length 1.27)
+\t\t(pin power_out line (at 0 0 90) (length 0) hide
 \t\t\t(name "pwr" (effects (font (size 1.27 1.27))))
 \t\t\t(number "1" (effects (font (size 1.27 1.27))))
 \t\t)
