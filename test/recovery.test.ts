@@ -53,11 +53,18 @@ describe('parseDiagnosis', () => {
   it('parses an abort verdict and ignores guidance', () => {
     const d = parseDiagnosis('{"verdict":"abort","reason":"missing inputs","guidance":"n/a"}');
     expect(d.verdict).toBe('abort');
-    expect(d.guidance).undefined;
+    expect(d.guidance).toBeUndefined();
   });
 
   it('parses retry verdict when leading prose contains stray braces (Fixes #101)', () => {
     const d = parseDiagnosis('Check {pins.h} before proceeding:\n{"verdict":"retry","reason":"dropped edit","guidance":"apply the edit"}');
+    expect(d.verdict).toBe('retry');
+    expect(d.reason).toBe('dropped edit');
+    expect(d.guidance).toBe('apply the edit');
+  });
+
+  it('skips a verdictless object before a retry diagnosis', () => {
+    const d = parseDiagnosis('{"reason":"ignore"}\n{"verdict":"retry","reason":"dropped edit","guidance":"apply the edit"}');
     expect(d.verdict).toBe('retry');
     expect(d.reason).toBe('dropped edit');
     expect(d.guidance).toBe('apply the edit');
