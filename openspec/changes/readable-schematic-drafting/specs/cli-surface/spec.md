@@ -18,9 +18,14 @@
 
 ### Requirement: `--json` carries legibility findings
 
-`check --json` SHALL emit a `legibility` key containing the finding list and per-severity counts, using the same stable kind identifiers the checker defines. The key SHALL be present with an empty finding list when there are no findings, and SHALL record which families were skipped or disabled.
+`check --json` SHALL emit a `legibility` object of the shape `{findings, counts, skipped, disabled}`: `findings` is an array of checker findings, each `{kind, severity, sheet, at: {x, y}, refs, detail}` where `kind` is one of the checker's stable kind identifiers, `severity` is `error` or `advisory`, `sheet` and `detail` are strings, `at` carries millimetre coordinates, and `refs` is an array of strings; `counts` is `{error, advisory}` with integer totals; `skipped` is an array of `{family, reason}` records for checks not evaluated (for example page-relative checks on an unrecognized paper size); `disabled` is an array of family identifiers turned off in config. The `legibility` key SHALL always be present: with empty arrays and zero counts when the schematic is clean, and with every family recorded as skipped when no schematic is configured.
 
 #### Scenario: Machine-readable findings
 
 - **WHEN** `check --json` runs on a repo with two error-severity findings
 - **THEN** stdout contains a `legibility` object listing both findings with their kind, severity, sheet, and coordinates, and a count of 2 at error severity
+
+#### Scenario: No schematic configured
+
+- **WHEN** `check --json` runs in a repo whose config names no schematic
+- **THEN** the `legibility` object is present with an empty findings list, zero counts, and every family recorded as skipped

@@ -4,7 +4,7 @@
 
 ### Requirement: Subsystem group boxes
 
-Every non-power symbol on a generated sheet SHALL belong to exactly one drawn subsystem group. A group SHALL be a schematic `(rectangle …)` graphic item whose stroke type is `solid` for a functional block or `dash` for an annotation cluster (decoupling bank, boot/reset, test points), paired with a `(text …)` caption positioned inside the rectangle's top band naming the subsystem. Caption text SHALL match a subsystem or component group named in SUBSYSTEMS.md or BOM.md. Group rectangles SHALL NOT overlap one another, except that a group MAY fully contain a nested group, in which case the innermost containing group owns the symbol. Power-port symbols (`power:` library entries and `PWR_FLAG`) are exempt from group membership.
+Every non-power symbol on a generated sheet SHALL belong to exactly one drawn subsystem group. A group SHALL be a schematic `(rectangle …)` graphic item whose stroke type is `solid` for a functional block or `dash` for an annotation cluster (decoupling bank, boot/reset, test points), paired with a `(text …)` caption positioned inside the rectangle's top band naming the subsystem. Caption text SHALL match a subsystem or component group named in SUBSYSTEMS.md or BOM.md; a caption that matches neither SHALL be reported under the `unlabeled-group` kind, since an invented name labels nothing. Group rectangles SHALL NOT overlap one another, except that a group MAY fully contain a nested group, in which case the innermost containing group owns the symbol. Power-port symbols (`power:` library entries and `PWR_FLAG`) are exempt from group membership.
 
 #### Scenario: Ungrouped symbol is reported
 
@@ -15,6 +15,16 @@ Every non-power symbol on a generated sheet SHALL belong to exactly one drawn su
 
 - **WHEN** a group rectangle has no text item inside its top band
 - **THEN** the checker reports an `unlabeled-group` finding with the rectangle's coordinates
+
+#### Scenario: Invented caption is reported
+
+- **WHEN** a group rectangle's caption matches no subsystem in SUBSYSTEMS.md and no component group in BOM.md
+- **THEN** the checker reports an `unlabeled-group` finding naming the caption, the rectangle's coordinates, and the nearest documented name
+
+#### Scenario: Missing source docs skip caption validation loudly
+
+- **WHEN** SUBSYSTEMS.md or BOM.md is absent, or contains no parseable subsystem or component-group names
+- **THEN** caption validation is reported as skipped with that reason rather than passing or failing silently, and the geometric group checks still run
 
 #### Scenario: Overlapping groups are reported
 
@@ -59,6 +69,11 @@ Connections that leave a group SHALL be made with net labels rather than long wi
 - **WHEN** a wire segment stays inside one group and is shorter than the configured maximum
 - **THEN** no `cross-group-wire` finding is produced
 
+#### Scenario: Overlong wire inside one group is reported
+
+- **WHEN** a wire segment stays inside one group but its length exceeds the configured maximum
+- **THEN** the checker reports a `cross-group-wire` finding naming the containing group and the net, suggesting a shorter route or a label pair
+
 ### Requirement: Deterministic read-only legibility checker
 
 The checker SHALL be implemented as a read-only module over the existing s-expression parser. It SHALL NOT serialize s-expressions, SHALL NOT modify any file, SHALL make no network calls, and SHALL invoke no language model. It SHALL derive symbol body bounding boxes from the `lib_symbols` graphic items of each instantiated symbol, transformed by the instance's position, rotation, and mirror, and SHALL approximate text extents from the item's font height using a fixed per-character advance ratio.
@@ -75,12 +90,22 @@ The checker SHALL be implemented as a read-only module over the existing s-expre
 
 ### Requirement: Check families and severities
 
-The checker SHALL evaluate these families, each carrying a stable kind identifier: `symbol-overlap`, `text-collision`, `off-grid`, `label-orientation`, `out-of-frame`, `low-utilization`, `crowding`, `ungrouped-symbol`, `unlabeled-group`, `group-overlap`, `cross-group-wire`, `wire-through-symbol`, and `empty-title-block`. Each family SHALL carry a default severity of `error` or `advisory`. `symbol-overlap`, `text-collision`, `off-grid`, `out-of-frame`, `ungrouped-symbol`, `unlabeled-group`, `group-overlap`, `wire-through-symbol`, and `empty-title-block` SHALL default to `error`; `label-orientation`, `low-utilization`, `crowding`, and `cross-group-wire` SHALL default to `advisory`.
+The checker SHALL evaluate these families, each carrying a stable kind identifier: `symbol-overlap`, `text-collision`, `off-grid`, `label-orientation`, `out-of-frame`, `low-utilization`, `crowding`, `ungrouped-symbol`, `unlabeled-group`, `group-overlap`, `cross-group-wire`, `wire-through-symbol`, and `empty-title-block`. Each family SHALL carry a default severity of `error` or `advisory`. The `text-collision` family SHALL test Reference and Value property text, net and hierarchical label text, and free `(text …)` items against symbol body boxes, wire segments, and one another; pin name and pin number text SHALL participate on neither side of the test, matching their exclusion from the body box, and a label SHALL NOT collide with the wire it is attached to. `symbol-overlap`, `text-collision`, `off-grid`, `out-of-frame`, `ungrouped-symbol`, `unlabeled-group`, `group-overlap`, `wire-through-symbol`, and `empty-title-block` SHALL default to `error`; `label-orientation`, `low-utilization`, `crowding`, and `cross-group-wire` SHALL default to `advisory`.
 
 #### Scenario: Text over a symbol body is an error
 
 - **WHEN** a symbol's Reference or Value property text box intersects another symbol's body bounding box
 - **THEN** a `text-collision` finding is reported at error severity naming both refdes and the overlapping region
+
+#### Scenario: Label text over an unrelated wire is an error
+
+- **WHEN** a net label's text box intersects a wire segment other than the one the label is attached to
+- **THEN** a `text-collision` finding is reported at error severity naming the label and the crossed wire's net
+
+#### Scenario: Pin text never collides
+
+- **WHEN** a symbol's pin name or pin number text overlaps that symbol's body, a wire, or other text
+- **THEN** no `text-collision` finding is produced for it
 
 #### Scenario: Off-grid wire endpoint is an error
 
