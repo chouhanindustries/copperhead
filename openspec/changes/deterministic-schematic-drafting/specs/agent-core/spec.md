@@ -37,7 +37,7 @@ The agent loop's stated workflow SHALL include `check_legibility` in the verific
 
 ### Requirement: Legibility findings feed the sync-obligations ledger
 
-An error-severity legibility finding outstanding at the time `finish` is called SHALL be reported by `finish` as an unmet obligation, in the same list that already carries drift, constraint dual-write, and verification obligations. The obligation SHALL follow the ledger's existing edit-reopens, clean-run-clears lifecycle: a schematic mutation, whether an anchored edit or a `draft_schematic` run, opens (or re-opens) the legibility obligation through the same post-tool-call hook that re-opens the ERC and drift obligations, a `check_legibility` run with zero error-severity findings clears it, and a run with error-severity findings leaves it open carrying the current finding list. "Outstanding" therefore always means the most recent checker result against the file as edited, never a stale finding list, and `finish` and the stage-completion recheck judge the same state.
+On repos whose schematic copperhead authored (create origin), an error-severity legibility finding outstanding at the time `finish` is called SHALL be reported by `finish` as an unmet obligation, in the same list that already carries drift, constraint dual-write, and verification obligations. On repos with a hand-drawn schematic (init-ed or hand-maintained), the obligation SHALL NOT open: a pre-existing sheet could never satisfy the standard without a full redraw, so the same findings reach the agent and `check` as advisory information only, matching the check-reports-create-gates split. The obligation SHALL follow the ledger's existing edit-reopens, clean-run-clears lifecycle: a schematic mutation, whether an anchored edit or a `draft_schematic` run, opens (or re-opens) the legibility obligation through the same post-tool-call hook that re-opens the ERC and drift obligations, a `check_legibility` run with zero error-severity findings clears it, and a run with error-severity findings leaves it open carrying the current finding list. "Outstanding" therefore always means the most recent checker result against the file as edited, never a stale finding list, and `finish` and the stage-completion recheck judge the same state.
 
 #### Scenario: `finish` refuses while the sheet is illegible (AC-16.24)
 
@@ -53,6 +53,11 @@ An error-severity legibility finding outstanding at the time `finish` is called 
 
 - **WHEN** `check_legibility` has run clean and the agent then mutates the schematic again, by anchored edit or by re-draft
 - **THEN** the legibility obligation re-opens and stays open until the checker runs clean against the new file
+
+#### Scenario: Hand-drawn repos are informed, never wedged
+
+- **WHEN** `copperhead do` edits the schematic of a repo copperhead did not create and the sheet has error-severity legibility findings
+- **THEN** `check_legibility` reports the findings but no legibility obligation opens, and `finish` does not refuse on them
 
 ### Requirement: `draft_schematic` tool
 
