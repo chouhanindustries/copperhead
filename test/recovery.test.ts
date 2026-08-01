@@ -70,10 +70,16 @@ describe('parseDiagnosis', () => {
     expect(d.guidance).toBe('apply the edit');
   });
 
+  it('preserves real reason text on valid JSON missing a recognized verdict', () => {
+    const d = parseDiagnosis('{"reason":"the tool call was dropped silently"}');
+    expect(d.verdict).toBe('abort');
+    expect(d.reason).toBe('the tool call was dropped silently');
+  });
+
   it('fails safe to abort on non-JSON or missing verdict', () => {
     expect(parseDiagnosis('no json here').verdict).toBe('abort');
     expect(parseDiagnosis(null).verdict).toBe('abort');
-    expect(parseDiagnosis('{"reason":"x"}').verdict).toBe('abort');
+    expect(parseDiagnosis('{"reason":"x"}').reason).toBe('x');
   });
 });
 
