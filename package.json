@@ -44,7 +44,8 @@
     "provenance": true
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.json && npm run postbuild",
+    "postbuild": "node -e \"require('fs').chmodSync('dist/cli.js', 0o755)\"",
     "prepublishOnly": "npm run typecheck && npm run build",
     "dev": "tsx src/cli.ts",
     "demo:simple": "bash scripts/demo-simple.sh",
