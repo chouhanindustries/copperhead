@@ -360,12 +360,14 @@ export async function listBoardFootprints(boardPath: string): Promise<BoardFootp
   const text = await readFile(abs, 'utf8');
   const roots = parseSexp(text);
   const boardNode = roots.find((r) => tag(r) === 'kicad_pcb');
-  if (!boardNode || !isList(boardNode)) return [];
+  if (!boardNode || !isList(boardNode)) {
+    throw new Error(`not a KiCad PCB file: ${boardPath}`);
+  }
 
   const out: BoardFootprint[] = [];
   for (const fpNode of children(boardNode, 'footprint')) {
     const footprintId = atomAt(fpNode, 1) ?? '';
-    
+
     let ref = '';
     let value = '';
 
@@ -373,11 +375,11 @@ export async function listBoardFootprints(boardPath: string): Promise<BoardFootp
       if (atomAt(prop, 1) === 'Reference') ref = atomAt(prop, 2) ?? '';
       if (atomAt(prop, 1) === 'Value') value = atomAt(prop, 2) ?? '';
     }
-    
-    if (!ref) {
+
+    if (!ref || !value) {
       for (const txt of children(fpNode, 'fp_text')) {
-        if (atomAt(txt, 1) === 'reference') ref = atomAt(txt, 2) ?? '';
-        if (atomAt(txt, 1) === 'value') value = atomAt(txt, 2) ?? '';
+        if (!ref && atomAt(txt, 1) === 'reference') ref = atomAt(txt, 2) ?? '';
+        if (!value && atomAt(txt, 1) === 'value') value = atomAt(txt, 2) ?? '';
       }
     }
 
@@ -385,7 +387,7 @@ export async function listBoardFootprints(boardPath: string): Promise<BoardFootp
     const x = parseFloat(atomAt(atNode, 1) ?? '0');
     const y = parseFloat(atomAt(atNode, 2) ?? '0');
     const rot = parseFloat(atomAt(atNode, 3) ?? '0');
-    
+
     const layerNode = child(fpNode, 'layer');
     const layer = atomAt(layerNode, 1) ?? 'F.Cu';
 

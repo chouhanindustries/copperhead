@@ -169,7 +169,7 @@ describe('sexp parser', () => {
   it('lists board footprints accurately from a kicad_pcb structure', async () => {
     const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'copperhead-test-'));
     const pcbFilePath = path.join(tmpDir, 'test.kicad_pcb');
-    
+
     const samplePcbContent = `
       (kicad_pcb (version 20240101) (generator "copperhead")
         (footprint "Package_SO:SOIC-8_3.9x4.9mm_P1.27mm" (at 120 60 90) (layer "F.Cu")
@@ -186,33 +186,69 @@ describe('sexp parser', () => {
         )
       )
     `;
-    
+
     await fs.writeFile(pcbFilePath, samplePcbContent, 'utf8');
 
     const footprints = await listBoardFootprints(pcbFilePath);
-    
-    expect(footprints.length).toBe(3);
-    expect(footprints.map(f => f.ref)).toEqual(['C99', 'R1', 'U1']);
 
-    const c99 = footprints.find(f => f.ref === 'C99');
+    expect(footprints.length).toBe(3);
+    expect(footprints.map((f) => f.ref)).toEqual(['C99', 'R1', 'U1']);
+
+    const c99 = footprints.find((f) => f.ref === 'C99');
     expect(c99).toBeDefined();
     expect(c99?.value).toBe('100nF');
     expect(c99?.layer).toBe('B.Cu');
     expect(c99?.at).toEqual({ x: 100.5, y: 50.5, rot: 0 });
     expect(c99?.footprintId).toBe('Legacy:C_0402');
-    
-    const r1 = footprints.find(f => f.ref === 'R1');
+
+    const r1 = footprints.find((f) => f.ref === 'R1');
     expect(r1).toBeDefined();
     expect(r1?.value).toBe('10k');
     expect(r1?.at).toEqual({ x: 110, y: 50, rot: 0 });
     expect(r1?.footprintId).toBe('Resistor_SMD:R_0603_1608Metric');
-    
-    const u1 = footprints.find(f => f.ref === 'U1');
+
+    const u1 = footprints.find((f) => f.ref === 'U1');
     expect(u1).toBeDefined();
     expect(u1?.value).toBe('NE5532');
     expect(u1?.at).toEqual({ x: 120, y: 60, rot: 90 });
     expect(u1?.layer).toBe('F.Cu');
     expect(u1?.footprintId).toBe('Package_SO:SOIC-8_3.9x4.9mm_P1.27mm');
+
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it('throws a descriptive error when file is not a valid kicad_pcb file', async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'copperhead-test-'));
+    const invalidPcbPath = path.join(tmpDir, 'invalid.kicad_pcb');
+
+    await fs.writeFile(invalidPcbPath, '(not_a_kicad_pcb_file)', 'utf8');
+
+    await expect(listBoardFootprints(invalidPcbPath)).rejects.toThrow('not a KiCad PCB file');
+
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it('handles default fallbacks for missing properties and nodes', async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'copperhead-test-'));
+    const minimalPcbPath = path.join(tmpDir, 'minimal.kicad_pcb');
+
+    const minimalContent = `
+      (kicad_pcb (version 20240101)
+        (footprint)
+      )
+    `;
+
+    await fs.writeFile(minimalPcbPath, minimalContent, 'utf8');
+
+    const footprints = await listBoardFootprints(minimalPcbPath);
+    expect(footprints.length).toBe(1);
+
+    const fp = footprints[0]!;
+    expect(fp.ref).toBe('?');
+    expect(fp.value).toBe('');
+    expect(fp.footprintId).toBe('');
+    expect(fp.at).toEqual({ x: 0, y: 0, rot: 0 });
+    expect(fp.layer).toBe('F.Cu');
 
     await fs.rm(tmpDir, { recursive: true, force: true });
   });
