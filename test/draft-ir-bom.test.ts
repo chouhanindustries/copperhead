@@ -144,35 +144,6 @@ describe('validateIntent: BOM.md cross-check', () => {
     }
   });
 
-  it('rejects a grouped row, naming the group and why it must be split', async () => {
-    const { repo, docs, cleanup } = await fixtureRepo();
-    try {
-      // R1 and R2 are separate rows in the fixture; merge them the way a docs
-      // author naturally would. Both carry 10k, so an expanding reader would
-      // accept this — at the cost of the per-part Rationale.
-      const file = path.join(docs, 'BOM.md');
-      const text = (await readFile(file, 'utf8'))
-        .split('\n')
-        .filter((l) => l.split('|')[1]?.trim() !== 'R2')
-        .map((l) => (l.split('|')[1]?.trim() === 'R1' ? l.replace(/^\|\s*R1\s*\|/, '| R1, R2 |') : l))
-        .join('\n');
-      await writeFile(file, text, 'utf8');
-
-      const res = await validateFixture(repo, docs);
-      expect(res.ok).toBe(false);
-      const details = res.findings.map((f) => f.detail);
-      for (const ref of ['R1', 'R2']) {
-        const d = details.find((x) => x.startsWith(`${ref} is covered by the grouped`));
-        expect(d, `expected a grouped-row finding for ${ref}`).toBeDefined();
-        expect(d).toContain('"R1, R2"');
-        expect(d).toContain('one row per refdes');
-        expect(d).toContain('Rationale');
-      }
-    } finally {
-      await cleanup();
-    }
-  });
-
   it('still catches a real transcription slip (D6)', async () => {
     const { repo, docs, cleanup } = await fixtureRepo();
     try {

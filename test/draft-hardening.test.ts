@@ -4,7 +4,6 @@ import { fileURLToPath } from 'node:url';
 import { mkdtemp, cp, rm, readFile, writeFile, mkdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { SymbolSource, SymbolResolutionError } from '../src/kicad/draft/symsource.js';
-import { expandRefdes } from '../src/kicad/draft/ir.js';
 import { draftToText } from '../src/kicad/draft/draft.js';
 import { findMergedNets } from '../src/kicad/draft/engine.js';
 import { toolSearch } from '../src/agent/filetools.js';
@@ -61,42 +60,6 @@ describe('derived (extends) symbols', () => {
     } finally {
       await rm(repo, { recursive: true, force: true });
     }
-  });
-});
-
-describe('expandRefdes: recognising a grouped refdes cell', () => {
-  /**
-   * Recognition, not acceptance. The BOM contract is one row per refdes: the
-   * row carries a single Rationale cell, and after the Value column was
-   * narrowed to component values, Rationale is where each part's purpose lives.
-   * Two 100nF capacitors with the same value routinely do different jobs, and a
-   * shared row cannot say so — so a group is reported with the split spelled
-   * out, rather than silently expanded into members that all claim the same
-   * reasoning.
-   */
-  it('expands comma and slash lists', () => {
-    expect(expandRefdes('R1, R2')).toEqual(['R1', 'R2']);
-    expect(expandRefdes('C1/C2')).toEqual(['C1', 'C2']);
-    expect(expandRefdes('TP1, TP2, TP3')).toEqual(['TP1', 'TP2', 'TP3']);
-  });
-
-  it('expands numeric ranges, including the repeated-prefix and en-dash forms', () => {
-    expect(expandRefdes('C5-C8')).toEqual(['C5', 'C6', 'C7', 'C8']);
-    expect(expandRefdes('SW3–SW6')).toEqual(['SW3', 'SW4', 'SW5', 'SW6']);
-    expect(expandRefdes('R1-4')).toEqual(['R1', 'R2', 'R3', 'R4']);
-    expect(expandRefdes('SW3-SW16')).toHaveLength(14);
-  });
-
-  it('leaves a plain refdes, and anything ambiguous, alone', () => {
-    expect(expandRefdes('U1')).toEqual(['U1']);
-    expect(expandRefdes('`BT1`')).toEqual(['BT1']);
-    expect(expandRefdes('R1-C4')).toEqual(['R1-C4']); // not a range over one prefix
-    expect(expandRefdes('C8-C5')).toEqual(['C8-C5']); // descending: not a range
-    expect(expandRefdes('')).toEqual([]);
-  });
-
-  it('refuses to materialise an absurd range', () => {
-    expect(expandRefdes('R1-R99999')).toEqual(['R1-R99999']);
   });
 });
 
