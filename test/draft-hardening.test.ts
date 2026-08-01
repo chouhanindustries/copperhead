@@ -64,12 +64,15 @@ describe('derived (extends) symbols', () => {
   });
 });
 
-describe('expandRefdes: one BOM row can cover several parts', () => {
+describe('expandRefdes: recognising a grouped refdes cell', () => {
   /**
-   * A live run opened stage 4 with 128 findings of the shape "R1 is not a
-   * BOM.md row", because the BOM legitimately wrote `| R1, R2 |` and
-   * `| SW3-SW16 |`. The agent's way out was to rewrite the doc into one row per
-   * refdes — a doc edit forced by the reader, not by anything wrong with the doc.
+   * Recognition, not acceptance. The BOM contract is one row per refdes: the
+   * row carries a single Rationale cell, and after the Value column was
+   * narrowed to component values, Rationale is where each part's purpose lives.
+   * Two 100nF capacitors with the same value routinely do different jobs, and a
+   * shared row cannot say so — so a group is reported with the split spelled
+   * out, rather than silently expanded into members that all claim the same
+   * reasoning.
    */
   it('expands comma and slash lists', () => {
     expect(expandRefdes('R1, R2')).toEqual(['R1', 'R2']);
