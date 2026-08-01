@@ -76,7 +76,11 @@ export function normalizeReport(raw: unknown, source: 'erc' | 'drc'): CheckRepor
 }
 
 export function formatViolations(report: CheckReport): string {
-  if (report.ok) return `${report.source.toUpperCase()}: clean`;
+  // Deliberately violations.length, not report.ok: ok is the error-severity
+  // pass/fail gate (see normalizeReport), but "clean" here is a display
+  // question — a warning-only report is ok yet still has something to show,
+  // and hiding it behind "clean" is exactly the bug this comment prevents.
+  if (report.violations.length === 0) return `${report.source.toUpperCase()}: clean`;
   const lines = [`${report.source.toUpperCase()}: ${report.violations.length} violation(s)`];
   for (const v of report.violations) {
     const where = v.sheet ? ` [sheet ${v.sheet}]` : '';
