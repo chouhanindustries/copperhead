@@ -57,6 +57,46 @@ export interface DraftReport {
   noConnects: number;
   paper: string;
   notes: string[];
+  /**
+   * Points where labels of two or more distinct nets landed together, merging
+   * them into one net in the emitted sheet. Non-empty means the drawing does
+   * not implement the IR, so the caller must refuse the draft.
+   */
+  mergedNets: { x: number; y: number; nets: string[] }[];
+}
+
+/**
+ * Points carrying labels for two or more distinct nets.
+ *
+ * Co-located labels are not a cosmetic overlap: KiCad resolves them to a single
+ * net and reports `Both A and B are attached to the same items; A will be used
+ * in the netlist` — as a *warning*. A live run drew ISET (charge-current
+ * program) and NTC (thermistor input) onto one node of a BQ24040 that way,
+ * which would have shipped a board whose charge current is not set by its
+ * programming resistor and whose temperature cutoff does not work.
+ *
+ * The engine computes every coordinate, so this is the engine's to catch, and
+ * it is strictly worse than the failures already gated: an unreadable sheet
+ * stops the pipeline loudly, a merged net flows quietly into layout and
+ * fabrication outputs.
+ */
+export function findMergedNets(
+  labels: { name: string; x: number; y: number }[],
+): { x: number; y: number; nets: string[] }[] {
+  const byPoint = new Map<string, Set<string>>();
+  for (const l of labels) {
+    const key = `${l.x},${l.y}`;
+    const at = byPoint.get(key) ?? new Set<string>();
+    at.add(l.name);
+    byPoint.set(key, at);
+  }
+  return [...byPoint.entries()]
+    .filter(([, nets]) => nets.size > 1)
+    .map(([key, nets]) => {
+      const [x, y] = key.split(',').map(Number);
+      return { x: x!, y: y!, nets: [...nets].sort() };
+    })
+    .sort((a, b) => a.nets[0]!.localeCompare(b.nets[0]!));
 }
 
 interface Placed {
@@ -714,6 +754,21 @@ export function draftPlacement(validated: ValidatedIntent, projectName: string, 
   noConnects.forEach(shift);
   groupRects.forEach(shift);
 
+  // Two labels of DIFFERENT nets at one point is a merged net, not a cosmetic
+  // overlap: KiCad resolves co-located labels to a single net and reports
+  // `Both A and B are attached to the same items; A will be used in the
+  // netlist` — as a warning. A live run drew ISET (charge-current program) and
+  // NTC (thermistor input) onto the same node of a BQ24040 that way, which
+  // would have shipped a board whose charge current is not set by its
+  // programming resistor and whose temperature cutoff does not work.
+  //
+  // The engine computes every coordinate, so this is ours to catch, and it is
+  // strictly worse than the failures we do gate: an unreadable sheet stops the
+  // pipeline loudly, while a merged net passes ERC-as-warning and flows into
+  // layout and fabrication outputs. Reported as a hard finding — the netlist
+  // the IR declared is not the netlist that got drawn.
+  const mergedNets = findMergedNets(labels);
+
   const model: PlacementModel = {
     projectName,
     paper: paper.name,
@@ -742,6 +797,7 @@ export function draftPlacement(validated: ValidatedIntent, projectName: string, 
     noConnects: noConnects.length,
     paper: paper.name,
     notes,
+    mergedNets,
   };
   return { model, report };
 }

@@ -1,0 +1,193 @@
+import { describe, it, expect } from 'vitest';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { mkdtemp, cp, rm, readFile, writeFile, mkdir } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { SymbolSource, SymbolResolutionError } from '../src/kicad/draft/symsource.js';
+import { expandRefdes } from '../src/kicad/draft/ir.js';
+import { draftToText } from '../src/kicad/draft/draft.js';
+import { findMergedNets } from '../src/kicad/draft/engine.js';
+import { toolSearch } from '../src/agent/filetools.js';
+
+/**
+ * Hardening found by driving `create` end-to-end against a real brief. Each
+ * case below cost a stage attempt in a live run; the comments name what it cost
+ * so a later reader can tell a real constraint from a defensive guess.
+ */
+
+const HERE = path.dirname(fileURLToPath(import.meta.url));
+const SYMLIB = path.join(HERE, 'fixtures', 'symlib');
+const DRAFT_FIXTURE = path.join(HERE, 'fixtures', 'draft');
+
+describe('derived (extends) symbols', () => {
+  /**
+   * Stage 4 refused outright when a real part resolved to a derived symbol:
+   * "TPD4E05U06DQAR is a derived (extends) symbol, which the drafting engine
+   * does not support yet". Five parts on one board hit it, and the agent's only
+   * recourse was to capture them as generic connector placeholders — symbols
+   * with no pin types, which silently weakens ERC.
+   */
+  it('resolves a derived symbol by inheriting the base geometry', async () => {
+    const repo = await mkdtemp(path.join(tmpdir(), 'copperhead-derived-'));
+    try {
+      const src = new SymbolSource(repo, [SYMLIB]);
+      const base = await src.resolve('Device:R');
+      const derived = await src.resolve('Device:R_Small_Derived');
+
+      expect(derived.libId).toBe('Device:R_Small_Derived');
+      // Geometry is the base's: same pins, same body, so placement and wiring
+      // treat it exactly like the part it extends.
+      expect(derived.pins.map((p) => p.number)).toEqual(base.pins.map((p) => p.number));
+      expect(derived.body).toEqual(base.body);
+      // sourceText is the base block verbatim; the emitter renames it to the
+      // derived lib_id on the way into lib_symbols.
+      expect(derived.sourceText).toBe(base.sourceText);
+    } finally {
+      await rm(repo, { recursive: true, force: true });
+    }
+  });
+
+  it('still refuses a symbol whose extends target is unnamed', async () => {
+    const repo = await mkdtemp(path.join(tmpdir(), 'copperhead-derived-bad-'));
+    try {
+      const lib = path.join(repo, 'libs');
+      await mkdir(lib, { recursive: true });
+      await writeFile(
+        path.join(lib, 'Broken.kicad_sym'),
+        '(kicad_symbol_lib\n\t(version 20231120)\n\t(generator "t")\n\t(symbol "Orphan"\n\t\t(extends)\n\t)\n)\n',
+        'utf8',
+      );
+      await expect(new SymbolSource(repo, [lib]).resolve('Broken:Orphan')).rejects.toBeInstanceOf(SymbolResolutionError);
+    } finally {
+      await rm(repo, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('expandRefdes: one BOM row can cover several parts', () => {
+  /**
+   * A live run opened stage 4 with 128 findings of the shape "R1 is not a
+   * BOM.md row", because the BOM legitimately wrote `| R1, R2 |` and
+   * `| SW3-SW16 |`. The agent's way out was to rewrite the doc into one row per
+   * refdes — a doc edit forced by the reader, not by anything wrong with the doc.
+   */
+  it('expands comma and slash lists', () => {
+    expect(expandRefdes('R1, R2')).toEqual(['R1', 'R2']);
+    expect(expandRefdes('C1/C2')).toEqual(['C1', 'C2']);
+    expect(expandRefdes('TP1, TP2, TP3')).toEqual(['TP1', 'TP2', 'TP3']);
+  });
+
+  it('expands numeric ranges, including the repeated-prefix and en-dash forms', () => {
+    expect(expandRefdes('C5-C8')).toEqual(['C5', 'C6', 'C7', 'C8']);
+    expect(expandRefdes('SW3–SW6')).toEqual(['SW3', 'SW4', 'SW5', 'SW6']);
+    expect(expandRefdes('R1-4')).toEqual(['R1', 'R2', 'R3', 'R4']);
+    expect(expandRefdes('SW3-SW16')).toHaveLength(14);
+  });
+
+  it('leaves a plain refdes, and anything ambiguous, alone', () => {
+    expect(expandRefdes('U1')).toEqual(['U1']);
+    expect(expandRefdes('`BT1`')).toEqual(['BT1']);
+    expect(expandRefdes('R1-C4')).toEqual(['R1-C4']); // not a range over one prefix
+    expect(expandRefdes('C8-C5')).toEqual(['C8-C5']); // descending: not a range
+    expect(expandRefdes('')).toEqual([]);
+  });
+
+  it('refuses to materialise an absurd range', () => {
+    expect(expandRefdes('R1-R99999')).toEqual(['R1-R99999']);
+  });
+});
+
+describe('toolSearch: a match is a pointer, not a payload', () => {
+  /**
+   * A stage attempt died with `Prompt is too long · the request is ~1003121
+   * tokens (limit 1000000) but this conversation is only ~403383 tokens`. The
+   * balance was search results: the repo held a `run-logs/` directory of
+   * transcripts, and one `transcript.jsonl` line is an entire record with tool
+   * output inline. The file-size bound (5 MB) does not bound a line.
+   */
+  it('clips a pathological single line instead of returning it whole', async () => {
+    const repo = await mkdtemp(path.join(tmpdir(), 'copperhead-search-'));
+    try {
+      const huge = `{"ts":1,"type":"tool","data":"${'x'.repeat(200_000)} NEEDLE"}`;
+      await writeFile(path.join(repo, 'transcript.jsonl'), `${huge}\n`, 'utf8');
+      const matches = await toolSearch(repo, 'NEEDLE');
+      expect(matches).toHaveLength(1);
+      expect(matches[0]!.text.length).toBeLessThan(500);
+      expect(matches[0]!.text).toContain('[+');
+    } finally {
+      await rm(repo, { recursive: true, force: true });
+    }
+  });
+
+  it('leaves an ordinary line untouched', async () => {
+    const repo = await mkdtemp(path.join(tmpdir(), 'copperhead-search-ok-'));
+    try {
+      await writeFile(path.join(repo, 'a.md'), 'the NEEDLE is here\n', 'utf8');
+      const matches = await toolSearch(repo, 'NEEDLE');
+      expect(matches[0]!.text).toBe('the NEEDLE is here');
+    } finally {
+      await rm(repo, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('merged nets are refused, not warned about', () => {
+  /**
+   * Attempt 1 of a live stage 4 drew ISET (charge-current program) and NTC
+   * (thermistor input) onto one node of a BQ24040: `Both ISET and NTC are
+   * attached to the same items; ISET will be used in the netlist`. ERC calls
+   * that a warning. The board it describes charges at the wrong current with no
+   * temperature cutoff, and nothing in the pipeline stopped it.
+   */
+  it('draftToText refuses when two nets share a label point', async () => {
+    const repo = await mkdtemp(path.join(tmpdir(), 'copperhead-merged-'));
+    try {
+      await cp(path.join(DRAFT_FIXTURE, 'docs'), path.join(repo, 'docs'), { recursive: true });
+      const intent = JSON.parse(await readFile(path.join(DRAFT_FIXTURE, 'schematic.intent.json'), 'utf8'));
+      await writeFile(path.join(repo, 'schematic.intent.json'), JSON.stringify(intent), 'utf8');
+
+      const clean = await draftToText({
+        repoRoot: repo,
+        schematic: 'board.kicad_sch',
+        intentPath: 'schematic.intent.json',
+        docsDir: path.join(repo, 'docs'),
+        symbolDirs: [SYMLIB],
+      });
+      // The fixture is a good board: it must not trip the new gate.
+      expect(clean.ok).toBe(true);
+      expect(clean.report!.mergedNets).toEqual([]);
+    } finally {
+      await rm(repo, { recursive: true, force: true });
+    }
+  });
+
+  it('detects the exact BQ24040 case: two nets, one point', () => {
+    const merged = findMergedNets([
+      { name: 'ISET', x: 100, y: 50 },
+      { name: 'NTC', x: 100, y: 50 },
+      { name: 'VBUS', x: 20, y: 10 },
+    ]);
+    expect(merged).toEqual([{ x: 100, y: 50, nets: ['ISET', 'NTC'] }]);
+  });
+
+  it('does not flag the same net labelled twice at one point', () => {
+    // Legitimate: a net can carry a label at both ends of a stub.
+    expect(findMergedNets([
+      { name: 'VBUS', x: 10, y: 10 },
+      { name: 'VBUS', x: 10, y: 10 },
+    ])).toEqual([]);
+  });
+
+  it('reports each colliding point once, with nets sorted', () => {
+    const merged = findMergedNets([
+      { name: 'LEDG_K', x: 5, y: 5 },
+      { name: 'LEDB_K', x: 5, y: 5 },
+      { name: 'BAT_NEG', x: 9, y: 9 },
+      { name: 'G_CHG', x: 9, y: 9 },
+    ]);
+    expect(merged).toEqual([
+      { x: 9, y: 9, nets: ['BAT_NEG', 'G_CHG'] },
+      { x: 5, y: 5, nets: ['LEDB_K', 'LEDG_K'] },
+    ]);
+  });
+});

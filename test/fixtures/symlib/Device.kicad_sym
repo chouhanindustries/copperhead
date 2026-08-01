@@ -59,4 +59,10 @@
 			)
 		)
 	)
+	(symbol "R_Small_Derived"
+		(extends "R")
+		(property "Reference" "R" (at 2.032 0 90) (effects (font (size 1.27 1.27))))
+		(property "Value" "R_Small_Derived" (at 0 0 90) (effects (font (size 1.27 1.27))))
+		(property "ki_description" "derived-from-R fixture for the extends path" (at 0 0 0) (effects (font (size 1.27 1.27)) hide))
+	)
 )
