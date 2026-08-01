@@ -82,8 +82,61 @@ async function headingsOf(file: string): Promise<string[] | null> {
  */
 async function bomRowsOf(file: string): Promise<{ ref: string; value: string }[] | null> {
   if (!existsSync(file)) return null;
-  const rows = parseBomTable(await readFile(file, 'utf8')).map((r) => ({ ref: r.refdes, value: r.value ?? '' }));
+  const rows = parseBomTable(await readFile(file, 'utf8')).flatMap((r) =>
+    expandRefdes(r.refdes).map((ref) => ({ ref, value: r.value ?? '' })),
+  );
   return rows.length ? rows : null;
+}
+
+/**
+ * One BOM row can legitimately cover several parts. A docs author writes
+ * `| R1, R2 | 10k |` or `| C5-C8 | 100nF |` rather than four identical rows,
+ * and every part in the group shares the value and footprint that the row
+ * carries — which is exactly what this cross-check compares.
+ *
+ * Read literally, such a row is a part called "R1, R2" that matches nothing,
+ * so every member came back as "R1 is not a BOM.md row; add it to the BOM or
+ * drop it from the intent". A live run opened with 128 findings of that shape
+ * and the agent's way out was to rewrite BOM.md into one row per refdes — a
+ * doc edit forced by the reader, not by anything wrong with the doc.
+ *
+ * Expanded here: comma/slash lists (`R1, R2`, `C1/C2`) and numeric ranges over
+ * a shared prefix (`C5-C8`, `SW3–SW16`, en dash included). A cell that is not
+ * one of those shapes passes through untouched, so a refdes that merely
+ * contains a dash is unaffected. Ranges are capped — a malformed `R1-R99999`
+ * should not materialise 99k rows.
+ */
+const MAX_RANGE_EXPANSION = 256;
+
+export function expandRefdes(cell: string): string[] {
+  const raw = cell.replace(/`/g, '').trim();
+  if (!raw) return [];
+  const parts = raw
+    .split(/[,/]/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+  const out: string[] = [];
+  for (const part of parts) {
+    const range = /^([A-Za-z_]+)(\d+)\s*[-–—]\s*(?:([A-Za-z_]+))?(\d+)$/.exec(part);
+    if (!range) {
+      out.push(part);
+      continue;
+    }
+    const [, prefix, fromStr, endPrefix, toStr] = range;
+    // `R1-C4` is not a range over one prefix; leave it alone rather than guess.
+    if (endPrefix && endPrefix !== prefix) {
+      out.push(part);
+      continue;
+    }
+    const from = Number(fromStr);
+    const to = Number(toStr);
+    if (!Number.isFinite(from) || !Number.isFinite(to) || to < from || to - from + 1 > MAX_RANGE_EXPANSION) {
+      out.push(part);
+      continue;
+    }
+    for (let n = from; n <= to; n++) out.push(`${prefix}${n}`);
+  }
+  return out;
 }
 
 /**
@@ -249,6 +302,23 @@ export async function validateIntent(
         add(`${p.ref} is not a BOM.md row; add it to the BOM or drop it from the intent`);
         continue;
       }
+      // Drawability first, and independently of whether the two agree. Whether
+      // the cell can be drawn is a property of BOM.md alone, and the agent's
+      // first instinct on an unreadable sheet is to shorten the value in the
+      // intent — which makes the two differ. Reporting this only on a match
+      // answers that instinct with "differs from BOM.md's …" and never names the
+      // real problem, which is the loop this check exists to break: the fix is in
+      // the doc, not the intent.
+      if (looksLikeDescription(bomValue)) {
+        add(
+          `${p.ref}: BOM.md's Value is a description, not a component value ("${bomValue}"). ` +
+            `It is drawn on the sheet as ${p.ref}'s Value field, where it collides with neighbouring symbols ` +
+            `and fails the legibility gate — and you cannot shorten it in the intent alone, because this ` +
+            `cross-check requires the two to agree. Fix docs/BOM.md: put the component value in the Value column ` +
+            `(e.g. "500mAh Li-Po", "4.7uF", "1M") and move the prose to the Rationale column, then update the intent to match.`,
+        );
+        continue; // the value mismatch below would be noise next to this
+      }
       // Compared through the shared value key, not raw bytes: `1 MΩ` vs `1 Mohm`
       // and `4.7uF` vs `4.7 µF` are encoding differences with no electrical
       // meaning. `checkDrift` has always folded them (normalizeValue); this gate
@@ -256,19 +326,6 @@ export async function validateIntent(
       // pass drift could still be refused here, with no way to satisfy both.
       if (normalizeValue(bomValue) !== normalizeValue(p.value)) {
         add(`${p.ref} value "${p.value}" differs from BOM.md's "${bomValue}"`);
-        continue;
-      }
-      // Matching is not enough: the cell still has to be drawable. Reported
-      // against BOM.md explicitly, because the IR cannot fix it — the line
-      // above pins the IR value to this cell.
-      if (looksLikeDescription(bomValue)) {
-        add(
-          `${p.ref}: BOM.md's Value is a description, not a component value ("${bomValue}"). ` +
-            `It is drawn on the sheet as ${p.ref}'s Value field, where it collides with neighbouring symbols ` +
-            `and fails the legibility gate — and you cannot shorten it in the intent, because this cross-check ` +
-            `requires the two to agree. Fix docs/BOM.md: put the component value in the Value column ` +
-            `(e.g. "500mAh Li-Po", "4.7uF", "1M") and move the prose to the Rationale column, then update the intent to match.`,
-        );
       }
     }
   }

@@ -110,6 +110,26 @@ describe('validateIntent: BOM.md cross-check', () => {
     }
   });
 
+  it('names the description even when the intent has already been shortened', async () => {
+    const { repo, docs, cleanup } = await fixtureRepo();
+    try {
+      // The agent's first instinct on an unreadable sheet is to shorten the
+      // value in the IR — which makes the two differ. If the description check
+      // only ran on a match, that instinct would be answered with "differs from
+      // BOM.md's ..." and the agent would never learn the doc is the problem.
+      // That is the loop this check exists to break.
+      await setBomValue(docs, 'R1', '10k, divider top, 1% for the ADC path');
+      const res = await validateFixture(repo, docs); // intent still says plain "10k"
+      expect(res.ok).toBe(false);
+      const details = res.findings.map((f) => f.detail).filter((d) => d.includes('R1'));
+      expect(details.some((d) => d.includes('is a description, not a component value'))).toBe(true);
+      // and it is not drowned out by the mismatch it necessarily causes
+      expect(details.some((d) => d.includes('differs from BOM.md'))).toBe(false);
+    } finally {
+      await cleanup();
+    }
+  });
+
   it('folds encoding differences instead of failing on them (parity with checkDrift)', async () => {
     const { repo, docs, cleanup } = await fixtureRepo();
     try {

@@ -63,6 +63,22 @@ export async function draftToText(opts: DraftOptions): Promise<DraftResult> {
   // Date comes from the IR (hints.date), never the wall clock: the same IR
   // must emit identical bytes on every run and every day (design D4).
   const { model, report } = draftPlacement(validated, projectName, opts.today ?? intent.hints?.date ?? '2020-01-01');
+  // A merged net means the sheet does not implement the IR: two distinct nets
+  // share a label point, and KiCad resolves them to one. Refused rather than
+  // written, because the alternative is an electrically wrong board that ERC
+  // reports only as a `multiple_net_names` warning — quiet enough to reach
+  // layout and fabrication outputs. Nothing is written, exactly as on a
+  // validation failure, so a previously good sheet survives.
+  if (report.mergedNets.length) {
+    const findings = report.mergedNets.map((m) => ({
+      detail:
+        `nets ${m.nets.join(' and ')} share a label position at (${m.x}, ${m.y}), which merges them into one net — ` +
+        `the drawn netlist would not match the intent. This is an engine placement fault rather than an intent error, ` +
+        `so it is worth reporting with the intent that produced it; renaming one of the nets, or moving either ` +
+        `endpoint to a different pin, works around it.`,
+    }));
+    return { ok: false, findings, message: formatIrFindings(findings) };
+  }
   const text = emitSchematic(model);
   return {
     ok: true,

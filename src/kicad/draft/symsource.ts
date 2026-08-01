@@ -17,6 +17,14 @@ import { EMIT_VERSION } from '../emit.js';
 
 export const SYM_CACHE_DIR = 'sym-lib-cache';
 
+/**
+ * How many `(extends …)` hops to follow before treating a library as malformed.
+ * Real libraries chain at most one or two deep (a part variant extending a
+ * generic); anything deeper is a cycle, and following it would blow the stack
+ * mid-draft with no attributable message.
+ */
+const MAX_EXTENDS_DEPTH = 8;
+
 const atomAt = (node: SexpNode[] | undefined, idx: number): string | undefined => {
   const v = node?.[idx];
   return typeof v === 'string' ? v : undefined;
@@ -169,7 +177,7 @@ export class SymbolResolutionError extends Error {
       reason === 'no-library'
         ? `library for "${libId}" is not installed and not vendored`
         : reason === 'derived-unsupported'
-          ? `"${libId}" is a derived (extends) symbol, which the drafting engine does not support yet; use the base symbol`
+          ? `"${libId}" extends a symbol that cannot be followed (missing base name, or a cycle deeper than ${MAX_EXTENDS_DEPTH} hops); use the base symbol directly`
           : `"${libId}" does not exist in the library${candidates.length ? ` — closest: ${candidates.join(', ')}` : ''}`,
     );
   }
@@ -209,8 +217,47 @@ export class SymbolSource {
     this.libs.add(lib);
   }
 
+  /**
+   * A derived symbol (`(extends "Base")`) carries no geometry of its own: KiCad
+   * stores the pins and body once on the base and lets the derived entry
+   * override only properties (Value, Datasheet, description). Resolving one
+   * means inheriting the base's geometry under the derived name.
+   *
+   * Returns null for a symbol that does not extend anything, so the caller
+   * falls through to the ordinary path.
+   *
+   * `sourceText` is the BASE block verbatim. The emitter renames a vendored
+   * block to its lib_id on the way into `lib_symbols`
+   * (`emit.ts:renameSymbolBlock`), so the base geometry lands under the derived
+   * name with no rewriting here — the same mechanism that already renames every
+   * non-derived symbol, and the reason a sub-symbol suffix (`Base_0_1`) that no
+   * longer matches its parent is fine: KiCad accepts it, and the control-board
+   * corpus has been emitting exactly that shape all along.
+   *
+   * The derived entry's own property overrides are dropped. Nothing downstream
+   * reads them — the engine sets Reference, Value and Footprint from the IR —
+   * and keeping them would mean merging two property lists to no effect.
+   */
+  private async inherit(
+    libId: string,
+    lib: string,
+    node: SexpNode[],
+    depth: number,
+  ): Promise<ResolvedSymbol | null> {
+    const ext = child(node, 'extends');
+    if (!ext) return null;
+    const baseName = atomAt(ext, 1);
+    if (!baseName) throw new SymbolResolutionError(libId, 'derived-unsupported');
+    // A chain is legal (a derived symbol may extend another), a cycle is not —
+    // and a malformed library that extends itself would otherwise recurse until
+    // the stack gives out, mid-draft, with no attributable message.
+    if (depth >= MAX_EXTENDS_DEPTH) throw new SymbolResolutionError(libId, 'derived-unsupported');
+    const base = await this.resolve(`${lib}:${baseName}`, depth + 1);
+    return { libId, sourceText: base.sourceText, pins: base.pins, body: base.body, isPower: base.isPower };
+  }
+
   /** Resolve a lib_id: vendored copy first, else installed library (then vendor it). */
-  async resolve(libId: string): Promise<ResolvedSymbol> {
+  async resolve(libId: string, depth = 0): Promise<ResolvedSymbol> {
     const hit = this.cache.get(libId);
     if (hit) return hit;
 
@@ -241,8 +288,7 @@ export class SymbolSource {
     }
 
     const node = parseSymbolNode(block);
-    if (child(node, 'extends')) throw new SymbolResolutionError(libId, 'derived-unsupported');
-    const resolved: ResolvedSymbol = {
+    const resolved: ResolvedSymbol = (await this.inherit(libId, lib, node, depth)) ?? {
       libId,
       sourceText: block,
       pins: pinsOf(node),
