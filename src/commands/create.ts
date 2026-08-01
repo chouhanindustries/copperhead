@@ -150,7 +150,7 @@ export const STAGES: Stage[] = [
       });
     },
     prompt: () =>
-      'Stage 3: part selection. Write docs/BOM.md with the fixed table format (| Refdes | Value | Footprint | MPN | Rationale |). Every MPN you introduce is flagged UNVERIFIED with a datasheet-verifiable justification. Check leakage/quiescent current of every part against the power budget. Run check_drift before finishing.',
+      'Stage 3: part selection. Write docs/BOM.md with the fixed table format (| Refdes | Value | Footprint | MPN | Rationale |). The Value column holds the COMPONENT VALUE and nothing else — "4.7uF", "1M", "500mAh Li-Po", "STM32F103C8T6" — because stage 4 draws it on the sheet as that part\'s Value field, where a description ("1S Li-Po cell, 500 mAh, bare leads") collides with neighbouring symbols and fails the legibility gate. Put the prose in the Rationale column instead; that is the column for it, and nothing draws it. One row per refdes: a grouped row ("SW3-SW16", "C5-C8") is not a BOM row and the schematic stage cannot match it. Every MPN you introduce is flagged UNVERIFIED with a datasheet-verifiable justification. Check leakage/quiescent current of every part against the power budget. Run check_drift before finishing.',
   },
   {
     name: 'schematic',

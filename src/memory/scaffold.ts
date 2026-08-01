@@ -69,6 +69,11 @@ What the device is, top-level constraints and budgets.
 Every part: refdes, MPN, value, package, and WHY it was chosen. MPNs the agent
 introduces without a datasheet check are flagged UNVERIFIED.
 
+Value holds the component value only ("4.7uF", "1M", "500mAh Li-Po") — the
+schematic stage draws it as the symbol's Value field, so a description there
+collides with neighbouring symbols and fails the legibility gate. Prose belongs
+in Rationale. One row per refdes; a grouped row ("C5-C8") matches no symbol.
+
 ${bomTable(symbols)}
 `,
     'PINOUT.md': `# Pinout
