@@ -2,6 +2,7 @@ import { readFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { SymbolSource, SymbolResolutionError, type ResolvedSymbol } from './symsource.js';
+import { parseBomTable, normalizeValue } from '../../memory/bom-table.js';
 
 /**
  * The netlist-intent IR (`schematic.intent.json`): the compact declarative
@@ -66,19 +67,57 @@ async function headingsOf(file: string): Promise<string[] | null> {
   return names.length ? names : null;
 }
 
-/** BOM.md rows as { ref, value }, or null when the file/table is absent. */
+/**
+ * BOM.md rows as { ref, value }, or null when the file/table is absent.
+ *
+ * Goes through the shared canonical reader (`parseBomTable`) rather than
+ * scanning every pipe-line in the file. Two things followed from the old
+ * inline scan: a supporting table's rows (a quiescent-current roll-up, a cost
+ * summary) were read as parts, and a grouped row such as `| SW3-SW16 |` never
+ * matched the individual refdes in the IR — so `validateIntent` reported
+ * "SW3 is not a BOM.md row" against a BOM that was in fact correct, and the
+ * only way out was to rewrite the doc. `parseBomTable` reads only the
+ * Refdes-headed canonical table(s) and resolves Value by header *name*, which
+ * is the same discipline `checkDrift` and `export bom` already use.
+ */
 async function bomRowsOf(file: string): Promise<{ ref: string; value: string }[] | null> {
   if (!existsSync(file)) return null;
-  const text = await readFile(file, 'utf8');
-  const rows: { ref: string; value: string }[] = [];
-  for (const line of text.split('\n')) {
-    if (!line.startsWith('|') || line.includes('---')) continue;
-    const cols = line.split('|').map((c) => c.trim());
-    const ref = cols[1] ?? '';
-    if (!ref || ref.toLowerCase() === 'refdes') continue;
-    rows.push({ ref, value: cols[2] ?? '' });
-  }
+  const rows = parseBomTable(await readFile(file, 'utf8')).map((r) => ({ ref: r.refdes, value: r.value ?? '' }));
   return rows.length ? rows : null;
+}
+
+/**
+ * Is this BOM Value cell a component *value*, or a description?
+ *
+ * The Value cell is drawn on the sheet as the symbol's Value field, so its
+ * length is a layout input, not just documentation. A cell like
+ * `1S Li-Po cell, 500 mAh, bare leads` renders as 34 characters beside a
+ * battery symbol and collides with its neighbours — an error-severity
+ * legibility finding that `create`'s stage-4 contract refuses to pass.
+ *
+ * That is unrecoverable without this check. The IR is the agent's only lever
+ * on the drawn sheet (`edit_file` is refused on a drafted schematic), and the
+ * BOM cross-check below pins the IR value to this cell — so shortening the
+ * value in the IR fails validation, and leaving it fails legibility. The run
+ * that found this burned all three stage-4 attempts and 2h49m discovering the
+ * loop, twice, because the legibility findings never named BOM.md as the thing
+ * to change (see the deadlock issue).
+ *
+ * Heuristic, deliberately loose — it fires only on cells that are clearly
+ * prose, so a legitimately long value (`STM32F103C8T6`,
+ * `JST_PH_S2B-PH-K_1x02_P2.00mm`) is left alone:
+ *  - a comma-separated clause list where a later clause contains a space
+ *    (`4.7uF, X5R, 10V, 0603` is a value; `P-MOSFET, divider gate` is prose), or
+ *  - a cell that is simply too long to draw (> MAX_DRAWN_VALUE chars).
+ */
+const MAX_DRAWN_VALUE = 24;
+
+export function looksLikeDescription(value: string): boolean {
+  const v = value.replace(/`/g, '').trim();
+  if (!v) return false;
+  if (v.length > MAX_DRAWN_VALUE) return true;
+  const clauses = v.split(',').map((c) => c.trim());
+  return clauses.length > 1 && clauses.slice(1).some((c) => c.includes(' ') && /[a-z]{3}/i.test(c));
 }
 
 export function parseIntent(json: string): { intent: SchematicIntent | null; findings: IrFinding[] } {
@@ -206,8 +245,31 @@ export async function validateIntent(
     for (const p of partByRef.values()) {
       if (symbols.get(p.ref)?.isPower) continue;
       const bomValue = bomByRef.get(p.ref);
-      if (bomValue === undefined) add(`${p.ref} is not a BOM.md row; add it to the BOM or drop it from the intent`);
-      else if (bomValue !== p.value) add(`${p.ref} value "${p.value}" differs from BOM.md's "${bomValue}"`);
+      if (bomValue === undefined) {
+        add(`${p.ref} is not a BOM.md row; add it to the BOM or drop it from the intent`);
+        continue;
+      }
+      // Compared through the shared value key, not raw bytes: `1 MΩ` vs `1 Mohm`
+      // and `4.7uF` vs `4.7 µF` are encoding differences with no electrical
+      // meaning. `checkDrift` has always folded them (normalizeValue); this gate
+      // running stricter than the gate downstream of it meant an IR that would
+      // pass drift could still be refused here, with no way to satisfy both.
+      if (normalizeValue(bomValue) !== normalizeValue(p.value)) {
+        add(`${p.ref} value "${p.value}" differs from BOM.md's "${bomValue}"`);
+        continue;
+      }
+      // Matching is not enough: the cell still has to be drawable. Reported
+      // against BOM.md explicitly, because the IR cannot fix it — the line
+      // above pins the IR value to this cell.
+      if (looksLikeDescription(bomValue)) {
+        add(
+          `${p.ref}: BOM.md's Value is a description, not a component value ("${bomValue}"). ` +
+            `It is drawn on the sheet as ${p.ref}'s Value field, where it collides with neighbouring symbols ` +
+            `and fails the legibility gate — and you cannot shorten it in the intent, because this cross-check ` +
+            `requires the two to agree. Fix docs/BOM.md: put the component value in the Value column ` +
+            `(e.g. "500mAh Li-Po", "4.7uF", "1M") and move the prose to the Rationale column, then update the intent to match.`,
+        );
+      }
     }
   }
 
