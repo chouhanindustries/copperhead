@@ -71,40 +71,60 @@ async function headingsOf(file: string): Promise<string[] | null> {
  * BOM.md rows as { ref, value }, or null when the file/table is absent.
  *
  * Goes through the shared canonical reader (`parseBomTable`) rather than
- * scanning every pipe-line in the file. Two things followed from the old
- * inline scan: a supporting table's rows (a quiescent-current roll-up, a cost
- * summary) were read as parts, and a grouped row such as `| SW3-SW16 |` never
- * matched the individual refdes in the IR — so `validateIntent` reported
- * "SW3 is not a BOM.md row" against a BOM that was in fact correct, and the
- * only way out was to rewrite the doc. `parseBomTable` reads only the
- * Refdes-headed canonical table(s) and resolves Value by header *name*, which
- * is the same discipline `checkDrift` and `export bom` already use.
+ * scanning every pipe-line in the file: the old inline scan read a supporting
+ * table's rows (a quiescent-current roll-up, a cost summary) as parts.
+ * `parseBomTable` reads only the Refdes-headed canonical table(s) and resolves
+ * Value by header *name*, the same discipline `checkDrift` and `export bom`
+ * already use.
+ *
+ * Refdes cells are kept verbatim. A grouped row is NOT silently expanded into
+ * its members — see `groupedRowFor`.
  */
 async function bomRowsOf(file: string): Promise<{ ref: string; value: string }[] | null> {
   if (!existsSync(file)) return null;
-  const rows = parseBomTable(await readFile(file, 'utf8')).flatMap((r) =>
-    expandRefdes(r.refdes).map((ref) => ({ ref, value: r.value ?? '' })),
-  );
+  const rows = parseBomTable(await readFile(file, 'utf8')).map((r) => ({ ref: r.refdes, value: r.value ?? '' }));
   return rows.length ? rows : null;
 }
 
 /**
- * One BOM row can legitimately cover several parts. A docs author writes
- * `| R1, R2 | 10k |` or `| C5-C8 | 100nF |` rather than four identical rows,
- * and every part in the group shares the value and footprint that the row
- * carries — which is exactly what this cross-check compares.
+ * The grouped row covering `ref`, if one does — `| R1, R2 |` for R1, or
+ * `| C5-C8 |` for C6.
  *
- * Read literally, such a row is a part called "R1, R2" that matches nothing,
- * so every member came back as "R1 is not a BOM.md row; add it to the BOM or
- * drop it from the intent". A live run opened with 128 findings of that shape
- * and the agent's way out was to rewrite BOM.md into one row per refdes — a
- * doc edit forced by the reader, not by anything wrong with the doc.
+ * Used to diagnose a grouped row, never to accept one. Expanding it here would
+ * be the obvious convenience and it is the wrong call: the row carries ONE
+ * Rationale cell, and after the Value column was narrowed to component values
+ * the Rationale is where each part's purpose lives. Two 100nF capacitors with
+ * the same value routinely do different jobs — bulk on one rail, decoupling at
+ * a specific pin — and a shared row cannot say so. Accepting the group would
+ * make the BOM parse while quietly discarding the per-part reasoning that the
+ * rest of the pipeline (drift, review, the fab gate) reads.
  *
- * Expanded here: comma/slash lists (`R1, R2`, `C1/C2`) and numeric ranges over
- * a shared prefix (`C5-C8`, `SW3–SW16`, en dash included). A cell that is not
- * one of those shapes passes through untouched, so a refdes that merely
- * contains a dash is unaffected. Ranges are capped — a malformed `R1-R99999`
- * should not materialise 99k rows.
+ * So a group is reported, with the split spelled out. The alternative found in
+ * a live run — 128 bare "R1 is not a BOM.md row" findings — is the same
+ * requirement stated uselessly.
+ */
+function groupedRowFor(ref: string, rows: { ref: string; value: string }[]): string | null {
+  for (const row of rows) {
+    const members = expandRefdes(row.ref);
+    if (members.length > 1 && members.includes(ref)) return row.ref;
+  }
+  return null;
+}
+
+/**
+ * The individual refdes a grouped cell names: `R1, R2` → [R1, R2], `C5-C8` →
+ * [C5, C6, C7, C8]. A cell naming one part returns just that part.
+ *
+ * This exists to *recognise* a grouped row so it can be reported precisely
+ * (see `groupedRowFor`), not to accept one. The BOM contract is one row per
+ * refdes, because the row's single Rationale cell is where each part's purpose
+ * lives.
+ *
+ * Handles comma/slash lists (`R1, R2`, `C1/C2`) and numeric ranges over a
+ * shared prefix (`C5-C8`, `SW3–SW16`, en dash included). A cell that is not one
+ * of those shapes passes through untouched, so a refdes that merely contains a
+ * dash is unaffected. Ranges are capped: a malformed `R1-R99999` must not
+ * materialise 99k entries just to answer "is this a group?".
  */
 const MAX_RANGE_EXPANSION = 256;
 
@@ -299,7 +319,15 @@ export async function validateIntent(
       if (symbols.get(p.ref)?.isPower) continue;
       const bomValue = bomByRef.get(p.ref);
       if (bomValue === undefined) {
-        add(`${p.ref} is not a BOM.md row; add it to the BOM or drop it from the intent`);
+        const grouped = groupedRowFor(p.ref, bomRows);
+        add(
+          grouped === null
+            ? `${p.ref} is not a BOM.md row; add it to the BOM or drop it from the intent`
+            : `${p.ref} is covered by the grouped BOM.md row "${grouped}", which is not a row this cross-check can use. ` +
+              `Split it into one row per refdes: the row carries a single Rationale cell, and two parts with the same ` +
+              `value routinely serve different purposes (bulk on a rail vs. decoupling at one pin), so a shared row ` +
+              `cannot record why each one is there. Same Value and Footprint on each new row; give each its own Rationale.`,
+        );
         continue;
       }
       // Drawability first, and independently of whether the two agree. Whether
