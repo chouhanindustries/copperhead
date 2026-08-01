@@ -63,7 +63,16 @@ export function normalizeReport(raw: unknown, source: 'erc' | 'drc'): CheckRepor
   for (const v of r.violations ?? []) violations.push(normViolation(v));
   for (const v of r.unconnected_items ?? []) violations.push(normViolation(v));
   for (const v of r.schematic_parity ?? []) violations.push(normViolation(v));
-  return { ok: violations.length === 0, source, violations };
+  // `ok` gates the agent loop's repair-cycle counter and its finish() check
+  // (agent/tools.ts), so it has to mean "nothing left that the agent could
+  // fix" rather than "zero violations of any kind": a real board in a bare
+  // checkout carries permanent library-resolution warnings (missing vendor
+  // symbol/footprint libraries) that no edit can resolve. Counting those as
+  // blocking would burn every repair cycle on unfixable warnings before the
+  // agent ever gets to touch the actual request, and finish() would refuse
+  // forever. Warning-severity violations still appear in `violations` (the
+  // agent can see and act on them) — only the pass/fail gate ignores them.
+  return { ok: violations.every((v) => v.severity !== 'error'), source, violations };
 }
 
 export function formatViolations(report: CheckReport): string {
