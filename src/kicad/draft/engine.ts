@@ -30,6 +30,19 @@ const LABEL_HEIGHT = 1.27;
 const LABEL_ADVANCE = 0.6;
 /** How far a colliding label may ride its stub outward, in grid units. */
 const MAX_LABEL_NUDGE = 4;
+/**
+ * Fraction of labels allowed to still overlap a foreign net's label text after
+ * the de-collision pass has done what it can.
+ *
+ * Overlapping text boxes and coincident label POINTS are different failures and
+ * are treated differently. A shared point merges two nets (`findMergedNets`) and
+ * is always refused — the drawn netlist would not be the IR's. Overlapping text
+ * is a legibility defect: the sheet is harder to read, the netlist is correct.
+ * Refusing a whole draft over the second kind is what turned a real placement
+ * bug into a pipeline that could not finish, so a small budget is tolerated,
+ * counted, and reported rather than gated.
+ */
+const LABEL_OVERLAP_BUDGET = 0.02;
 
 const ceilU = (mm: number): number => Math.ceil(mm / U - 1e-9);
 const grid = (units: number): number => Math.round(units) * U;
@@ -63,6 +76,14 @@ export interface DraftReport {
    * not implement the IR, so the caller must refuse the draft.
    */
   mergedNets: { x: number; y: number; nets: string[] }[];
+  /**
+   * Labels whose TEXT still overlaps a foreign net's label after de-collision.
+   * The netlist is correct — these are legibility defects, tolerated up to
+   * `LABEL_OVERLAP_BUDGET` and always reported. Never a reason to refuse.
+   */
+  labelOverlaps: { x: number; y: number; nets: string[] }[];
+  /** Whether `labelOverlaps` exceeded the tolerated fraction of all labels. */
+  labelOverlapBudgetExceeded: boolean;
 }
 
 /**
@@ -146,6 +167,54 @@ function classifyNet(net: IntentNet, pinsOf: (ep: string) => DraftPin | null): {
 
 const boundsOverlap = (a: Bounds, b: Bounds): boolean =>
   a.minX < b.maxX - 0.01 && a.maxX > b.minX + 0.01 && a.minY < b.maxY - 0.01 && a.maxY > b.minY + 0.01;
+
+/**
+ * The box a label's text occupies, matching the legibility checker's
+ * conservative metrics. Shared by the de-collision pass and the overlap report
+ * so "clear" means one thing in the engine.
+ */
+const labelTextBox = (name: string, x: number, y: number, rot: number): Bounds => {
+  const w = Math.max(1, name.length) * LABEL_ADVANCE * LABEL_HEIGHT;
+  const h = LABEL_HEIGHT / 2;
+  return rot === 180
+    ? { minX: x - w, minY: y - h, maxX: x, maxY: y + h }
+    : { minX: x, minY: y - h, maxX: x + w, maxY: y + h };
+};
+
+/**
+ * Pairs of labels naming DIFFERENT nets whose text boxes overlap.
+ *
+ * Distinct from `findMergedNets`, which looks for a shared label *point*. A
+ * shared point is electrical — KiCad fuses the nets. Overlapping text is
+ * cosmetic: the sheet reads badly, the netlist is right. Reported one entry per
+ * colliding label position, nets sorted, so the same pair is not listed twice.
+ */
+export function findLabelOverlaps(
+  labels: { name: string; x: number; y: number; rot: number }[],
+): { x: number; y: number; nets: string[] }[] {
+  const out = new Map<string, { x: number; y: number; nets: Set<string> }>();
+  const boxes = labels.map((l) => labelTextBox(l.name, l.x, l.y, l.rot));
+  for (let i = 0; i < labels.length; i++) {
+    for (let j = i + 1; j < labels.length; j++) {
+      const a = labels[i]!;
+      const b = labels[j]!;
+      if (a.name === b.name) continue;
+      // an exact coincidence is a merged net, reported by findMergedNets; do
+      // not also count it here or one fault reads as two
+      if (a.x === b.x && a.y === b.y) continue;
+      if (!boundsOverlap(boxes[i]!, boxes[j]!)) continue;
+      for (const [l, other] of [[a, b], [b, a]] as const) {
+        const key = `${l.x},${l.y}`;
+        const e = out.get(key) ?? { x: l.x, y: l.y, nets: new Set<string>([l.name]) };
+        e.nets.add(other.name);
+        out.set(key, e);
+      }
+    }
+  }
+  return [...out.values()]
+    .map((e) => ({ x: e.x, y: e.y, nets: [...e.nets].sort() }))
+    .sort((a, b) => a.nets[0]!.localeCompare(b.nets[0]!) || a.x - b.x || a.y - b.y);
+}
 
 const segCrossesBody = (x1: number, y1: number, x2: number, y2: number, b: Bounds): boolean => {
   const inX = Math.max(Math.min(x1, x2), b.minX) < Math.min(Math.max(x1, x2), b.maxX) - 0.01;
@@ -617,13 +686,6 @@ export function draftPlacement(validated: ValidatedIntent, projectName: string, 
   // and walks each stub-anchored label outward a grid unit at a time until its
   // text box clears every foreign wire and body. The anchor rides the stub it
   // extends, so the label stays attached and connectivity never changes.
-  const labelTextBox = (name: string, x: number, y: number, rot: number): Bounds => {
-    const w = Math.max(1, name.length) * LABEL_ADVANCE * LABEL_HEIGHT;
-    const h = LABEL_HEIGHT / 2;
-    return rot === 180
-      ? { minX: x - w, minY: y - h, maxX: x, maxY: y + h }
-      : { minX: x, minY: y - h, maxX: x + w, maxY: y + h };
-  };
   const segHitsBox = (w: { x1: number; y1: number; x2: number; y2: number }, b: Bounds): boolean =>
     Math.min(w.x1, w.x2) < b.maxX - 0.01 &&
     Math.max(w.x1, w.x2) > b.minX + 0.01 &&
@@ -635,22 +697,60 @@ export function draftPlacement(validated: ValidatedIntent, projectName: string, 
     const clearAt = (x: number, y: number): boolean => {
       const box = labelTextBox(lb.name, x, y, lb.rot);
       if (bodies.some((b) => boundsOverlap(box, b))) return false;
-      return !wires.some((w, i) => i !== rec.wire && segHitsBox(w, box));
+      if (wires.some((w, i) => i !== rec.wire && segHitsBox(w, box))) return false;
+      // Foreign labels are part of what a label must clear, not just bodies and
+      // wires. Without this the pass declares a point clear that another net's
+      // label already holds, both labels stay put, and `findMergedNets` then
+      // refuses the draft for a collision the avoider was never looking for —
+      // an engine state no IR can steer out of, because the IR does not choose
+      // coordinates. Read live from `labels`, so already-nudged neighbours are
+      // seen at their final positions and immovable wired-net labels (which
+      // carry no stub to ride) are seen at all.
+      return !labels.some(
+        (o, i) =>
+          i !== rec.label &&
+          o.name !== lb.name &&
+          boundsOverlap(box, labelTextBox(o.name, o.x, o.y, o.rot)),
+      );
+    };
+    /**
+     * Does another net's label sit on exactly this point? That is the fatal
+     * case — KiCad fuses the two nets — as opposed to merely overlapping text.
+     */
+    const mergesAt = (x: number, y: number): boolean =>
+      labels.some((o, i) => i !== rec.label && o.name !== lb.name && o.x === x && o.y === y);
+    const rideTo = (x: number, y: number): void => {
+      stub.x2 = x;
+      stub.y2 = y;
+      lb.x = x;
+      lb.y = y;
     };
     if (clearAt(lb.x, lb.y)) continue;
+    /** Candidate points along the stub, nearest first. */
+    const candidates: { x: number; y: number }[] = [];
     for (let extra = 1; extra <= MAX_LABEL_NUDGE; extra++) {
       const x = lb.x + rec.o.dx * extra * U;
       const y = lb.y + rec.o.dy * extra * U;
       // an extension that would run the stub through a symbol is no better
       // than the collision it fixes
       if (bodies.some((b) => segCrossesBody(stub.x1, stub.y1, x, y, b))) break;
-      if (!clearAt(x, y)) continue;
-      stub.x2 = x;
-      stub.y2 = y;
-      lb.x = x;
-      lb.y = y;
-      break;
+      candidates.push({ x, y });
     }
+    const clear = candidates.find((c) => clearAt(c.x, c.y));
+    if (clear) {
+      rideTo(clear.x, clear.y);
+      continue;
+    }
+    // Nothing fully clear within the nudge budget. Overlapping text is a
+    // legibility cost the sheet can carry and the report will name; a shared
+    // point is a merged net and refuses the whole draft. So when the label is
+    // currently ON another net's point, take the nearest candidate that at
+    // least breaks the coincidence — trading a refusal for a flagged blemish.
+    // A label that merely overlaps is left alone: moving it would buy nothing
+    // and the emitted sheet must stay a function of the IR alone.
+    if (!mergesAt(lb.x, lb.y)) continue;
+    const unmerged = candidates.find((c) => !mergesAt(c.x, c.y));
+    if (unmerged) rideTo(unmerged.x, unmerged.y);
   }
 
   // junctions: any point where three or more wire ends meet
@@ -769,6 +869,30 @@ export function draftPlacement(validated: ValidatedIntent, projectName: string, 
   // the IR declared is not the netlist that got drawn.
   const mergedNets = findMergedNets(labels);
 
+  // Overlapping label TEXT is the other half of the same pass and deliberately
+  // not a gate. The de-collision loop clears what it can and, where it cannot,
+  // prefers a legible-but-overlapping position over a merged net. What survives
+  // is counted against a budget and named in the report, so a sheet never ships
+  // a blemish silently and never stalls a run over one either.
+  const labelOverlaps = findLabelOverlaps(labels);
+  const labelOverlapBudgetExceeded =
+    labels.length > 0 && labelOverlaps.length / labels.length > LABEL_OVERLAP_BUDGET;
+  if (labelOverlaps.length) {
+    const pct = ((labelOverlaps.length / Math.max(1, labels.length)) * 100).toFixed(1);
+    const where = labelOverlaps
+      .slice(0, 8)
+      .map((o) => `${o.nets.join('/')} at (${o.x}, ${o.y})`)
+      .join('; ');
+    notes.push(
+      `${labelOverlapBudgetExceeded ? 'LABEL OVERLAP BUDGET EXCEEDED: ' : ''}` +
+        `${labelOverlaps.length} of ${labels.length} label(s) (${pct}%, budget ` +
+        `${(LABEL_OVERLAP_BUDGET * 100).toFixed(1)}%) overlap a foreign net's label text. ` +
+        `The netlist is unaffected — these are legibility defects, listed so they can be ` +
+        `fixed or accepted deliberately: ${where}` +
+        `${labelOverlaps.length > 8 ? `; and ${labelOverlaps.length - 8} more` : ''}`,
+    );
+  }
+
   const model: PlacementModel = {
     projectName,
     paper: paper.name,
@@ -798,6 +922,8 @@ export function draftPlacement(validated: ValidatedIntent, projectName: string, 
     paper: paper.name,
     notes,
     mergedNets,
+    labelOverlaps,
+    labelOverlapBudgetExceeded,
   };
   return { model, report };
 }
