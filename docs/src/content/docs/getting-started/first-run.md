@@ -27,7 +27,17 @@ Nothing, or a number below 20? Install it from [nodejs.org](https://nodejs.org/)
 
 ### 2. KiCad 8 or newer
 
-Install the desktop app; copperhead drives the `kicad-cli` tool that ships inside it. The [download page](https://www.kicad.org/download/) asks you to pick a platform and then a mirror — any mirror works, so take the one nearest you.
+Install the desktop app; copperhead drives the `kicad-cli` tool that ships inside it.
+
+The [download page](https://www.kicad.org/download/) makes you choose a platform and then a mirror, which is a lot of decisions for a file that is the same from every one of them. Any mirror works: take whichever is nearest you. These start the download for the current stable release directly:
+
+| Platform | Direct download |
+| --- | --- |
+| Windows x64 | [kicad-10.0.5-x86_64.exe](https://github.com/KiCad/kicad-source-mirror/releases/download/10.0.5/kicad-10.0.5-x86_64.exe) (Asia: [Tsinghua](https://mirror.tuna.tsinghua.edu.cn/kicad/windows/stable/kicad-10.0.5-x86_64.exe), Europe: [CERN](https://kicad-downloads.s3.cern.ch/windows/stable/kicad-10.0.5-x86_64.exe)) |
+| macOS | [kicad.org/download/macos](https://www.kicad.org/download/macos/) |
+| Linux | [kicad.org/download](https://www.kicad.org/download/) (use your distribution's package) |
+
+It is roughly a 1 GB download and the installer takes a few minutes, so start it before you read on. Any KiCad 8 or newer works; the links above are simply the current release at the time of writing.
 
 :::caution[KiCad does not put itself on your PATH]
 This is the single most common setup failure, and the error you get (`kicad-cli not found on PATH`) does not say that KiCad is installed fine and merely invisible. It usually is.
@@ -160,10 +170,22 @@ export ANTHROPIC_API_KEY=...           # or OPENAI_API_KEY, not both
 run failed: provider error: Failed to authenticate. API Error: 401 OAuth access token is invalid.
 ```
 
-Check the length rather than eyeballing it — a real token is roughly 100+ characters with no spaces:
+Check the length rather than eyeballing it: a real token is roughly 100 characters or more, with no spaces anywhere.
 
 ```powershell
 $env:CLAUDE_CODE_OAUTH_TOKEN.Length
+```
+
+From Windows `cmd`, where that syntax does not exist:
+
+```text
+powershell -c "$env:CLAUDE_CODE_OAUTH_TOKEN.Length"
+```
+
+From bash:
+
+```bash
+echo ${#CLAUDE_CODE_OAUTH_TOKEN}
 ```
 
 The quotes in `set "VAR=value"` and `export VAR="value"` above are what keep a stray space from truncating the value.
