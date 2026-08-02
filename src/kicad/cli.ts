@@ -142,6 +142,21 @@ export function setKicadFallbackBinaries(paths?: readonly string[]): void {
   fallbackBinaries = paths ?? FALLBACK_BINARIES;
 }
 
+/**
+ * Check whether kicad-cli is available and executable on this machine.
+ * Returns true only when `kicad-cli version` exits with code 0.
+ * Safe to call in tests — never throws.
+ */
+export async function kicadCliAvailable(): Promise<boolean> {
+  try {
+    const bin = resolveKicadCli();
+    const res = await runKicad(['version'], { reject: false });
+    return res.exitCode === 0;
+  } catch {
+    return false;
+  }
+}
+
 export async function kicadCliVersion(): Promise<string> {
   const res = await runKicad(['version']);
   return String(res.stdout ?? '').trim();

@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import path from 'node:path';
 import { writeFile, readFile } from 'node:fs/promises';
 import { runInit } from '../src/memory/scaffold.js';
+import { kicadCliAvailable } from '../src/kicad/cli.js';
 import { loadConfig } from '../src/config.js';
 import { availableTools, dispatchTool, type RunContext } from '../src/agent/tools.js';
 import { ObligationsLedger } from '../src/agent/ledger.js';
@@ -71,6 +72,11 @@ describe('spec gating: structural edit lock (invariant 1)', () => {
   });
 
   it('finish blocks on open obligations and unverified ERC', async () => {
+    // Skip when kicad-cli is not available — run_erc needs real KiCad
+    if (!(await kicadCliAvailable())) {
+      console.warn('Skipping ERC gate test: kicad-cli not found on PATH');
+      return;
+    }
     const { repo, cleanup } = await tempFixtureRepo();
     try {
       await runInit({ repoRoot: repo });
