@@ -73,9 +73,12 @@ export async function draftToText(opts: DraftOptions): Promise<DraftResult> {
     const findings = report.mergedNets.map((m) => ({
       detail:
         `nets ${m.nets.join(' and ')} share a label position at (${m.x}, ${m.y}), which merges them into one net — ` +
-        `the drawn netlist would not match the intent. This is an engine placement fault rather than an intent error, ` +
-        `so it is worth reporting with the intent that produced it; renaming one of the nets, or moving either ` +
-        `endpoint to a different pin, works around it.`,
+        `the drawn netlist would not match the intent. This is an engine placement fault, not an intent error: the ` +
+        `de-collision pass already treats foreign labels as obstacles and, failing that, moves a label off a shared ` +
+        `point even at the cost of overlapping text, so reaching this state means both labels were immovable ` +
+        `(wired-net labels carry no stub to ride) or the sheet is too dense to separate them. Reshaping the IR is ` +
+        `unlikely to help and should not be attempted more than once — report it against the engine with the intent ` +
+        `that produced it.`,
     }));
     return { ok: false, findings, message: formatIrFindings(findings) };
   }

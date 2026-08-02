@@ -5,7 +5,7 @@ import { mkdtemp, cp, rm, readFile, writeFile, mkdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { SymbolSource, SymbolResolutionError } from '../src/kicad/draft/symsource.js';
 import { draftToText } from '../src/kicad/draft/draft.js';
-import { findMergedNets } from '../src/kicad/draft/engine.js';
+import { findMergedNets, findLabelOverlaps } from '../src/kicad/draft/engine.js';
 import { toolSearch } from '../src/agent/filetools.js';
 
 /**
@@ -155,5 +155,73 @@ describe('merged nets are refused, not warned about', () => {
       { x: 9, y: 9, nets: ['BAT_NEG', 'G_CHG'] },
       { x: 5, y: 5, nets: ['LEDB_K', 'LEDG_K'] },
     ]);
+  });
+});
+
+describe('overlapping label text is a budget, not a gate', () => {
+  /**
+   * Stage 4 of a live run refused thirteen times in a row on one collision:
+   * RX_ADC (a stick axis) and SWDCLK_CTRL assigned the same label point. The
+   * de-collision pass tested a candidate position against symbol bodies and
+   * wires but never against other LABELS, so it declared a point clear that
+   * another net already held; neither label moved, and findMergedNets then
+   * refused the draft. The agent could not reach the fault — it does not choose
+   * coordinates — so it burned ~120k output tokens on net renames, endpoint
+   * moves, three paper sizes and five group orderings before giving up. The
+   * avoider's notion of "clear" now matches the detector's.
+   */
+  it('flags foreign-net label text that overlaps', () => {
+    // Two labels on the same row, close enough that "SWDCLK_CTRL" runs into
+    // where "RX_ADC" starts.
+    const overlaps = findLabelOverlaps([
+      { name: 'SWDCLK_CTRL', x: 100, y: 50, rot: 0 },
+      { name: 'RX_ADC', x: 103, y: 50, rot: 0 },
+      { name: 'VBAT', x: 10, y: 10, rot: 0 },
+    ]);
+    expect(overlaps.map((o) => o.nets)).toEqual([['RX_ADC', 'SWDCLK_CTRL'], ['RX_ADC', 'SWDCLK_CTRL']]);
+    expect(overlaps.map((o) => o.x).sort((a, b) => a - b)).toEqual([100, 103]);
+  });
+
+  it('does not flag one net labelled twice, or labels that clear each other', () => {
+    expect(findLabelOverlaps([
+      { name: 'VBAT', x: 100, y: 50, rot: 0 },
+      { name: 'VBAT', x: 101, y: 50, rot: 0 },
+    ])).toEqual([]);
+    expect(findLabelOverlaps([
+      { name: 'SWDCLK_CTRL', x: 100, y: 50, rot: 0 },
+      { name: 'RX_ADC', x: 100, y: 80, rot: 0 },
+    ])).toEqual([]);
+  });
+
+  it('leaves an exact coincidence to findMergedNets, so one fault is not counted twice', () => {
+    const labels = [
+      { name: 'RX_ADC', x: 100, y: 50, rot: 0 },
+      { name: 'SWDCLK_CTRL', x: 100, y: 50, rot: 0 },
+    ];
+    expect(findMergedNets(labels)).toHaveLength(1);
+    expect(findLabelOverlaps(labels)).toEqual([]);
+  });
+
+  it('a good board reports no overlaps and stays inside the budget', async () => {
+    const repo = await mkdtemp(path.join(tmpdir(), 'copperhead-overlap-'));
+    try {
+      await cp(path.join(DRAFT_FIXTURE, 'docs'), path.join(repo, 'docs'), { recursive: true });
+      const intent = JSON.parse(await readFile(path.join(DRAFT_FIXTURE, 'schematic.intent.json'), 'utf8'));
+      await writeFile(path.join(repo, 'schematic.intent.json'), JSON.stringify(intent), 'utf8');
+
+      const res = await draftToText({
+        repoRoot: repo,
+        schematic: 'board.kicad_sch',
+        intentPath: 'schematic.intent.json',
+        docsDir: path.join(repo, 'docs'),
+        symbolDirs: [SYMLIB],
+      });
+      expect(res.ok).toBe(true);
+      expect(res.report!.mergedNets).toEqual([]);
+      expect(res.report!.labelOverlaps).toEqual([]);
+      expect(res.report!.labelOverlapBudgetExceeded).toBe(false);
+    } finally {
+      await rm(repo, { recursive: true, force: true });
+    }
   });
 });
