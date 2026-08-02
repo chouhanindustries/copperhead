@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import path from 'node:path';
 import { readFile, writeFile, mkdir } from 'node:fs/promises';
-import { dispatchTool, type RunContext } from '../src/agent/tools.js';
+import { dispatchTool, freshEditCounters, type RunContext } from '../src/agent/tools.js';
 import { ObligationsLedger } from '../src/agent/ledger.js';
 import { Transcript } from '../src/agent/transcript.js';
 import { kicadLoadError, isProbeableKicadFile } from '../src/kicad/cli.js';
@@ -38,6 +38,7 @@ async function makeCtx(repo: string): Promise<RunContext> {
     lastDrc: null,
     repairCycles: 0,
     finishRequest: null,
+    ...freshEditCounters(),
   };
 }
 

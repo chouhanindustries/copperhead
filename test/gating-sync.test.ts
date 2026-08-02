@@ -3,7 +3,7 @@ import path from 'node:path';
 import { writeFile, readFile } from 'node:fs/promises';
 import { runInit } from '../src/memory/scaffold.js';
 import { loadConfig } from '../src/config.js';
-import { availableTools, dispatchTool, type RunContext } from '../src/agent/tools.js';
+import { availableTools, dispatchTool, freshEditCounters, type RunContext } from '../src/agent/tools.js';
 import { ObligationsLedger } from '../src/agent/ledger.js';
 import { Transcript } from '../src/agent/transcript.js';
 import {
@@ -35,6 +35,7 @@ async function makeCtx(repo: string): Promise<RunContext> {
     lastDrc: null,
     repairCycles: 0,
     finishRequest: null,
+    ...freshEditCounters(),
   };
 }
 

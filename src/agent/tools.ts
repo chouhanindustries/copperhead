@@ -38,6 +38,26 @@ export interface RunContext {
   lastDrc: CheckReport | null;
   repairCycles: number;
   finishRequest: FinishRequest | null;
+  /**
+   * KiCad edits accepted since the matching check last ran, per file kind
+   * (issue #145 §B3). `run_erc` zeroes `sch`, `run_drc` zeroes `pcb`, whether or
+   * not the check passed — a failing check must still let the repair edit
+   * through, or repair deadlocks.
+   */
+  unverifiedEdits: { sch: number; pcb: number };
+  /** Accepted file mutations since the last checkpoint commit. */
+  editsSinceCheckpoint: number;
+  /** Run-wide edit pressure, counted where the byte count is exact (§A). */
+  editCounts: { edits: number; editBytes: number; largestEditBytes: number; verifications: number };
+}
+
+/** The zeroed counters every run starts from. */
+export function freshEditCounters(): Pick<RunContext, 'unverifiedEdits' | 'editsSinceCheckpoint' | 'editCounts'> {
+  return {
+    unverifiedEdits: { sch: 0, pcb: 0 },
+    editsSinceCheckpoint: 0,
+    editCounts: { edits: 0, editBytes: 0, largestEditBytes: 0, verifications: 0 },
+  };
 }
 
 export interface ToolDef {
@@ -71,15 +91,59 @@ export function corruptionError(fields: Record<string, unknown>): string | null 
   return `rejected: the ${bad.join(', ')} value contains U+FFFD (�), the replacement character that signals a UTF-8 decoding error — a special character (e.g. Ω, µ, ±, °) was likely mangled in transit. Re-send this exact call with the intended character written correctly, or spell it in ASCII (e.g. "ohm", "uF", "+/-", "deg").`;
 }
 
-function markTouched(ctx: RunContext, rel: string): void {
+/**
+ * Record an accepted mutation. `bytes` is the payload actually written, so the
+ * edit-pressure figures are exact rather than re-derived from the transcript;
+ * omit it for a bookkeeping touch that wrote no model-authored payload.
+ */
+function markTouched(ctx: RunContext, rel: string, bytes?: number): void {
   ctx.filesTouched.add(rel);
+  if (bytes !== undefined) {
+    ctx.editCounts.edits++;
+    ctx.editCounts.editBytes += bytes;
+    ctx.editCounts.largestEditBytes = Math.max(ctx.editCounts.largestEditBytes, bytes);
+    ctx.editsSinceCheckpoint++;
+  }
   if (isKicadFile(rel)) {
     ctx.ledger.onKicadEdit(rel);
-    if (rel.endsWith('.kicad_sch')) ctx.lastErc = null;
-    if (rel.endsWith('.kicad_pcb')) ctx.lastDrc = null;
+    if (rel.endsWith('.kicad_sch')) {
+      ctx.lastErc = null;
+      ctx.unverifiedEdits.sch++;
+    }
+    if (rel.endsWith('.kicad_pcb')) {
+      ctx.lastDrc = null;
+      ctx.unverifiedEdits.pcb++;
+    }
   } else if (rel.endsWith('.md')) {
     ctx.ledger.onDocEdit(rel);
   }
+}
+
+/** Which verification a KiCad file kind is paired with, or null when unpaired
+ *  (`.kicad_pro`/`.kicad_sym`/`.kicad_mod` have no standalone check). */
+function verifyKindOf(rel: string): 'sch' | 'pcb' | null {
+  if (rel.endsWith('.kicad_sch')) return 'sch';
+  if (rel.endsWith('.kicad_pcb')) return 'pcb';
+  return null;
+}
+
+/**
+ * "You are here" for a refusal message: the model that just tried to write a
+ * whole subsystem in one block needs to know how much of the design is already
+ * captured, or it re-emits the same block. Best-effort — an unparseable file
+ * must not turn a size refusal into an error.
+ */
+async function placedUnits(abs: string, rel: string): Promise<string> {
+  try {
+    if (rel.endsWith('.kicad_sch')) return `${(await listSymbols(abs)).length} symbol(s) currently in this schematic`;
+    if (rel.endsWith('.kicad_pcb')) {
+      const text = await readFile(abs, 'utf8');
+      return `${(text.match(/\(footprint[\s(]/g) ?? []).length} footprint(s) currently on this board`;
+    }
+  } catch {
+    /* fall through to the count-unavailable wording */
+  }
+  return 'symbol/footprint count unavailable (the file could not be parsed)';
 }
 
 export const TOOLS: ToolDef[] = [
@@ -239,6 +303,33 @@ export const TOOLS: ToolDef[] = [
       if (corrupt) return corrupt;
       const rel = str(args, 'path');
       const abs = resolveInRepo(ctx.repoRoot, rel);
+      const kind = verifyKindOf(rel);
+      // Both gates below refuse BEFORE anything is written, so a refused call
+      // leaves the file byte-identical (issue #145 §B). They are mechanisms
+      // rather than prompt text on purpose: the stage-4 prompt has always said
+      // "work ONE part at a time" and the measured run still batched 8.5 edits
+      // per verification, with a 17.9 kB single block among them.
+      const payload = typeof args.new_string === 'string' ? args.new_string : '';
+      const size = Buffer.byteLength(payload, 'utf8');
+      if (ctx.config.maxEditBytes > 0 && isKicadFile(rel) && size > ctx.config.maxEditBytes) {
+        return [
+          `edit REFUSED: new_string is ${size} bytes, over the ${ctx.config.maxEditBytes}-byte per-edit cap for KiCad files.`,
+          `Nothing was written; ${rel} is unchanged (${await placedUnits(abs, rel)}).`,
+          'Split this into one unit per edit — a single lib_symbols entry, a single symbol placement, or a single net\'s wires — and verify between them.',
+          'A block this large must land perfectly or be rewritten whole, which is exactly how runs lose their work mid-response.',
+          `Raise "maxEditBytes" in .copperhead/config.json if a single legitimate unit genuinely needs more (0 disables the cap).`,
+        ].join('\n');
+      }
+      if (ctx.config.maxUnverifiedEdits > 0 && kind && ctx.unverifiedEdits[kind] >= ctx.config.maxUnverifiedEdits) {
+        const check = kind === 'sch' ? 'run_erc' : 'run_drc';
+        return [
+          `edit REFUSED: ${ctx.unverifiedEdits[kind]} edit(s) to the ${kind === 'sch' ? 'schematic' : 'board'} have not been verified yet` +
+            ` (limit ${ctx.config.maxUnverifiedEdits}).`,
+          `Nothing was written; ${rel} is unchanged.`,
+          `Call ${check} first, fix anything it reports, then make the next edit. You may batch ${check} and the next edit_file in one reply.`,
+          'Set "maxUnverifiedEdits" in .copperhead/config.json to change the limit (0 disables the gate).',
+        ].join('\n');
+      }
       // Text edits can corrupt an s-expression file in ways the editor cannot
       // see; a corrupted file then fails every later ERC/DRC with an opaque
       // error. Validate loadability with KiCad itself and roll the edit back
@@ -264,13 +355,13 @@ export const TOOLS: ToolDef[] = [
             // unless one edit fixes the whole file), so keep the edit and
             // keep the pressure on with the probe output.
             await writeFile(abs, after, 'utf8');
-            markTouched(ctx, rel);
+            markTouched(ctx, rel, size);
             return `${res}\nnote: ${rel} was already unloadable before this edit, so the edit is KEPT. Keep repairing until it loads. kicad-cli says:\n${loadErr}`;
           }
           return `edit REVERTED: it would make ${rel} unloadable in KiCad. kicad-cli says:\n${loadErr}\nRe-read the surrounding file text and make a smaller, syntactically complete edit.`;
         }
       }
-      markTouched(ctx, rel);
+      markTouched(ctx, rel, size);
       return res;
     },
   },
@@ -291,7 +382,7 @@ export const TOOLS: ToolDef[] = [
       if (corrupt) return corrupt;
       const rel = str(args, 'path');
       const res = await toolWriteFile(ctx.repoRoot, rel, args.content as string);
-      markTouched(ctx, rel);
+      markTouched(ctx, rel, Buffer.byteLength(typeof args.content === 'string' ? args.content : '', 'utf8'));
       return res;
     },
   },
@@ -308,6 +399,12 @@ export const TOOLS: ToolDef[] = [
       const schPath = path.join(ctx.repoRoot, ctx.config.schematic);
       const report = await runErc(schPath);
       ctx.lastErc = report;
+      // Reset on pass AND on fail: the gate exists to bound how much unverified
+      // mutation piles up, not to punish a failing check. Resetting only on a
+      // pass would deadlock repair — the edit that fixes the violation would be
+      // the very edit the gate refuses.
+      ctx.unverifiedEdits.sch = 0;
+      ctx.editCounts.verifications++;
       if (report.ok) ctx.ledger.clear('erc');
       else ctx.repairCycles++;
       const out = formatViolations(report);
@@ -356,6 +453,9 @@ export const TOOLS: ToolDef[] = [
         return 'no board configured; DRC does not apply yet — skip it until a board exists and is set in .copperhead/config.json';
       const report = await runDrc(path.join(ctx.repoRoot, ctx.config.board));
       ctx.lastDrc = report;
+      // Same reset-on-either-outcome rule as run_erc above.
+      ctx.unverifiedEdits.pcb = 0;
+      ctx.editCounts.verifications++;
       if (report.ok) ctx.ledger.clear('drc');
       else ctx.repairCycles++;
       return formatViolations(report);

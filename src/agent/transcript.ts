@@ -3,12 +3,18 @@ import path from 'node:path';
 import { redactSecrets } from '../util/redact.js';
 import { renderEnvironmentSection, type RunMeta } from './runmeta.js';
 import { fmtDuration, fmtTokens } from './render.js';
+import type { EditPressure, TurnCostSummary, TurnSample } from './turn-metrics.js';
 
 /** How a run terminated — the single most-queried triage fact (AC-8.5). */
 export type ExitPath =
   | 'done'
   | 'refused'
   | 'turn-budget-exhausted'
+  // Kept distinct from turn exhaustion on purpose: the create pipeline escalates
+  // the turn budget on `turn-budget-exhausted` (issue #135), and doing that for a
+  // run that overspent tokens or wall clock would be the wrong remedy.
+  | 'token-budget-exhausted'
+  | 'wall-budget-exhausted'
   | 'repair-cycles-exhausted'
   | 'commit-failed'
   | 'provider-error'
@@ -24,8 +30,13 @@ export interface RunStats {
   maxRepairCycles: number;
   tokensIn: number;
   tokensOut: number;
-  perTurn: { turn: number; in: number; out: number }[];
+  /** `ms` is this turn's wall time; absent on runs recorded before issue #145. */
+  perTurn: TurnSample[];
   durationMs: number;
+  /** Turn-cost concentration, derived from `perTurn` (issue #145 §A). */
+  turnCost?: TurnCostSummary;
+  /** How much unverified mutation the run accumulated per verification. */
+  editPressure?: EditPressure;
 }
 
 export interface RunSummaryData {
@@ -56,6 +67,22 @@ function renderRunStats(s: RunStats): string[] {
     `- **Duration:** ${fmtDuration(s.durationMs)}`,
     ...(s.perTurn.length
       ? [`- **Per turn:** ${s.perTurn.map((t) => `${t.turn}: ${t.in}/${t.out}`).join(' · ')}`]
+      : []),
+    // Concentration is the leading indicator issue #145 asks for: a run whose
+    // top-5 turns carry ~90% of the output is one interrupted response away from
+    // losing everything, and the totals above cannot show that.
+    ...(s.turnCost
+      ? [
+          `- **Turn cost:** p50 ${s.turnCost.p50TurnOut} · p95 ${s.turnCost.p95TurnOut} · max ${s.turnCost.maxTurnOut} out tokens · ` +
+            `top-5 share ${(s.turnCost.top5TurnShare * 100).toFixed(0)}%` +
+            (s.turnCost.slowestTurnMs !== null ? ` · slowest turn ${fmtDuration(s.turnCost.slowestTurnMs)}` : ''),
+        ]
+      : []),
+    ...(s.editPressure
+      ? [
+          `- **Edit pressure:** ${s.editPressure.edits} edit(s), ${s.editPressure.verifications} verification(s), ` +
+            `${Math.round(s.editPressure.editBytesPerVerify)} B per verify · largest edit ${s.editPressure.largestEditBytes} B`,
+        ]
       : []),
   ];
 }
