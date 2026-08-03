@@ -88,16 +88,23 @@ export const STAGES: Stage[] = [
       const p = path.join(root, docs, 'SPEC.md');
       if (!existsSync(p)) return false;
       const text = await readFile(p, 'utf8');
-      const budgetsMatch = /^#{1,6}\s.*\bBudgets?\b/im.test(text);
-      if (!budgetsMatch) return false;
-      // Find the Budgets section and strip HTML comments (single or multi-line)
-      const afterBudgets = text.split(/^#{1,6}\s.*\bBudgets?\b/im)[1] ?? '';
-      const firstNewline = afterBudgets.indexOf('\n');
-      const afterHeadingLine = firstNewline >= 0 ? afterBudgets.slice(firstNewline + 1) : '';
-      const nextSection = afterHeadingLine.search(/^#{1,6}\s/m);
+      const heading = /^(#{1,6})\s.*\bBudgets?\b.*$/im.exec(text);
+      if (!heading) return false;
+      // The section runs to the next heading of the SAME OR SHALLOWER depth, not to
+      // the next heading of any depth (I17): a real spec routinely splits its budgets
+      // into subsections — "## 3. Electrical budgets" followed immediately by
+      // "### 3.1 Input and rails" — which leaves the parent's own body empty and read
+      // as an unfilled placeholder. Subheadings are part of the section, not its end.
+      const depth = heading[1]!.length;
+      const afterHeadingLine = text.slice(heading.index + heading[0].length);
+      const nextSection = afterHeadingLine.search(new RegExp(`^#{1,${depth}}\\s`, 'm'));
       const section = nextSection >= 0 ? afterHeadingLine.slice(0, nextSection) : afterHeadingLine;
+      // Strip HTML comments (single or multi-line); headings inside the section are
+      // structure, not content, so a section of nothing but subheadings still fails.
       const cleanSection = section.replace(/<!--[\s\S]*?-->/g, '');
-      const realLines = cleanSection.split('\n').filter((l) => l.trim().length > 0);
+      const realLines = cleanSection
+        .split('\n')
+        .filter((l) => l.trim().length > 0 && !/^#{1,6}\s/.test(l.trim()));
       return realLines.length > 0;
     },
     prompt: (brief) =>
