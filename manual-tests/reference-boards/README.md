@@ -1,6 +1,6 @@
-# Control boards
+# Reference boards
 
-Committed reference projects for control-testing the deterministic drafting engine against known inputs. Unlike the fixture-library goldens in `test/fixtures/golden/` (which use tiny in-repo symbol libraries), a control board vendors symbols from the real KiCad standard libraries, so it exercises the engine against production symbol geometry while staying fully hermetic: `sym-lib-cache/` is committed, and every re-draft resolves from it, never from the machine's installed libraries.
+Committed reference projects for regression-testing the deterministic drafting engine against known inputs. Unlike the fixture-library goldens in `test/fixtures/golden/` (which use tiny in-repo symbol libraries), a reference board vendors symbols from the real KiCad standard libraries, so it exercises the engine against production symbol geometry while staying fully hermetic: `sym-lib-cache/` is committed, and every re-draft resolves from it, never from the machine's installed libraries.
 
 ## The contract
 
@@ -10,20 +10,20 @@ For each board under this directory:
 2. The drafted sheet MUST pass ERC with zero violations and the legibility checker with zero error-severity findings.
 3. `reference/<name>.png` is the visual reference. After an intentional engine change, re-render and eyeball the new image against the old one before replacing it; the byte diff says WHAT moved, the render says whether it still reads well.
 
-The byte contract is enforced in CI by `test/draft-control.test.ts`. The visual loop is manual:
+The byte contract is enforced in CI by `test/draft-reference-boards.test.ts`. The visual loop is manual:
 
 ```bash
-npm run control            # re-draft into manual-tests/runs/control, diff, render
+npm run refboards          # re-draft into manual-tests/runs/reference-boards, diff, render
 ```
 
-The script materializes the board under `manual-tests/runs/control/` (gitignored, per this directory's convention), drafts it, byte-compares against the reference, and renders a PNG next to it for side-by-side comparison.
+The script materializes the board under `manual-tests/runs/reference-boards/` (gitignored, per this directory's convention), drafts it, byte-compares against the reference, and renders a PNG next to it for side-by-side comparison.
 
 ## Regenerating a reference
 
 After a deliberate engine change:
 
 ```bash
-npm run control -- --update  # copies the fresh draft and render over reference/
+npm run refboards -- --update  # copies the fresh draft and render over reference/
 ```
 
 Commit the resulting diff and treat the render change as part of review.

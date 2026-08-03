@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Control-test the drafting engine against the committed control boards:
+# Regression-test the drafting engine against the committed reference boards:
 # re-draft a copy, byte-compare to the reference, render for eyeballing.
 # --update copies the fresh draft and render over reference/ (review the diff).
 set -euo pipefail
@@ -11,9 +11,9 @@ for arg in "$@"; do
 done
 
 FAIL=0
-for board_dir in manual-tests/control/*/; do
+for board_dir in manual-tests/reference-boards/*/; do
   board="$(basename "$board_dir")"
-  run="manual-tests/runs/control/$board"
+  run="manual-tests/runs/reference-boards/$board"
   rm -rf "$run"
   mkdir -p "$run"
   cp -r "$board_dir"/. "$run/"

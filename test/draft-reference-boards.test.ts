@@ -8,22 +8,22 @@ import { checkLegibility } from '../src/kicad/legibility.js';
 import { runErc } from '../src/kicad/cli.js';
 
 /**
- * Control boards (manual-tests/control/): committed reference projects with
+ * Reference boards (manual-tests/reference-boards/): committed reference projects with
  * symbols vendored from the REAL KiCad standard libraries. Hermetic by
  * construction — every draft resolves from the committed sym-lib-cache, never
  * from the machine's installed libraries — so the byte contract holds on any
- * machine. Regenerate references with `npm run control -- --update`.
+ * machine. Regenerate references with `npm run refboards -- --update`.
  */
 
-const CONTROL = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'manual-tests', 'control');
+const CONTROL = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'manual-tests', 'reference-boards');
 
-describe('control boards: the engine reproduces the committed references', async () => {
+describe('reference boards: the engine reproduces the committed pinned outputs', async () => {
   const boards = (await readdir(CONTROL, { withFileTypes: true })).filter((d) => d.isDirectory()).map((d) => d.name);
 
   for (const board of boards) {
     it(`${board}: byte-identical draft, clean ERC, clean legibility`, async () => {
       const src = path.join(CONTROL, board);
-      const repo = await mkdtemp(path.join(tmpdir(), `copperhead-control-${board}-`));
+      const repo = await mkdtemp(path.join(tmpdir(), `copperhead-refboard-${board}-`));
       try {
         await cp(src, repo, { recursive: true });
         await rm(path.join(repo, 'reference'), { recursive: true, force: true });
