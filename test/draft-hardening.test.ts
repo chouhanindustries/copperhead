@@ -4,8 +4,9 @@ import { fileURLToPath } from 'node:url';
 import { existsSync } from 'node:fs';
 import { mkdtemp, cp, rm, readFile, writeFile, mkdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { SymbolSource, SymbolResolutionError, powerSymbolSource, powerNetToken } from '../src/kicad/draft/symsource.js';
+import { SymbolSource, SymbolResolutionError, extractSymbolBlock, powerSymbolSource, powerNetToken } from '../src/kicad/draft/symsource.js';
 import { draftSchematicToText, draftSchematic } from '../src/kicad/draft/draft.js';
+import { kicadLoadError, runErc } from '../src/kicad/cli.js';
 import { findMergedNets, findLabelOverlaps } from '../src/kicad/draft/engine.js';
 import { looksLikeDescription } from '../src/kicad/draft/ir.js';
 import { parseSexp } from '../src/kicad/sexp.js';
@@ -49,6 +50,49 @@ describe('derived (extends) symbols', () => {
       await rm(repo, { recursive: true, force: true });
     }
   });
+
+  it('a drafted sheet with a derived symbol loads in KiCad and matches its vendored copy', async () => {
+    // Two failure modes found by the first reference board with real derived
+    // symbols: the emitted lib_symbols wrapped the BASE's unit children under
+    // the derived name (KiCad refuses to load the file), and the vendored
+    // cache held the library's `extends` stub, so ERC reported
+    // lib_symbol_mismatch comparing the flattened embedded copy against it.
+    const repo = await mkdtemp(path.join(tmpdir(), 'copperhead-derived-e2e-'));
+    try {
+      await writeFile(
+        path.join(repo, 'schematic.intent.json'),
+        JSON.stringify({
+          version: 1,
+          parts: [
+            { ref: 'R1', libId: 'Device:R_Small_Derived', value: '1k', group: 'A' },
+            { ref: 'R2', libId: 'Device:R', value: '1k', group: 'A' },
+          ],
+          nets: [
+            { name: 'N1', pins: ['R1.1', 'R2.1'] },
+            { name: 'N2', pins: ['R1.2', 'R2.2'] },
+          ],
+        }),
+        'utf8',
+      );
+      const res = await draftSchematic({ repoRoot: repo, schematic: 'b.kicad_sch', symbolDirs: [SYMLIB] });
+      expect(res.ok, res.ok ? '' : res.message).toBe(true);
+      if (!res.ok) return;
+      // children renamed with the parent in the emitted sheet
+      expect(res.text).toContain('(symbol "Device:R_Small_Derived"');
+      expect(res.text).toContain('(symbol "R_Small_Derived_0_1"');
+      // the vendored copy is the flattened symbol, not the extends stub
+      const cache = await readFile(path.join(repo, 'sym-lib-cache', 'Device.kicad_sym'), 'utf8');
+      const vendored = extractSymbolBlock(cache, 'R_Small_Derived');
+      expect(vendored).not.toBeNull();
+      expect(vendored).not.toContain('(extends');
+      // and KiCad actually loads the file with no symbol-mismatch complaint
+      expect(await kicadLoadError(res.schematicPath)).toBeNull();
+      const erc = await runErc(res.schematicPath);
+      expect(erc.violations.filter((v) => v.type === 'lib_symbol_mismatch')).toEqual([]);
+    } finally {
+      await rm(repo, { recursive: true, force: true });
+    }
+  }, 60000);
 
   it('still refuses a symbol whose extends target is unnamed', async () => {
     const repo = await mkdtemp(path.join(tmpdir(), 'copperhead-derived-bad-'));
