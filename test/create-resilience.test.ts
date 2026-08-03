@@ -4,6 +4,7 @@ import { mkdir, writeFile, readFile } from 'node:fs/promises';
 import { execa } from 'execa';
 import type { RunOptions, RunResult } from '../src/agent/loop.js';
 import { tempFixtureRepo } from './helpers.js';
+import { createHash } from 'node:crypto';
 
 // Covers the review's F3 gap: the retry / resume-commit branches of runCreate
 // were essentially untested. These drive them with a scripted runAgentLoop and a
@@ -221,20 +222,26 @@ describe('create pipeline resilience (review F3)', () => {
       // Resume path should create BRIEF.sha256.
       mockRunAgentLoop.mockImplementation(async () => ok());
 
-      await runCreate({
+      const res = await runCreate({
         repoRoot: repo,
         briefPath,
         model: 'gpt-5',
         log: () => {},
       });
 
+      expect(res.ok).toBe(false);
+      expect(res.completed).toEqual(['spec-seed']);
+
       const briefHash = await readFile(
         path.join(repo, 'docs', 'BRIEF.sha256'),
         'utf8',
       );
 
-      expect(briefHash).toContain('brief.md');
-      expect(briefHash).toContain('sha256:');
+      const expectedHash = createHash('sha256')
+        .update('# tiny\n')
+        .digest('hex');
+      expect(briefHash).toContain(`brief: ${briefPath}`);
+      expect(briefHash).toContain(`sha256: ${expectedHash}`);
     } finally {
       await cleanup();
     }
