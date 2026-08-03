@@ -189,7 +189,19 @@ export async function validateIntent(
     }
     partByRef.set(p.ref, p);
     try {
-      symbols.set(p.ref, await symsource.resolve(p.libId));
+      const sym = await symsource.resolve(p.libId);
+      // A multi-unit symbol's units share symbol-space pin coordinates, so
+      // placing it as one instance overlays unrelated pins on one point and
+      // silently merges their nets (an LM358 drafted this way fused its two
+      // outputs). Refused until the engine can place units individually.
+      if (sym.multiUnit) {
+        add(
+          `${p.ref}: "${p.libId}" is a multi-unit symbol (an opamp or gate pack), which the drafting engine ` +
+            `cannot place yet; use a single-unit part instead`,
+        );
+        continue;
+      }
+      symbols.set(p.ref, sym);
     } catch (e) {
       if (e instanceof SymbolResolutionError) add(`${p.ref}: ${e.message}`);
       else throw e;
