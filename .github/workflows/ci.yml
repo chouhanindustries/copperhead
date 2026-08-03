@@ -48,5 +48,15 @@ jobs:
       - run: npm run typecheck
       - run: npm run build
       - run: npm test
+      # Golden-corpus renders (task 9.5): the suite above fails on any pin
+      # violation; this renders every pinned sheet to SVG so a reviewer can
+      # eyeball layout changes from the run page without a checkout.
+      - name: Render golden corpus
+        run: bash scripts/render-goldens.sh golden-renders
+      - name: Upload golden renders
+        uses: actions/upload-artifact@v4
+        with:
+          name: golden-renders
+          path: golden-renders/
       # The published tarball is what users get; make sure it still packs.
       - run: npm pack --dry-run
