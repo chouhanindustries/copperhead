@@ -86,18 +86,24 @@ export const STAGES: Stage[] = [
       const p = path.join(root, docs, 'SPEC.md');
       if (!existsSync(p)) return false;
       const text = await readFile(p, 'utf8');
-      const budgetsHeading = /^#{1,6}\s+(?:\d+\.\s*)?Budgets?\s*$/im;
-      if (!budgetsHeading.test(text)) return false;
 
-      // Find the Budgets section and strip HTML comments (single or multi-line)
-      const afterBudgets = text.split(budgetsHeading)[1] ?? '';
+      // Ignore commented-out headings.
+      const searchableText = text.replace(/<!--[\s\S]*?-->/g, '');
+
+      const budgetsHeading = /^##\s+(?:\d+\.\s*)?Budgets?\s*$/im;
+
+      const match = budgetsHeading.exec(searchableText);
+      if (!match) return false;
+
+      const afterBudgets = searchableText.slice(match.index + match[0].length);
       const firstNewline = afterBudgets.indexOf('\n');
       const afterHeadingLine = firstNewline >= 0 ? afterBudgets.slice(firstNewline + 1) : '';
       const nextSection = afterHeadingLine.search(/^##\s/m);
       const section = nextSection >= 0 ? afterHeadingLine.slice(0, nextSection) : afterHeadingLine;
       const cleanSection = section.replace(/<!--[\s\S]*?-->/g, '');
-      const realLines = cleanSection.split('\n').filter((l) => l.trim().length > 0);
-      return realLines.length > 0;
+      const budgetLine =
+        /^\s*(?:[-*]\s*)?[A-Za-z][A-Za-z0-9_-]*\s*:/m;
+      return budgetLine.test(cleanSection);
     },
        prompt: (brief) =>
          `Stage 1 of the create pipeline: seed the requirements. From the product brief below, populate docs/SPEC.md (what the device is, top-level constraints and budgets). If docs/SPEC.md already exists (for example after copperhead init created the scaffold), update it with edit_file instead of write_file. Use write_file only if docs/SPEC.md does not yet exist. Every budget you state must also be recorded with record_constraint. Anything the brief does not state: propose a sensible default and flag it ASSUMED. If an openspec/ workspace exists, also seed openspec/specs/ with per-capability requirements using Given/When/Then scenarios.\n\nBrief:\n${brief}`,

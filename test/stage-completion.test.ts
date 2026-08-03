@@ -156,6 +156,77 @@ describe('spec-seed isComplete', () => {
       expect(await stageNamed('spec-seed')(root, DOCS)).toBe(false);
     });
   });
+
+  it('returns false when SPEC.md Budgets section contains prose but no budget entries', async () => {
+    await withTmpDir(async (root) => {
+      await mkdir(path.join(root, DOCS), { recursive: true });
+
+      await writeFile(
+        path.join(root, DOCS, 'SPEC.md'),
+        `# My Project
+
+## Budgets
+
+TBD
+
+## Assumptions
+
+- USB-C assumed ASSUMED
+`,
+        'utf8',
+      );
+
+      expect(await stageNamed('spec-seed')(root, DOCS)).toBe(false);
+    });
+  });
+
+  it('returns false when Budgets heading exists only inside an HTML comment', async () => {
+    await withTmpDir(async (root) => {
+      await mkdir(path.join(root, DOCS), { recursive: true });
+
+      await writeFile(
+        path.join(root, DOCS, 'SPEC.md'),
+        `# My Project
+
+<!--
+## Budgets
+
+- sleep_current_uA: 25
+-->
+
+## Assumptions
+
+- USB-C assumed ASSUMED
+`,
+        'utf8',
+      );
+
+      expect(await stageNamed('spec-seed')(root, DOCS)).toBe(false);
+    });
+  });
+
+  it('returns true when a nested heading is named Budget', async () => {
+    await withTmpDir(async (root) => {
+      await mkdir(path.join(root, DOCS), { recursive: true });
+
+      await writeFile(
+        path.join(root, DOCS, 'SPEC.md'),
+        `# My Project
+
+## Budgets
+
+### Budget
+
+- sleep_current_uA: 25
+
+## Assumptions
+`,
+        'utf8',
+      );
+
+      expect(await stageNamed('spec-seed')(root, DOCS)).toBe(true);
+    });
+  });
 });
 
 // ---------------------------------------------------------------------------
