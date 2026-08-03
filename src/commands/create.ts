@@ -61,17 +61,23 @@ export async function writeBriefHash(
 ): Promise<void> {
   const file = path.join(repoRoot, 'docs', 'BRIEF.sha256');
 
-  if (existsSync(file)) return;
-
   await mkdir(path.dirname(file), { recursive: true });
 
-  await writeFile(
-    file,
-    `brief: ${briefMeta.path}
+  try {
+    await writeFile(
+      file,
+      `brief: ${briefMeta.path}
 sha256: ${briefMeta.sha256}
 `,
-    'utf8',
-  );
+      {
+        encoding: 'utf8',
+        flag: 'wx',
+      },
+    );
+  } catch (err) {
+    const e = err as NodeJS.ErrnoException;
+    if (e.code !== 'EEXIST') throw err;
+  }
 }
 
 /**
@@ -701,6 +707,9 @@ export async function runCreate(opts: CreateOptions): Promise<{ ok: boolean; com
       opts.log(stageLine(stage.name, 'already complete (resuming past it)', 'ok'));
       await commitResumedStage(opts, config, stage.name);
       completed.push(stage.name);
+      if (stage.name === 'spec-seed') {
+        await writeBriefHash(opts.repoRoot, briefMeta);
+      }
       stageCosts.push({ name: stage.name, resumed: true, wallMs: 0, turns: 0, tokensIn: 0, tokensOut: 0, cacheHits: 0 });
       await emitJlcpcbAfterOutputs(stage.name, opts);
       continue;

@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import path from 'node:path';
-import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdir, writeFile, readFile } from 'node:fs/promises';
 import { execa } from 'execa';
 import type { RunOptions, RunResult } from '../src/agent/loop.js';
 import { tempFixtureRepo } from './helpers.js';
@@ -195,6 +195,46 @@ describe('create pipeline resilience (review F3)', () => {
       expect(out).toContain('leaving it uncommitted');
       const { stdout } = await execa('git', ['log', '--oneline'], { cwd: repo });
       expect(stdout).not.toMatch(/resume — commit completed stage/);
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it('writes BRIEF.sha256 when spec-seed is resumed', async () => {
+    const { repo, cleanup } = await tempFixtureRepo();
+
+    try {
+      const briefPath = await seedRepo(repo);
+
+      await execa('git', ['add', 'brief.md'], { cwd: repo });
+      await execa('git', ['commit', '-q', '-m', 'brief'], { cwd: repo });
+
+      // Stage 1 already complete.
+      const docs = path.join(repo, 'docs');
+      await mkdir(docs, { recursive: true });
+      await writeFile(
+        path.join(docs, 'SPEC.md'),
+        '# s\n\n## Budgets\n\n- sleep_current_uA: 25\n',
+        'utf8',
+      );
+
+      // Resume path should create BRIEF.sha256.
+      mockRunAgentLoop.mockImplementation(async () => ok());
+
+      await runCreate({
+        repoRoot: repo,
+        briefPath,
+        model: 'gpt-5',
+        log: () => {},
+      });
+
+      const briefHash = await readFile(
+        path.join(repo, 'docs', 'BRIEF.sha256'),
+        'utf8',
+      );
+
+      expect(briefHash).toContain('brief.md');
+      expect(briefHash).toContain('sha256:');
     } finally {
       await cleanup();
     }
