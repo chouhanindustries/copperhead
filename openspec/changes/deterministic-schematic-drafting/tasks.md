@@ -57,8 +57,8 @@
 - [x] 7.2 Group layout: flow ordering from the directed pin-type graph with SUBSYSTEMS.md order as tie-break, group box sizing from summed extents including power symbols, decoupling rows, and text slots (reuse the checker's C2 math), captioned rectangles per the standard
 - [x] 7.3 In-group placement: longest-path layering, barycenter ordering, integer 1.27mm grid throughout, refdes/value text slots that never collide
 - [x] 7.4 Wiring policy: local nets up to four endpoints within one group and the distance budget wired orthogonally in reserved inter-column channels (never crossing a body box), junction synthesis, net labels (horizontal-preferred) for everything else
-- [ ] 7.5 Idiom micro-templates: pull-up/pull-down stubs, crystal flanking, connector edge placement
-- [ ] 7.5a Alignment and balance pass: shared column axes, uniform sibling gaps, collinear passive chains (zero-bend wires between aligned pins), mirror-symmetric pairs, centered group contents, page-balance distribution; preserves grid, connectivity, and gating invariants
+- [x] 7.5 Idiom micro-templates: pull-up/pull-down stubs, crystal flanking, connector edge placement
+- [x] 7.5a Alignment and balance pass: shared column axes, uniform sibling gaps, collinear passive chains (zero-bend wires between aligned pins), mirror-symmetric pairs, centered group contents, page-balance distribution; preserves grid, connectivity, and gating invariants
 - [x] 7.6 Determinism audit: no `Date`, no `Math.random`, no filesystem-order or locale dependence; property test drafting the same IR twice yields identical bytes
 - [x] 7.7 Engine acceptance: every Tier C reference IR drafts with zero error-severity legibility findings and clean ERC
 
@@ -75,7 +75,7 @@
 - [x] 9.2 Tier B: the #136 run's sheet plus one synthetic fixture per gating family; pin exact finding lists and the score ceiling
 - [x] 9.3 Tier C: reference IRs (small MCU board, sensor node, power-only board); pin byte-exact drafted output and full score JSON
 - [x] 9.4 `--update-goldens` regeneration in the test harness; suite fails on mismatch without it and never writes goldens implicitly
-- [ ] 9.5 CI wiring: run all tiers, render each to SVG as a CI artifact, fail on any pin violation
+- [x] 9.5 CI wiring: run all tiers, render each to SVG as a CI artifact, fail on any pin violation
 
 ## 10. CLI and agent tools
 
