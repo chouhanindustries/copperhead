@@ -15,6 +15,7 @@ import { saveConstraint, classifyAffectsTarget, affectsTargetExists } from '../m
 import { openspecValidate } from '../openspec/cli.js';
 import { existsSync } from 'node:fs';
 import type { CopperheadConfig } from '../config.js';
+import { isEngineAuthoredSchematic } from '../kicad/fab.js';
 import { ObligationsLedger } from './ledger.js';
 import type { Transcript } from './transcript.js';
 
@@ -253,7 +254,7 @@ export const TOOLS: ToolDef[] = [
       // marker, so `do` on existing repos is untouched by this guard.
       if (rel.endsWith('.kicad_sch') && existsSync(abs)) {
         const head = (await readFile(abs, 'utf8')).slice(0, 400);
-        if (head.includes('(generator "copperhead-draft")')) {
+        if (isEngineAuthoredSchematic(head)) {
           return `refused: ${rel} is engine-drafted from ${defaultIntentPath(rel)}. Revise the intent (edit_file on the intent JSON) and call draft_schematic to regenerate the sheet; direct geometry edits would be lost on the next re-draft.`;
         }
       }
