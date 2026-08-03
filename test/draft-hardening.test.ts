@@ -1,11 +1,15 @@
 import { describe, it, expect } from 'vitest';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { existsSync } from 'node:fs';
 import { mkdtemp, cp, rm, readFile, writeFile, mkdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { SymbolSource, SymbolResolutionError } from '../src/kicad/draft/symsource.js';
-import { draftToText } from '../src/kicad/draft/draft.js';
+import { SymbolSource, SymbolResolutionError, powerSymbolSource, powerNetToken } from '../src/kicad/draft/symsource.js';
+import { draftToText, runDraft } from '../src/kicad/draft/draft.js';
 import { findMergedNets, findLabelOverlaps } from '../src/kicad/draft/engine.js';
+import { looksLikeDescription } from '../src/kicad/draft/ir.js';
+import { parseSexp } from '../src/kicad/sexp.js';
+import { checkLegibility } from '../src/kicad/legibility.js';
 import { toolSearch } from '../src/agent/filetools.js';
 
 /**
@@ -220,6 +224,293 @@ describe('overlapping label text is a budget, not a gate', () => {
       expect(res.report!.mergedNets).toEqual([]);
       expect(res.report!.labelOverlaps).toEqual([]);
       expect(res.report!.labelOverlapBudgetExceeded).toBe(false);
+    } finally {
+      await rm(repo, { recursive: true, force: true });
+    }
+  });
+});
+
+/** Draft a one-off intent in a temp repo; returns the draftToText result. */
+async function draftIntent(
+  intent: unknown,
+  opts: { docs?: Record<string, string> } = {},
+): Promise<{ res: Awaited<ReturnType<typeof draftToText>>; repo: string; cleanup: () => Promise<void> }> {
+  const repo = await mkdtemp(path.join(tmpdir(), 'copperhead-hardening-'));
+  await writeFile(path.join(repo, 'schematic.intent.json'), JSON.stringify(intent), 'utf8');
+  let docsDir: string | undefined;
+  if (opts.docs) {
+    docsDir = path.join(repo, 'docs');
+    await mkdir(docsDir, { recursive: true });
+    for (const [name, text] of Object.entries(opts.docs)) await writeFile(path.join(docsDir, name), text, 'utf8');
+  }
+  const res = await draftToText({
+    repoRoot: repo,
+    schematic: 'board.kicad_sch',
+    intentPath: 'schematic.intent.json',
+    ...(docsDir ? { docsDir } : {}),
+    symbolDirs: [SYMLIB],
+  });
+  return { res, repo, cleanup: () => rm(repo, { recursive: true, force: true }) };
+}
+
+describe('facing long-named labels draft clean by construction', () => {
+  /**
+   * The reviewed head could emit a sheet that failed its own error-severity
+   * legibility gate while reporting ok: two ~33-character net names on facing
+   * pins of adjacent groups overran the fixed channel, and the de-collision
+   * nudge only moves a label further INTO the facing group. The group and
+   * column gaps now widen by the facing label extents, so this exact repro must
+   * come out with zero overlaps and zero error-severity findings.
+   */
+  it('the two-MCU long-net repro drafts with no overlaps and a clean checker gate', async () => {
+    const repo = await mkdtemp(path.join(tmpdir(), 'copperhead-facing-'));
+    try {
+      const docs = path.join(repo, 'docs');
+      await mkdir(docs, { recursive: true });
+      await writeFile(path.join(docs, 'SUBSYSTEMS.md'), '## Alpha\n\n## Beta\n', 'utf8');
+      await writeFile(
+        path.join(repo, 'schematic.intent.json'),
+        JSON.stringify({
+          version: 1,
+          parts: [
+            { ref: 'U1', libId: 'CopperMCU:MCU8', value: 'MCU8', group: 'Alpha' },
+            { ref: 'U2', libId: 'CopperMCU:MCU8', value: 'MCU8', group: 'Beta' },
+          ],
+          nets: [
+            { name: 'SPI_CONTROLLER_CHIP_SELECT_LINE_3', pins: ['U1.4', 'U2.3'], kind: 'signal' },
+            { name: 'SPI_CONTROLLER_CHIP_SELECT_LINE_B', pins: ['U1.5', 'U2.8'], kind: 'signal' },
+          ],
+        }),
+        'utf8',
+      );
+      const res = await runDraft({
+        repoRoot: repo,
+        schematic: 'board.kicad_sch',
+        intentPath: 'schematic.intent.json',
+        docsDir: docs,
+        symbolDirs: [SYMLIB],
+      });
+      expect(res.ok, res.ok ? '' : res.message).toBe(true);
+      if (!res.ok) return;
+      expect(res.report.labelOverlaps).toEqual([]);
+      expect(res.report.labelOverlapBudgetExceeded).toBe(false);
+      const leg = await checkLegibility(res.schematicPath, { docsDir: docs });
+      expect(
+        leg.findings.filter((f) => f.severity === 'error'),
+        JSON.stringify(leg.findings, null, 2),
+      ).toEqual([]);
+    } finally {
+      await rm(repo, { recursive: true, force: true });
+    }
+  }, 60000);
+});
+
+describe('point identity is the emitted coordinate, not the float', () => {
+  /**
+   * `findMergedNets` used to key label positions on raw float equality while
+   * emission rounds through `knum`: two labels at 13.969999999999999 and 13.97
+   * emit to the same point — which is what KiCad's connectivity joins on — but
+   * evaded the refusal. The exact ISET/NTC class of fault, shipped silently.
+   */
+  it('detects a merge between labels that differ only by float dust', () => {
+    const merged = findMergedNets([
+      { name: 'ISET', x: 13.969999999999999, y: 50 },
+      { name: 'NTC', x: 13.97, y: 50 },
+    ]);
+    expect(merged.map((m) => m.nets)).toEqual([['ISET', 'NTC']]);
+  });
+
+  it('treats a dust-only coincidence as a merge, not a text overlap', () => {
+    expect(
+      findLabelOverlaps([
+        { name: 'ISET', x: 13.969999999999999, y: 50, rot: 0 },
+        { name: 'NTC', x: 13.97, y: 50, rot: 0 },
+      ]),
+    ).toEqual([]);
+  });
+});
+
+describe('power net names cannot corrupt the generated symbol source', () => {
+  it('powerSymbolSource escapes quotes and backslashes into a single parseable block', () => {
+    for (const name of ['V"CC', 'V\\CC']) {
+      const src = powerSymbolSource(name, 'rail');
+      const roots = parseSexp(src.sourceText);
+      expect(roots).toHaveLength(1);
+      expect(src.libId).toBe(`copperhead_power:${powerNetToken(name)}`);
+    }
+  });
+
+  it('validateIntent refuses a net name with a quote before anything is drafted', async () => {
+    const { res, cleanup } = await draftIntent({
+      version: 1,
+      parts: [
+        { ref: 'R1', libId: 'Device:R', value: '10k', group: 'A' },
+        { ref: 'R2', libId: 'Device:R', value: '10k', group: 'A' },
+      ],
+      nets: [{ name: 'V"CC', pins: ['R1.1', 'R2.1'], kind: 'power' }],
+    });
+    try {
+      expect(res.ok).toBe(false);
+      if (res.ok) return;
+      expect(res.message).toContain('cannot be drawn');
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it('refuses two power nets whose names sanitize to one symbol token', async () => {
+    const { res, cleanup } = await draftIntent({
+      version: 1,
+      parts: [
+        { ref: 'J1', libId: 'CopperConn:Conn_01x03', value: 'Conn', group: 'A' },
+        { ref: 'U1', libId: 'CopperMCU:MCU8', value: 'MCU8', group: 'A' },
+      ],
+      nets: [
+        { name: 'RAIL_A', pins: ['J1.1', 'U1.1'], kind: 'power' },
+        { name: 'RAIL A', pins: ['J1.2', 'U1.2'], kind: 'power' },
+      ],
+    });
+    try {
+      expect(res.ok).toBe(false);
+      if (res.ok) return;
+      expect(res.message).toContain('sanitize to the symbol token "RAIL_A"');
+      expect(res.message).toContain('RAIL A and RAIL_A');
+    } finally {
+      await cleanup();
+    }
+  });
+});
+
+describe('type-confused IR fields come back as numbered findings, not TypeErrors', () => {
+  const base = () => ({
+    version: 1,
+    parts: [
+      { ref: 'R1', libId: 'Device:R', value: '10k', group: 'A' },
+      { ref: 'R2', libId: 'Device:R', value: '10k', group: 'A' },
+    ],
+    nets: [{ name: 'SIG', pins: ['R1.1', 'R2.1'] }],
+  });
+
+  it('a numeric group is a finding', async () => {
+    const intent = base() as ReturnType<typeof base> & { parts: { group: unknown }[] };
+    intent.parts[0]!.group = 5;
+    const { res, cleanup } = await draftIntent(intent);
+    try {
+      expect(res.ok).toBe(false);
+      if (res.ok) return;
+      expect(res.message).toContain('"group" must be a string');
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it('a string groupOrder hint is a finding', async () => {
+    const { res, cleanup } = await draftIntent({ ...base(), hints: { groupOrder: 'A' } });
+    try {
+      expect(res.ok).toBe(false);
+      if (res.ok) return;
+      expect(res.message).toContain('"hints.groupOrder" must be an array');
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it('a numeric date hint is a finding', async () => {
+    const { res, cleanup } = await draftIntent({ ...base(), hints: { date: 20200101 } });
+    try {
+      expect(res.ok).toBe(false);
+      if (res.ok) return;
+      expect(res.message).toContain('"hints.date" must be a string');
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it('a string noConnect is a finding', async () => {
+    const { res, cleanup } = await draftIntent({ ...base(), noConnect: 'R1.2' });
+    try {
+      expect(res.ok).toBe(false);
+      if (res.ok) return;
+      expect(res.message).toContain('"noConnect" must be an array');
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it('a non-string endpoint and an unknown kind are findings', async () => {
+    const intent = base();
+    (intent.nets[0]!.pins as unknown[]).push(42);
+    (intent.nets[0]! as { kind?: unknown }).kind = 'rail';
+    const { res, cleanup } = await draftIntent(intent);
+    try {
+      expect(res.ok).toBe(false);
+      if (res.ok) return;
+      expect(res.message).toContain('must be a "REF.PIN" string');
+      expect(res.message).toContain('"kind" must be');
+    } finally {
+      await cleanup();
+    }
+  });
+});
+
+describe('long single-token BOM values are drawable, prose is not', () => {
+  it('leaves a long unbroken part identifier alone', () => {
+    expect(looksLikeDescription('JST_PH_S2B-PH-K_1x02_P2.00mm')).toBe(false); // 28 chars, no space
+    expect(looksLikeDescription('STM32F103C8T6')).toBe(false);
+  });
+
+  it('still refuses long prose and clause lists', () => {
+    expect(looksLikeDescription('1S Li-Po cell, 500 mAh, bare leads')).toBe(true);
+    expect(looksLikeDescription('Battery holder for two 18650 cells')).toBe(true); // long, spaces, no commas
+    expect(looksLikeDescription('P-MOSFET, divider gate')).toBe(true);
+    expect(looksLikeDescription('4.7uF, X5R, 10V, 0603')).toBe(false);
+  });
+});
+
+describe('draftToText never touches the working tree', () => {
+  /**
+   * The docstring promised no disk writes, but symbol resolution vendored
+   * uncached symbols into sym-lib-cache/ as a side effect — so the stage-4
+   * staleness probe (a read-shaped completeness check) could mutate the repo.
+   */
+  it('does not create sym-lib-cache during a dry run', async () => {
+    const repo = await mkdtemp(path.join(tmpdir(), 'copperhead-dryrun-'));
+    try {
+      await cp(path.join(DRAFT_FIXTURE, 'schematic.intent.json'), path.join(repo, 'schematic.intent.json'));
+      await cp(path.join(DRAFT_FIXTURE, 'docs'), path.join(repo, 'docs'), { recursive: true });
+      const res = await draftToText({
+        repoRoot: repo,
+        schematic: 'board.kicad_sch',
+        intentPath: 'schematic.intent.json',
+        docsDir: path.join(repo, 'docs'),
+        symbolDirs: [SYMLIB],
+      });
+      expect(res.ok).toBe(true);
+      expect(existsSync(path.join(repo, 'sym-lib-cache'))).toBe(false);
+      expect(existsSync(path.join(repo, 'board.kicad_sch'))).toBe(false);
+    } finally {
+      await rm(repo, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('draft orchestration error paths', () => {
+  it('a missing intent file is a finding, not a crash', async () => {
+    const repo = await mkdtemp(path.join(tmpdir(), 'copperhead-nointent-'));
+    try {
+      const res = await draftToText({ repoRoot: repo, schematic: 'board.kicad_sch', symbolDirs: [SYMLIB] });
+      expect(res.ok).toBe(false);
+      if (res.ok) return;
+      expect(res.findings[0]!.detail).toContain('does not exist');
+    } finally {
+      await rm(repo, { recursive: true, force: true });
+    }
+  });
+
+  it('an unknown symbol name reports the closest candidates', async () => {
+    const repo = await mkdtemp(path.join(tmpdir(), 'copperhead-candidates-'));
+    try {
+      await expect(new SymbolSource(repo, [SYMLIB]).resolve('Device:R_Sma')).rejects.toThrow(/closest:.*R_Small_Derived/);
     } finally {
       await rm(repo, { recursive: true, force: true });
     }

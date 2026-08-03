@@ -892,6 +892,11 @@
 				(embedded_fonts no)
 			)
 	)
+	(junction (at 128.27 48.26)
+		(diameter 0)
+		(color 0 0 0 0)
+		(uuid "0cde5549-6e67-5aa5-b342-1e05367b694b")
+	)
 	(wire
 		(pts (xy 77.47 78.74) (xy 77.47 76.2))
 		(stroke (width 0) (type default))

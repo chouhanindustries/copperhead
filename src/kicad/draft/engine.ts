@@ -1,5 +1,5 @@
 import type { Bounds } from '../sexp.js';
-import type { PlacementModel, EmitSymbol } from '../emit.js';
+import { knum, type PlacementModel, type EmitSymbol } from '../emit.js';
 import { powerSymbolSource, pwrFlagSource, type ResolvedSymbol, type DraftPin } from './symsource.js';
 import type { SchematicIntent, IntentNet, IntentPart, ValidatedIntent } from './ir.js';
 
@@ -46,6 +46,17 @@ const LABEL_OVERLAP_BUDGET = 0.02;
 
 const ceilU = (mm: number): number => Math.ceil(mm / U - 1e-9);
 const grid = (units: number): number => Math.round(units) * U;
+
+/**
+ * Two coordinates are the same POINT iff they emit identically: comparisons and
+ * map keys go through `knum`, the emitter's rounding, because KiCad's
+ * connectivity sees the rounded file, not the engine's float dust —
+ * 13.969999999999999 and 13.97 are one coordinate on the sheet. Raw float keys
+ * here would let two distinct nets whose labels differ by dust but emit to the
+ * same point evade the merged-net refusal.
+ */
+const sameCoord = (a: number, b: number): boolean => knum(a) === knum(b);
+const pointKey = (x: number, y: number): string => `${knum(x)},${knum(y)}`;
 
 /** Standard landscape sheets, smallest first, for content-derived paper. */
 const PAPERS: { name: string; w: number; h: number }[] = [
@@ -106,7 +117,7 @@ export function findMergedNets(
 ): { x: number; y: number; nets: string[] }[] {
   const byPoint = new Map<string, Set<string>>();
   for (const l of labels) {
-    const key = `${l.x},${l.y}`;
+    const key = pointKey(l.x, l.y);
     const at = byPoint.get(key) ?? new Set<string>();
     at.add(l.name);
     byPoint.set(key, at);
@@ -201,10 +212,10 @@ export function findLabelOverlaps(
       if (a.name === b.name) continue;
       // an exact coincidence is a merged net, reported by findMergedNets; do
       // not also count it here or one fault reads as two
-      if (a.x === b.x && a.y === b.y) continue;
+      if (sameCoord(a.x, b.x) && sameCoord(a.y, b.y)) continue;
       if (!boundsOverlap(boxes[i]!, boxes[j]!)) continue;
       for (const [l, other] of [[a, b], [b, a]] as const) {
-        const key = `${l.x},${l.y}`;
+        const key = pointKey(l.x, l.y);
         const e = out.get(key) ?? { x: l.x, y: l.y, nets: new Set<string>([l.name]) };
         e.nets.add(other.name);
         out.set(key, e);
@@ -271,6 +282,40 @@ export function draftPlacement(validated: ValidatedIntent, projectName: string, 
   }
   const isConnector = (p: IntentPart): boolean => p.libId.startsWith('Connector');
 
+  // ---------- facing-label extents ----------
+  // A labelled stub extends horizontal TEXT into the channel beside its pin:
+  // the stub plus the net name at the checker's conservative advance. The base
+  // column channel and group gap assume short names; two facing pins whose
+  // combined names run past ~25 characters overrun them, and the de-collision
+  // pass cannot help (riding a stub outward moves the text further INTO the
+  // facing group). So the gaps below are widened by the facing extents, and a
+  // long-named pair drafts clean by construction instead of surviving as an
+  // error-severity text collision. Conservative on purpose: whether a signal
+  // net is wired or labelled is decided after placement, so every signal net
+  // counts here — typical names fit inside the base gaps and nothing widens.
+  const signalNetOfPin = new Map<string, string>();
+  for (const net of signalNets) for (const ep of net.pins) signalNetOfPin.set(ep, net.name);
+  const labelExtents = (refs: string[]): { left: number; right: number } => {
+    let left = 0;
+    let right = 0;
+    for (const ref of refs) {
+      for (const pin of symbols.get(ref)?.pins ?? []) {
+        const net = signalNetOfPin.get(`${ref}.${pin.number}`);
+        if (!net) continue;
+        const o = outward(pin);
+        if (o.dx === 0) continue;
+        const extent = STUB * U + Math.max(1, net.length) * LABEL_ADVANCE * LABEL_HEIGHT;
+        if (o.dx === -1) left = Math.max(left, extent);
+        else right = Math.max(right, extent);
+      }
+    }
+    return { left, right };
+  };
+  /** Extra gap units so facing label text fits a boundary whose body-to-body
+   * clearance is `baseUnits` (one unit of slack between the two texts). */
+  const widenBy = (rightOfPrev: number, leftOfNext: number, baseUnits: number): number =>
+    Math.max(0, ceilU(rightOfPrev + leftOfNext) + 1 - baseUnits);
+
   // ---------- group ordering: hints, then SUBSYSTEMS.md order, then name ----------
   const groupNames = [...new Set(intent.parts.filter((p) => !symbols.get(p.ref)!.isPower).map((p) => p.group))];
   const orderIndex = (g: string): number => {
@@ -287,8 +332,20 @@ export function draftPlacement(validated: ValidatedIntent, projectName: string, 
   const groupRects: { name: string; x1: number; y1: number; x2: number; y2: number }[] = [];
   const groupOf = new Map<string, string>();
   let groupX = 0; // running x origin (units) for group tiling
+  let prevGroup: string | null = null; // last group that actually placed cells
+  const groupExtents = new Map<string, { left: number; right: number }>();
+  for (const gname of groupNames) {
+    groupExtents.set(
+      gname,
+      labelExtents(intent.parts.filter((p) => p.group === gname && !symbols.get(p.ref)!.isPower).map((p) => p.ref)),
+    );
+  }
 
   for (const gname of groupNames) {
+    // widen the gap to the previous group when facing label text needs it
+    if (prevGroup !== null) {
+      groupX += widenBy(groupExtents.get(prevGroup)!.right, groupExtents.get(gname)!.left, 2 * MARGIN + GROUP_GAP);
+    }
     const members = intent.parts.filter(
       (p) => p.group === gname && !symbols.get(p.ref)!.isPower && !decapOwner.has(p.ref),
     );
@@ -354,7 +411,8 @@ export function draftPlacement(validated: ValidatedIntent, projectName: string, 
     }
     let colX = groupX;
     let groupMaxY = 0;
-    for (const col of columns) {
+    for (let ci = 0; ci < columns.length; ci++) {
+      const col = columns[ci]!;
       const colW = Math.max(...col.map((r) => cellDims.get(r)!.w));
       let rowY = 0;
       for (const ref of col) {
@@ -378,7 +436,8 @@ export function draftPlacement(validated: ValidatedIntent, projectName: string, 
         rowY += dims.h + ROW_GAP;
       }
       groupMaxY = Math.max(groupMaxY, rowY - ROW_GAP);
-      colX += colW + CHANNEL;
+      const next = columns[ci + 1];
+      colX += colW + CHANNEL + (next ? widenBy(labelExtents(col).right, labelExtents(next).left, 2 * MARGIN + CHANNEL) : 0);
     }
 
     // decoupling rows: caps in a uniform row under their owner (or the group)
@@ -414,6 +473,7 @@ export function draftPlacement(validated: ValidatedIntent, projectName: string, 
       const maxY = Math.max(...cells.map((c) => c.body.maxY)) + (MARGIN + 2) * U;
       groupRects.push({ name: gname, x1: minX, y1: minY, x2: maxX, y2: maxY });
       groupX = Math.round(maxX / U) + GROUP_GAP;
+      prevGroup = gname;
     }
   }
 
@@ -512,7 +572,8 @@ export function draftPlacement(validated: ValidatedIntent, projectName: string, 
   const stubbedLabels: { label: number; wire: number; o: { dx: number; dy: number } }[] = [];
   let wireIdx = new Map<string, number>();
   const addWire = (net: string, x1: number, y1: number, x2: number, y2: number): void => {
-    if (x1 === x2 && y1 === y2) return;
+    if (sameCoord(x1, x2) && sameCoord(y1, y2)) return; // zero-length once emitted
+
     const i = wireIdx.get(net) ?? 0;
     wireIdx.set(net, i + 1);
     wires.push({ x1, y1, x2, y2, net, index: i });
@@ -637,11 +698,11 @@ export function draftPlacement(validated: ValidatedIntent, projectName: string, 
         const candidate: { x1: number; y1: number; x2: number; y2: number }[] = [];
         for (const s of stubs) {
           candidate.push({ x1: s.ep.at.x, y1: s.ep.at.y, x2: s.end.x, y2: s.end.y });
-          if (s.end.x !== trunkX) candidate.push({ x1: s.end.x, y1: s.end.y, x2: trunkX, y2: s.end.y });
+          if (!sameCoord(s.end.x, trunkX)) candidate.push({ x1: s.end.x, y1: s.end.y, x2: trunkX, y2: s.end.y });
         }
         // the trunk is split at every branch meet: coincident wire ENDPOINTS
         // are what both KiCad and the geometric netlister join on
-        const meetYs = [...new Set(ys)].sort((a, b) => a - b);
+        const meetYs = [...new Map(ys.map((y) => [knum(y), y])).values()].sort((a, b) => a - b);
         for (let i = 1; i < meetYs.length; i++) {
           candidate.push({ x1: trunkX, y1: meetYs[i - 1]!, x2: trunkX, y2: meetYs[i]! });
         }
@@ -659,7 +720,7 @@ export function draftPlacement(validated: ValidatedIntent, projectName: string, 
         wired++;
         if (eps.length > 2) {
           for (const s of stubs) {
-            const meet = s.end.x === trunkX ? s.end : { x: trunkX, y: s.end.y };
+            const meet = sameCoord(s.end.x, trunkX) ? s.end : { x: trunkX, y: s.end.y };
             if (meet.y > Math.min(...ys) && meet.y < Math.max(...ys)) junctions.push(meet);
           }
         }
@@ -680,12 +741,62 @@ export function draftPlacement(validated: ValidatedIntent, projectName: string, 
     }
   }
 
+  // ---------- member symbols with collision-free text slots ----------
+  // Built BEFORE the label de-collision pass so the pass can treat every
+  // visible ref/value text as an obstacle: the checker measures text-vs-text
+  // collisions at error severity, so a box the checker will see must be a box
+  // the avoider saw first.
+  const emitSymbols: EmitSymbol[] = [];
+  for (const [ref, pl] of [...placed.entries()].sort((a, b) => a[0].localeCompare(b[0], undefined, { numeric: true }))) {
+    const pinSides = new Set(pl.sym.pins.map((p) => {
+      const o = outward(p);
+      return o.dx === -1 ? 'left' : o.dx === 1 ? 'right' : o.dy === -1 ? 'top' : 'bottom';
+    }));
+    const cy = (pl.body.minY + pl.body.maxY) / 2;
+    const cx = (pl.body.minX + pl.body.maxX) / 2;
+    const textW = Math.max(ref.length, pl.part.value.length) * 0.8 * 1.27;
+    let refAt: { x: number; y: number };
+    let valueAt: { x: number; y: number };
+    if (!pinSides.has('top')) {
+      refAt = { x: cx, y: pl.body.minY - 2.54 };
+      // value stacks above the ref when the bottom also carries pins, and sits
+      // below the body otherwise
+      valueAt = pinSides.has('bottom') ? { x: cx, y: pl.body.minY - 5.08 } : { x: cx, y: pl.body.maxY + 2.54 };
+    } else {
+      refAt = { x: pl.body.maxX + textW / 2 + 1.27, y: cy - 1.27 };
+      valueAt = { x: pl.body.maxX + textW / 2 + 1.27, y: cy + 1.27 };
+    }
+    emitSymbols.push({
+      ref,
+      libId: pl.sym.libId,
+      value: pl.part.value,
+      footprint: pl.part.footprint ?? '',
+      at: { x: pl.x, y: pl.y, rot: 0 },
+      refAt,
+      valueAt,
+      pinNumbers: pl.sym.pins.map((p) => p.number),
+    });
+    libSymbols.set(pl.sym.libId, pl.sym.sourceText);
+  }
+
+  /** Centered text box, matching the checker's `textBounds` metrics. */
+  const centeredTextBox = (s: string, x: number, y: number): Bounds => {
+    const w = Math.max(1, s.length) * LABEL_ADVANCE * LABEL_HEIGHT;
+    return { minX: x - w / 2, minY: y - LABEL_HEIGHT / 2, maxX: x + w / 2, maxY: y + LABEL_HEIGHT / 2 };
+  };
+  /** Every visible ref/value text the checker will measure. */
+  const textObstacles: Bounds[] = [
+    ...emitSymbols.flatMap((s) => [centeredTextBox(s.ref, s.refAt.x, s.refAt.y), centeredTextBox(s.value, s.valueAt.x, s.valueAt.y)]),
+    ...extraSymbols.filter((s) => !s.hideValue).map((s) => centeredTextBox(s.value, s.valueAt.x, s.valueAt.y)),
+  ];
+
   // Nets are drafted in name order, so a net can only avoid what is already on
   // the sheet: "COMP" cannot see the trunk "COMP_Z" is about to run through the
   // very point its label occupies. This pass runs once the routing is complete
   // and walks each stub-anchored label outward a grid unit at a time until its
-  // text box clears every foreign wire and body. The anchor rides the stub it
-  // extends, so the label stays attached and connectivity never changes.
+  // text box clears every foreign wire, body, and visible ref/value text. The
+  // anchor rides the stub it extends, so the label stays attached and
+  // connectivity never changes.
   const segHitsBox = (w: { x1: number; y1: number; x2: number; y2: number }, b: Bounds): boolean =>
     Math.min(w.x1, w.x2) < b.maxX - 0.01 &&
     Math.max(w.x1, w.x2) > b.minX + 0.01 &&
@@ -697,6 +808,7 @@ export function draftPlacement(validated: ValidatedIntent, projectName: string, 
     const clearAt = (x: number, y: number): boolean => {
       const box = labelTextBox(lb.name, x, y, lb.rot);
       if (bodies.some((b) => boundsOverlap(box, b))) return false;
+      if (textObstacles.some((b) => boundsOverlap(box, b))) return false;
       if (wires.some((w, i) => i !== rec.wire && segHitsBox(w, box))) return false;
       // Foreign labels are part of what a label must clear, not just bodies and
       // wires. Without this the pass declares a point clear that another net's
@@ -718,7 +830,7 @@ export function draftPlacement(validated: ValidatedIntent, projectName: string, 
      * case — KiCad fuses the two nets — as opposed to merely overlapping text.
      */
     const mergesAt = (x: number, y: number): boolean =>
-      labels.some((o, i) => i !== rec.label && o.name !== lb.name && o.x === x && o.y === y);
+      labels.some((o, i) => i !== rec.label && o.name !== lb.name && sameCoord(o.x, x) && sameCoord(o.y, y));
     const rideTo = (x: number, y: number): void => {
       stub.x2 = x;
       stub.y2 = y;
@@ -757,14 +869,14 @@ export function draftPlacement(validated: ValidatedIntent, projectName: string, 
   const endCount = new Map<string, { x: number; y: number; n: number }>();
   for (const w of wires) {
     for (const [x, y] of [[w.x1, w.y1], [w.x2, w.y2]] as const) {
-      const k = `${x},${y}`;
+      const k = pointKey(x, y);
       const e = endCount.get(k) ?? { x, y, n: 0 };
       e.n++;
       endCount.set(k, e);
     }
   }
   for (const e of endCount.values()) if (e.n >= 3) junctions.push({ x: e.x, y: e.y });
-  const uniqJunctions = [...new Map(junctions.map((j) => [`${j.x},${j.y}`, j])).values()];
+  const uniqJunctions = [...new Map(junctions.map((j) => [pointKey(j.x, j.y), j])).values()];
 
   // no-connect markers (design D6a)
   const noConnects: { x: number; y: number }[] = [];
@@ -774,43 +886,6 @@ export function draftPlacement(validated: ValidatedIntent, projectName: string, 
     const pl = placed.get(m[1]!);
     const pin = symbols.get(m[1]!)?.pins.find((p) => p.number === m[2]);
     if (pl && pin) noConnects.push(pinAt(pl, pin));
-  }
-
-  // ---------- member symbols with collision-free text slots ----------
-  const emitSymbols: EmitSymbol[] = [];
-  for (const [ref, pl] of [...placed.entries()].sort((a, b) => a[0].localeCompare(b[0], undefined, { numeric: true }))) {
-    const pinSides = new Set(pl.sym.pins.map((p) => {
-      const o = outward(p);
-      return o.dx === -1 ? 'left' : o.dx === 1 ? 'right' : o.dy === -1 ? 'top' : 'bottom';
-    }));
-    const cy = (pl.body.minY + pl.body.maxY) / 2;
-    const cx = (pl.body.minX + pl.body.maxX) / 2;
-    const textW = Math.max(ref.length, pl.part.value.length) * 0.8 * 1.27;
-    let refAt: { x: number; y: number };
-    let valueAt: { x: number; y: number };
-    if (!pinSides.has('top')) {
-      refAt = { x: cx, y: pl.body.minY - 2.54 };
-      valueAt = { x: cx, y: pl.body.minY - 2.54 + (pinSides.has('bottom') ? -2.54 : (pl.body.maxY - pl.body.minY) + 5.08) };
-      if (pinSides.has('bottom')) {
-        valueAt = { x: cx, y: pl.body.minY - 5.08 };
-      } else {
-        valueAt = { x: cx, y: pl.body.maxY + 2.54 };
-      }
-    } else {
-      refAt = { x: pl.body.maxX + textW / 2 + 1.27, y: cy - 1.27 };
-      valueAt = { x: pl.body.maxX + textW / 2 + 1.27, y: cy + 1.27 };
-    }
-    emitSymbols.push({
-      ref,
-      libId: pl.sym.libId,
-      value: pl.part.value,
-      footprint: pl.part.footprint ?? '',
-      at: { x: pl.x, y: pl.y, rot: 0 },
-      refAt,
-      valueAt,
-      pinNumbers: pl.sym.pins.map((p) => p.number),
-    });
-    libSymbols.set(pl.sym.libId, pl.sym.sourceText);
   }
 
   // ---------- sheet: content-derived paper, balanced placement ----------
