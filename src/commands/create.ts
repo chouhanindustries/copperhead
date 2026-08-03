@@ -99,9 +99,13 @@ export const STAGES: Stage[] = [
       const realLines = cleanSection.split('\n').filter((l) => l.trim().length > 0);
       const registry = await loadConstraints(root);
       if (Object.keys(registry).length === 0) return false;
+      const budgetKeys = new Set(
+        [...cleanSection.matchAll(/^\s*(?:[-*]\s*)?([A-Za-z][A-Za-z0-9_-]*)\s*:/gm)]
+          .map((m) => m[1]),
+      );
       for (const key of Object.keys(registry)) {
         const shortKey = key.split('.').pop()!;
-        if (!cleanSection.includes(shortKey)) return false;
+        if (!budgetKeys.has(shortKey)) return false;
       }
       return realLines.length > 0;
     },
