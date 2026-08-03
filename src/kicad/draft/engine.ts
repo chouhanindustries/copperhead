@@ -967,6 +967,29 @@ export function draftSchematicPlacement(validated: ValidatedIntent, projectName:
     });
   }
 
+  // Adjacent same-net power pins keep ONE visible rail name per cluster. A
+  // TQFP's supply pins sit one grid row apart on the same side (VCC at pin 4,
+  // VCC at pin 6, AVCC at 18), so their per-pin symbols' value texts overlap:
+  // an error-severity text collision the IR cannot reach, over text that
+  // repeats the same word. Later symbols whose visible value box overlaps an
+  // earlier one of the same net hide theirs; a different net never hides.
+  const shownPowerValues: { net: string; box: Bounds }[] = [];
+  for (const s of extraSymbols) {
+    if (s.hideValue) continue;
+    const w = Math.max(1, s.value.length) * LABEL_ADVANCE * LABEL_HEIGHT;
+    const box: Bounds = {
+      minX: s.valueAt.x - w / 2,
+      minY: s.valueAt.y - LABEL_HEIGHT / 2,
+      maxX: s.valueAt.x + w / 2,
+      maxY: s.valueAt.y + LABEL_HEIGHT / 2,
+    };
+    if (shownPowerValues.some((p) => p.net === s.value && boundsOverlap(p.box, box))) {
+      s.hideValue = true;
+      continue;
+    }
+    shownPowerValues.push({ net: s.value, box });
+  }
+
   // signal nets: local nets wired, everything else labelled at a stub
   const bodies = [...placed.values()].map((p) => p.body);
   let wired = 0;
@@ -1066,6 +1089,16 @@ export function draftSchematicPlacement(validated: ValidatedIntent, projectName:
       // value stacks above the ref when the bottom also carries pins, and sits
       // below the body otherwise
       valueAt = pinSides.has('bottom') ? { x: cx, y: pl.body.minY - 5.08 } : { x: cx, y: pl.body.maxY + 2.54 };
+    } else if (
+      pl.body.maxX - pl.body.minX >= textW + 2.54 &&
+      pl.body.maxY - pl.body.minY >= 7.62
+    ) {
+      // pins on top AND a body big enough to hold its own name: a TQFP-class
+      // part carries pins on all four sides, so every outside slot lands on
+      // some pin's stub or label; the body interior is the one guaranteed-free
+      // area, and it is where KiCad's own large symbols put their text
+      refAt = { x: cx, y: cy - 1.27 };
+      valueAt = { x: cx, y: cy + 1.27 };
     } else {
       refAt = { x: pl.body.maxX + textW / 2 + 1.27, y: cy - 1.27 };
       valueAt = { x: pl.body.maxX + textW / 2 + 1.27, y: cy + 1.27 };

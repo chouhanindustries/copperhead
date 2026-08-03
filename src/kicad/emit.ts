@@ -68,10 +68,28 @@ export interface PlacementModel {
 
 /**
  * Rename a verbatim library `(symbol "Name" …)` block to its embedded lib_id.
- * Only the identifier atom changes; the body bytes stay exactly as vendored.
+ * Identifier atoms only; every other body byte stays exactly as vendored.
+ *
+ * The unit children (`Name_<unit>_<style>`) are renamed with the parent:
+ * KiCad's schematic loader requires the child prefix to match the parent
+ * name, so a derived symbol emitted under its own lib_id with the base's
+ * children (`Regulator_Linear:AMS1117-3.3` wrapping `AP1117-15_0_1`) fails
+ * to load outright. Children carry the BARE name, no library nickname,
+ * matching how non-derived blocks already emit.
  */
 export function renameSymbolBlock(sourceText: string, libId: string): string {
-  return sourceText.replace(/^(\s*\(symbol\s+")[^"]+(")/, `$1${libId.replace(/\$/g, '$$$$')}$2`);
+  const oldName = /^\s*\(symbol\s+"([^"]+)"/.exec(sourceText)?.[1];
+  const bare = libId.includes(':') ? libId.slice(libId.indexOf(':') + 1) : libId;
+  const escaped = libId.replace(/\$/g, '$$$$');
+  let out = sourceText.replace(/^(\s*\(symbol\s+")[^"]+(")/, `$1${escaped}$2`);
+  if (oldName && oldName !== bare) {
+    const oldEsc = oldName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    out = out.replace(
+      new RegExp(`\\(symbol "${oldEsc}_(\\d+_\\d+)"`, 'g'),
+      `(symbol "${bare.replace(/\$/g, '$$$$')}_$1"`,
+    );
+  }
+  return out;
 }
 
 /** Re-indent a vendored block so lib_symbols nests consistently. Structural

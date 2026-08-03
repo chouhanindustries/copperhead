@@ -3,7 +3,7 @@ import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { parseSexp, children, child, isList, type SexpNode, type Bounds } from '../sexp.js';
 import { symbolSearchDirs, findLibraryFile } from '../symlib.js';
-import { EMIT_VERSION } from '../emit.js';
+import { EMIT_VERSION, renameSymbolBlock } from '../emit.js';
 
 /**
  * Symbol resolution for the drafting engine, with hermetic vendoring (design
@@ -233,11 +233,13 @@ export class SymbolSource {
    *
    * `sourceText` is the BASE block verbatim. The emitter renames a vendored
    * block to its lib_id on the way into `lib_symbols`
-   * (`emit.ts:renameSymbolBlock`), so the base geometry lands under the derived
-   * name with no rewriting here — the same mechanism that already renames every
-   * non-derived symbol, and the reason a sub-symbol suffix (`Base_0_1`) that no
-   * longer matches its parent is fine: KiCad accepts it, and the control-board
-   * corpus has been emitting exactly that shape all along.
+   * (`emit.ts:renameSymbolBlock`), so the base geometry lands under the
+   * derived name with no rewriting here. The rename covers the unit children
+   * too (`Base_0_1` becomes `Derived_0_1`): KiCad's schematic loader requires
+   * the child prefix to match the parent name, and a derived block wrapping
+   * the base's children fails to load outright — found when the first
+   * reference board with real derived symbols (AMS1117-3.3, ATmega328P-A)
+   * refused to open.
    *
    * The derived entry's own property overrides are dropped. Nothing downstream
    * reads them — the engine sets Reference, Value and Footprint from the IR —
@@ -270,6 +272,7 @@ export class SymbolSource {
     const name = libId.includes(':') ? libId.slice(libId.indexOf(':') + 1) : libId;
     const vendored = path.join(this.cacheDir(), vendorFileName(lib));
     let block: string | null = null;
+    let fromInstalled = false;
     if (existsSync(vendored)) {
       block = extractSymbolBlock(await readFile(vendored, 'utf8'), name);
       if (block) this.libs.add(lib);
@@ -286,16 +289,28 @@ export class SymbolSource {
         const candidates = names.filter((k) => k.toLowerCase().includes(q) || q.includes(k.toLowerCase())).slice(0, 8);
         throw new SymbolResolutionError(libId, 'no-symbol', candidates);
       }
-      if (this.vendor) {
-        await mkdir(this.cacheDir(), { recursive: true });
-        const existing = existsSync(vendored) ? await readFile(vendored, 'utf8') : emptyVendorLib();
-        await writeFile(vendored, appendToVendorLib(existing, block), 'utf8');
-      }
+      fromInstalled = true;
       this.libs.add(lib);
     }
 
     const node = parseSymbolNode(block);
-    const resolved: ResolvedSymbol = (await this.inherit(libId, lib, node, depth)) ?? {
+    const inherited = await this.inherit(libId, lib, node, depth);
+    if (fromInstalled && this.vendor) {
+      // Derived symbols vendor FLATTENED under their own name, never as the
+      // library's `extends` stub. A vendored stub makes the project
+      // sym-lib-table resolve the derived name to base-geometry-plus-derived-
+      // properties while the sheet embeds base-geometry-plus-base-properties,
+      // and ERC reports lib_symbol_mismatch on every derived part. The
+      // flattened copy is byte-for-byte what the emitter embeds (modulo the
+      // lib nickname), exactly like a non-derived vendored block.
+      const vendorBlock = inherited ? renameSymbolBlock(inherited.sourceText, name) : block;
+      await mkdir(this.cacheDir(), { recursive: true });
+      const existing = existsSync(vendored) ? await readFile(vendored, 'utf8') : emptyVendorLib();
+      if (!extractSymbolBlock(existing, name)) {
+        await writeFile(vendored, appendToVendorLib(existing, vendorBlock), 'utf8');
+      }
+    }
+    const resolved: ResolvedSymbol = inherited ?? {
       libId,
       sourceText: block,
       pins: pinsOf(node),

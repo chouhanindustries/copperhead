@@ -51,6 +51,18 @@ describe('uuidv5 and emitter primitives', () => {
     const renamed = renameSymbolBlock(block, 'Device:R');
     expect(renamed).toBe('(symbol "Device:R"\n\t(pin passive line (at 0 3.81 270))\n)');
   });
+
+  it('renameSymbolBlock renames unit children with the parent (derived symbols)', () => {
+    // KiCad's schematic loader requires child sub-symbol names to carry the
+    // parent's prefix: a derived symbol emitted with its base's children
+    // (AMS1117-3.3 wrapping AP1117-15_0_1) fails to load outright.
+    const block = '(symbol "Base"\n\t(symbol "Base_0_1"\n\t\t(rectangle)\n\t)\n\t(symbol "Base_1_1"\n\t\t(pin)\n\t)\n)';
+    const renamed = renameSymbolBlock(block, 'Lib:Derived');
+    expect(renamed).toContain('(symbol "Lib:Derived"');
+    expect(renamed).toContain('(symbol "Derived_0_1"');
+    expect(renamed).toContain('(symbol "Derived_1_1"');
+    expect(renamed).not.toContain('Base');
+  });
 });
 
 describe('drafting engine: the reference IR end to end', () => {
