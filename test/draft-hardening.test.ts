@@ -94,6 +94,36 @@ describe('derived (extends) symbols', () => {
     }
   }, 60000);
 
+  it('refuses a multi-unit symbol before it can merge nets', async () => {
+    // Units of a multi-unit symbol share symbol-space pin coordinates, so a
+    // single placed instance overlays unrelated pins on one point: a probe
+    // LM358 drafted with both amps fused OUT1 into OUT2 and reported ok.
+    const repo = await mkdtemp(path.join(tmpdir(), 'copperhead-multiunit-'));
+    try {
+      await writeFile(
+        path.join(repo, 'schematic.intent.json'),
+        JSON.stringify({
+          version: 1,
+          parts: [
+            { ref: 'U1', libId: 'CopperStack:DualBuf', value: 'DualBuf', group: 'A' },
+            { ref: 'R1', libId: 'Device:R', value: '1k', group: 'A' },
+          ],
+          nets: [
+            { name: 'N1', pins: ['U1.1', 'R1.1'] },
+            { name: 'N2', pins: ['U1.2', 'R1.2'] },
+          ],
+        }),
+        'utf8',
+      );
+      const res = await draftSchematicToText({ repoRoot: repo, schematic: 'b.kicad_sch', symbolDirs: [SYMLIB] });
+      expect(res.ok).toBe(false);
+      if (res.ok) return;
+      expect(res.message).toContain('multi-unit symbol');
+    } finally {
+      await rm(repo, { recursive: true, force: true });
+    }
+  });
+
   it('still refuses a symbol whose extends target is unnamed', async () => {
     const repo = await mkdtemp(path.join(tmpdir(), 'copperhead-derived-bad-'));
     try {

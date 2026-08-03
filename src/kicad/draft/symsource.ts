@@ -55,6 +55,11 @@ export interface ResolvedSymbol {
   /** Union of body graphic items, symbol space; null for graphics-free symbols. */
   body: Bounds | null;
   isPower: boolean;
+  /** True when the library symbol defines more than one unit (an opamp, a
+   * gate pack). The engine places single instances only, and a multi-unit
+   * symbol's units share symbol-space pin coordinates, so drafting one would
+   * silently merge unrelated nets; validation refuses these. */
+  multiUnit: boolean;
 }
 
 /** Extract the top-level `(symbol "name" …)` block from library text, verbatim. */
@@ -84,6 +89,17 @@ export function extractSymbolBlock(libText: string, name: string): string | null
     }
   }
   return null;
+}
+
+/** Highest unit number among a block's `Name_<unit>_<style>` children. */
+function maxUnitOf(sym: SexpNode[]): number {
+  let max = 0;
+  for (const c of children(sym, 'symbol')) {
+    const name = atomAt(c, 1);
+    const m = name ? /_(\d+)_(\d+)$/.exec(name) : null;
+    if (m) max = Math.max(max, Number(m[1]));
+  }
+  return max;
 }
 
 function parseSymbolNode(block: string): SexpNode[] {
@@ -260,7 +276,7 @@ export class SymbolSource {
     // the stack gives out, mid-draft, with no attributable message.
     if (depth >= MAX_EXTENDS_DEPTH) throw new SymbolResolutionError(libId, 'derived-unsupported');
     const base = await this.resolve(`${lib}:${baseName}`, depth + 1);
-    return { libId, sourceText: base.sourceText, pins: base.pins, body: base.body, isPower: base.isPower };
+    return { libId, sourceText: base.sourceText, pins: base.pins, body: base.body, isPower: base.isPower, multiUnit: base.multiUnit };
   }
 
   /** Resolve a lib_id: vendored copy first, else installed library (then vendor it). */
@@ -316,6 +332,7 @@ export class SymbolSource {
       pins: pinsOf(node),
       body: bodyOf(node),
       isPower: child(node, 'power') !== undefined || libId.startsWith('power:'),
+      multiUnit: maxUnitOf(node) >= 2,
     };
     this.cache.set(libId, resolved);
     return resolved;
