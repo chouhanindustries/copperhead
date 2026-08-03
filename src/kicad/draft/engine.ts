@@ -295,6 +295,10 @@ export function draftPlacement(validated: ValidatedIntent, projectName: string, 
   // counts here — typical names fit inside the base gaps and nothing widens.
   const signalNetOfPin = new Map<string, string>();
   for (const net of signalNets) for (const ep of net.pins) signalNetOfPin.set(ep, net.name);
+  /** Every endpoint's net, power-class nets included (the idiom passes need
+   * to see a chain's rail/ground end, which signalNetOfPin cannot). */
+  const netByEndpoint = new Map<string, IntentNet>();
+  for (const net of intent.nets) for (const ep of net.pins) netByEndpoint.set(ep, net);
   const labelExtents = (refs: string[]): { left: number; right: number } => {
     let left = 0;
     let right = 0;
@@ -464,6 +468,303 @@ export function draftPlacement(validated: ValidatedIntent, projectName: string, 
       groupMaxY = capY + 2 * MARGIN + 6;
     }
 
+    // ---------- idiom micro-templates and the alignment pass (7.5/7.5a) ----------
+    // Column placement is correct but reads machine-made for the small
+    // structures a human drafter draws by reflex: a pull-up sits directly on
+    // the pin it pulls with its rail above, a series RC hangs as one straight
+    // vertical run, crystal load caps mirror about their crystal. Two passes
+    // rearrange exactly those shapes after column placement, both no-ops
+    // unless the textbook topology is present, and both collision-checked so
+    // a failed fit falls back to the column position rather than overlapping.
+    const inGroup = new Set(members.map((m) => m.ref));
+    const idiomPlaced = new Set<string>();
+    const CHAIN_GAP = 4 * U;
+    /** The two pins of a vertically-pinned two-lead part, or null. */
+    const vertPins = (ref: string): { top: DraftPin; bot: DraftPin } | null => {
+      const pins = symbols.get(ref)?.pins ?? [];
+      if (pins.length !== 2) return null;
+      const top = pins.find((p) => outward(p).dy === -1);
+      const bot = pins.find((p) => outward(p).dy === 1);
+      return top && bot ? { top, bot } : null;
+    };
+    const isCrystal = (ref: string): boolean => /crystal|reson/i.test(partByRef.get(ref)?.libId ?? '');
+    /** A part the chain pass may move: two vertical leads, in this group, not
+     * already spoken for by the decap row or the crystal template. */
+    const chainable = (ref: string): boolean =>
+      inGroup.has(ref) && !decapOwner.has(ref) && !idiomPlaced.has(ref) && !isCrystal(ref) && vertPins(ref) !== null;
+    const parseEp = (ep: string): { ref: string; pin: string } | null => {
+      const m = /^([^.]+)\.(.+)$/.exec(ep);
+      return m ? { ref: m[1]!, pin: m[2]! } : null;
+    };
+    const classOf = (name: string): NetClass => netClasses.get(name)?.cls ?? 'signal';
+    const padOverlap = (a: Bounds, b: Bounds, pad: number): boolean =>
+      a.minX < b.maxX + pad && a.maxX > b.minX - pad && a.minY < b.maxY + pad && a.maxY > b.minY - pad;
+    /** Candidate placement putting `ref`'s TOP pin connection point at (x, y). */
+    const candidateAt = (ref: string, x: number, y: number): Placed => {
+      const sym = symbols.get(ref)!;
+      const v = vertPins(ref)!;
+      const b = bodyBoundsOf(sym);
+      const ox = x - v.top.x;
+      const oy = y + v.top.y;
+      const prev = placed.get(ref)!;
+      return {
+        part: prev.part,
+        sym,
+        x: ox,
+        y: oy,
+        body: { minX: ox + b.minX, minY: oy - b.maxY, maxX: ox + b.maxX, maxY: oy - b.minY },
+        cellW: prev.cellW,
+        cellH: prev.cellH,
+      };
+    };
+    /** Apply candidate moves unless any moved body lands within a grid unit of
+     * an unmoved one; all-or-nothing so a failed fit changes nothing. */
+    const applyMoves = (moves: Map<string, Placed>): boolean => {
+      for (const cand of moves.values()) {
+        for (const [oref, op] of placed) {
+          if (moves.has(oref)) continue;
+          if (padOverlap(cand.body, op.body, U)) return false;
+        }
+      }
+      for (const [ref, cand] of moves) placed.set(ref, cand);
+      return true;
+    };
+    /** Every endpoint of every net a set of parts touches (the chain's own
+     * connection points, allowed to sit on its axis by definition). */
+    const ownEndpoints = (refs: Iterable<string>): Set<string> => {
+      const eps = new Set<string>();
+      for (const ref of refs) {
+        for (const pin of symbols.get(ref)?.pins ?? []) {
+          const net = netByEndpoint.get(`${ref}.${pin.number}`);
+          for (const ep of net?.pins ?? []) eps.add(ep);
+        }
+      }
+      return eps;
+    };
+    /**
+     * A chain's wires run vertically along one x. No FOREIGN connected pin or
+     * stub end may sit on that line within the chain's y-range: KiCad joins
+     * wires at coincident endpoints, so a chain routed down a column of
+     * neighbouring stub ends silently merges nets. The first npn-switch run
+     * of this pass did exactly that — the reset pull-up's run down U1's
+     * left-pin stub column attached 5V to DRIVE. Body boxes cannot catch
+     * this; the check must be against connection points.
+     */
+    const axisClear = (axisX: number, yMin: number, yMax: number, ownEps: Set<string>): boolean => {
+      for (const [oref, opl] of placed) {
+        for (const pin of opl.sym.pins) {
+          const ep = `${oref}.${pin.number}`;
+          const net = netByEndpoint.get(ep);
+          if (!net || ownEps.has(ep)) continue;
+          const o = outward(pin);
+          const len = classOf(net.name) !== 'signal' && o.dx !== 0 ? STUB + 2 : STUB;
+          const p = pinAt(opl, pin);
+          const end = { x: p.x + o.dx * len * U, y: p.y + o.dy * len * U };
+          for (const q of [p, end]) {
+            if (sameCoord(q.x, axisX) && q.y > yMin - U && q.y < yMax + U) return false;
+          }
+        }
+      }
+      return true;
+    };
+    /** The room a rail/ground end grows past its pin: stub, bar, value text. */
+    const POWER_CLEAR = 8 * U;
+    const powerEndBox = (axisX: number, pinY: number, dir: -1 | 1): Bounds => ({
+      minX: axisX - 3 * U,
+      maxX: axisX + 3 * U,
+      minY: dir === -1 ? pinY - POWER_CLEAR : pinY,
+      maxY: dir === -1 ? pinY : pinY + POWER_CLEAR,
+    });
+    /** Clearance-check a chain (or flank) move set against its axis and its
+     * power-end growth, then apply; marks the parts idiom-placed only when
+     * everything held. */
+    const finalizeMoves = (
+      segments: { axisX: number; ys: number[] }[],
+      moves: Map<string, Placed>,
+      clearBoxes: Bounds[] = [],
+    ): boolean => {
+      const own = ownEndpoints(moves.keys());
+      for (const seg of segments) {
+        // the pad covers the power stub and symbol a rail/ground end grows
+        if (!axisClear(seg.axisX, Math.min(...seg.ys) - 4 * U, Math.max(...seg.ys) + 4 * U, own)) return false;
+      }
+      // a power symbol is not a body, so the body check cannot see it: the
+      // divider repro grew R2's GND bar and value text straight into the body
+      // of the part below until these boxes were checked explicitly
+      for (const box of clearBoxes) {
+        for (const [oref, op] of placed) {
+          if (moves.has(oref)) continue;
+          if (padOverlap(box, op.body, 0)) return false;
+        }
+      }
+      if (!applyMoves(moves)) return false;
+      for (const ref of moves.keys()) idiomPlaced.add(ref);
+      return true;
+    };
+
+    // Crystal flanking: each horizontal crystal pin whose net also reaches a
+    // two-lead cap-to-ground drops that cap below the pin's stub end. The
+    // crystal's pins are symmetric about its body, so the two caps come out
+    // mirror-placed at equal offsets and a common height by construction.
+    for (const m of members) {
+      if (!isCrystal(m.ref)) continue;
+      const xpl = placed.get(m.ref);
+      const xsym = symbols.get(m.ref);
+      if (!xpl || !xsym || xsym.pins.length !== 2) continue;
+      const moves = new Map<string, Placed>();
+      const segments: { axisX: number; ys: number[] }[] = [];
+      const clearBoxes: Bounds[] = [];
+      for (const pin of xsym.pins) {
+        const o = outward(pin);
+        if (o.dx === 0) continue;
+        const net = netByEndpoint.get(`${m.ref}.${pin.number}`);
+        if (!net || classOf(net.name) !== 'signal') continue;
+        const cap = net.pins
+          .map(parseEp)
+          .find((e): e is { ref: string; pin: string } => {
+            if (!e || e.ref === m.ref || !chainable(e.ref) || moves.has(e.ref)) return false;
+            const v = vertPins(e.ref)!;
+            if (e.pin !== v.top.number) return false; // crystal node must enter the cap's top lead
+            const other = netByEndpoint.get(`${e.ref}.${v.bot.number}`);
+            return other !== undefined && classOf(other.name) !== 'signal';
+          });
+        if (!cap) continue;
+        const at = pinAt(xpl, pin);
+        const axisX = at.x + o.dx * STUB * U;
+        const cand = candidateAt(cap.ref, axisX, at.y + CHAIN_GAP);
+        const v = vertPins(cap.ref)!;
+        moves.set(cap.ref, cand);
+        segments.push({ axisX, ys: [at.y, cand.y - v.bot.y] });
+        clearBoxes.push(powerEndBox(axisX, cand.y - v.bot.y, 1)); // the ground symbol below the cap
+      }
+      // all-or-nothing per crystal: one dropped cap and one column cap would
+      // read worse than the plain columns the pass is improving on
+      if (moves.size) finalizeMoves(segments, moves, clearBoxes);
+    }
+
+    // Drop chains: a maximal run of two-lead vertical parts linked pin-to-pin
+    // by two-endpoint signal nets, ended on each side by an anchor pin (any
+    // other part) or a power-class net. The run is restacked as one straight
+    // vertical line: on the anchor's stub-end axis when there is an anchor
+    // (the wire from the anchor continues dead straight into the chain), on
+    // its own column axis when both ends are rails (a divider). Uniform gaps,
+    // top-to-bottom in connectivity order — AC-16.31's zero-bend contract.
+    type ChainEnd =
+      | { kind: 'power' | 'open' | 'invalid' }
+      | { kind: 'anchor'; ref: string; pin: DraftPin };
+    const walk = (start: string, dir: 'up' | 'down', chain: string[]): ChainEnd => {
+      let current = start;
+      for (;;) {
+        const v = vertPins(current)!;
+        const pinN = dir === 'up' ? v.top.number : v.bot.number;
+        const net = netByEndpoint.get(`${current}.${pinN}`);
+        if (!net) return { kind: 'open' }; // declared no-connect or unused
+        if (classOf(net.name) !== 'signal') return { kind: 'power' };
+        if (net.pins.length !== 2) return { kind: 'invalid' }; // a tapped node is not a series chain
+        const otherEp = net.pins.map(parseEp).find((e) => e !== null && e.ref !== current);
+        if (!otherEp) return { kind: 'invalid' };
+        const opl = placed.get(otherEp.ref);
+        if (!opl || groupOf.get(otherEp.ref) !== gname) return { kind: 'invalid' };
+        if (chainable(otherEp.ref) && !chain.includes(otherEp.ref)) {
+          const ov = vertPins(otherEp.ref)!;
+          // the link must enter through the lead facing the chain, or the
+          // drawn run would have to cross the part's own body
+          if (otherEp.pin !== (dir === 'up' ? ov.bot.number : ov.top.number)) return { kind: 'invalid' };
+          if (dir === 'up') chain.unshift(otherEp.ref);
+          else chain.push(otherEp.ref);
+          current = otherEp.ref;
+          continue;
+        }
+        const pin = symbols.get(otherEp.ref)?.pins.find((p) => p.number === otherEp.pin);
+        if (!pin || chain.includes(otherEp.ref)) return { kind: 'invalid' };
+        return { kind: 'anchor', ref: otherEp.ref, pin };
+      }
+    };
+    const chained = new Set<string>();
+    for (const m of members) {
+      if (!chainable(m.ref) || chained.has(m.ref)) continue;
+      const chain = [m.ref];
+      const topEnd = walk(m.ref, 'up', chain);
+      const bottomEnd = walk(chain[chain.length - 1]!, 'down', chain);
+      for (const ref of chain) chained.add(ref);
+      if (topEnd.kind === 'invalid' || bottomEnd.kind === 'invalid') continue;
+      if (chain.length > 4) continue; // beyond four parts this is a network, not an idiom
+      const anchors = [topEnd, bottomEnd].filter((e): e is Extract<ChainEnd, { kind: 'anchor' }> => e.kind === 'anchor');
+      if (anchors.length === 0 && chain.length < 2) continue; // a lone floating part has nothing to align to
+      if (topEnd.kind === 'open' && bottomEnd.kind === 'open') continue;
+
+      const stubEndOf = (a: Extract<ChainEnd, { kind: 'anchor' }>): { x: number; y: number; o: { dx: number; dy: number } } => {
+        const at = pinAt(placed.get(a.ref)!, a.pin);
+        const o = outward(a.pin);
+        return { x: at.x + o.dx * STUB * U, y: at.y + o.dy * STUB * U, o };
+      };
+      let axisX: number;
+      let cursor: number; // y of the next TOP pin to place
+      let order = chain;
+      if (topEnd.kind === 'anchor') {
+        const s = stubEndOf(topEnd);
+        if (s.o.dy === -1) continue; // an up-facing pin cannot feed a downward run
+        if (bottomEnd.kind === 'anchor') {
+          const b = stubEndOf(bottomEnd);
+          // both ends must sit on one axis with the second anchor below and
+          // able to receive from above, else leave the columns alone
+          if (!sameCoord(s.x, b.x) || b.y <= s.y || b.o.dy === 1) continue;
+        }
+        axisX = s.x;
+        cursor = s.y + CHAIN_GAP;
+      } else if (bottomEnd.kind === 'anchor') {
+        // rail above, anchor below (a pull-up): stack upward from the anchor
+        const s = stubEndOf(bottomEnd);
+        if (s.o.dy === 1) continue; // a down-facing pin cannot feed an upward run
+        axisX = s.x;
+        let up = s.y - CHAIN_GAP;
+        order = [...chain].reverse();
+        const moves = new Map<string, Placed>();
+        for (const ref of order) {
+          const v = vertPins(ref)!;
+          const span = v.top.y - v.bot.y; // symbol-space lead separation
+          const cand = candidateAt(ref, axisX, up - span);
+          moves.set(ref, cand);
+          up = up - span - CHAIN_GAP;
+        }
+        const topY = up + CHAIN_GAP;
+        finalizeMoves(
+          [{ axisX, ys: [s.y, topY] }],
+          moves,
+          topEnd.kind === 'power' ? [powerEndBox(axisX, topY, -1)] : [],
+        );
+        continue;
+      } else {
+        // both ends are rails: a divider — straighten in place on its own axis
+        const first = placed.get(chain[0]!)!;
+        const v = vertPins(chain[0]!)!;
+        const topAt = pinAt(first, v.top);
+        axisX = topAt.x;
+        cursor = topAt.y;
+      }
+      const moves = new Map<string, Placed>();
+      const startY = cursor;
+      let fits = true;
+      for (const ref of order) {
+        const cand = candidateAt(ref, axisX, cursor);
+        moves.set(ref, cand);
+        const v = vertPins(ref)!;
+        cursor = cursor + (v.top.y - v.bot.y) + CHAIN_GAP;
+      }
+      let axisEndY = cursor - CHAIN_GAP;
+      if (bottomEnd.kind === 'anchor') {
+        // cursor now sits one gap below the last lead; it may not pass the
+        // lower anchor's stub end or the closing wire would run backwards
+        const b = stubEndOf(bottomEnd);
+        if (cursor > b.y + 0.001) fits = false;
+        axisEndY = b.y;
+      }
+      const clearBoxes: Bounds[] = [];
+      if (topEnd.kind === 'power') clearBoxes.push(powerEndBox(axisX, startY, -1));
+      if (bottomEnd.kind === 'power') clearBoxes.push(powerEndBox(axisX, cursor - CHAIN_GAP, 1));
+      if (fits) finalizeMoves([{ axisX, ys: [startY - CHAIN_GAP, axisEndY] }], moves, clearBoxes);
+    }
+
     const memberRefs = [...members.map((m) => m.ref), ...capRefs];
     const cells = memberRefs.map((r) => placed.get(r)!);
     if (cells.length) {
@@ -570,6 +871,8 @@ export function draftPlacement(validated: ValidatedIntent, projectName: string, 
   const pwrFlags: string[] = [];
   /** Labels sitting at a stub end, with the stub they may ride outward. */
   const stubbedLabels: { label: number; wire: number; o: { dx: number; dy: number } }[] = [];
+  /** Wired-net labels with every wire point of their run as fallback anchors. */
+  const wiredLabels: { label: number; pts: { x: number; y: number }[] }[] = [];
   let wireIdx = new Map<string, number>();
   const addWire = (net: string, x1: number, y1: number, x2: number, y2: number): void => {
     if (sameCoord(x1, x2) && sameCoord(y1, y2)) return; // zero-length once emitted
@@ -717,6 +1020,7 @@ export function draftPlacement(validated: ValidatedIntent, projectName: string, 
         ]);
         pts.sort((a, b) => a.y - b.y || a.x - b.x);
         labels.push({ name: net.name, x: pts[0]!.x, y: pts[0]!.y, rot: 0 });
+        wiredLabels.push({ label: labels.length - 1, pts });
         wired++;
         if (eps.length > 2) {
           for (const s of stubs) {
@@ -802,6 +1106,40 @@ export function draftPlacement(validated: ValidatedIntent, projectName: string, 
     Math.max(w.x1, w.x2) > b.minX + 0.01 &&
     Math.min(w.y1, w.y2) < b.maxY - 0.01 &&
     Math.max(w.y1, w.y2) > b.minY + 0.01;
+  /** Is (x, y) on the (axis-aligned) segment, endpoints included? */
+  const segContains = (w: { x1: number; y1: number; x2: number; y2: number }, x: number, y: number): boolean =>
+    x >= Math.min(w.x1, w.x2) - 0.01 &&
+    x <= Math.max(w.x1, w.x2) + 0.01 &&
+    y >= Math.min(w.y1, w.y2) - 0.01 &&
+    y <= Math.max(w.y1, w.y2) + 0.01 &&
+    (Math.abs(w.x1 - w.x2) < 0.01 ? Math.abs(x - w.x1) <= 0.01 : Math.abs(y - w.y1) <= 0.01);
+
+  // Wired-net labels first: the single label naming a wired run used to be
+  // pinned at the topmost-leftmost wire point with no clearance check, and on
+  // a drop chain that point is the anchor corner — the text immediately lies
+  // across the chain's vertical run. The label may sit at ANY point of its own
+  // net's wires, so walk the run's points and take the first whose text box
+  // clears everything the checker will measure; wires the point itself lies on
+  // are the label's own attachment and never count as collisions.
+  for (const rec of wiredLabels) {
+    const lb = labels[rec.label]!;
+    const clearWired = (x: number, y: number): boolean => {
+      const box = labelTextBox(lb.name, x, y, 0);
+      if (bodies.some((b) => boundsOverlap(box, b))) return false;
+      if (textObstacles.some((b) => boundsOverlap(box, b))) return false;
+      if (wires.some((w) => !segContains(w, x, y) && segHitsBox(w, box))) return false;
+      return !labels.some(
+        (o, i) => i !== rec.label && o.name !== lb.name && boundsOverlap(box, labelTextBox(o.name, o.x, o.y, o.rot)),
+      );
+    };
+    if (clearWired(lb.x, lb.y)) continue;
+    const alt = rec.pts.find((p) => clearWired(p.x, p.y));
+    if (alt) {
+      lb.x = alt.x;
+      lb.y = alt.y;
+    }
+  }
+
   for (const rec of stubbedLabels) {
     const lb = labels[rec.label]!;
     const stub = wires[rec.wire]!;
