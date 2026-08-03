@@ -72,7 +72,7 @@ const TITLE_STRIP = 30;
 
 export type NetClass = 'rail' | 'ground' | 'signal';
 
-export interface DraftReport {
+export interface SchematicDraftReport {
   groups: { name: string; members: string[] }[];
   netClasses: { name: string; class: NetClass; overridden: boolean }[];
   wireCount: number;
@@ -235,7 +235,7 @@ const segCrossesBody = (x1: number, y1: number, x2: number, y2: number, b: Bound
   return inX && inY; // conservative for diagonals (the engine never draws them)
 };
 
-export function draftPlacement(validated: ValidatedIntent, projectName: string, today: string): { model: PlacementModel; report: DraftReport } {
+export function draftSchematicPlacement(validated: ValidatedIntent, projectName: string, today: string): { model: PlacementModel; report: SchematicDraftReport } {
   const { intent, symbols, docGroups } = validated;
   const notes: string[] = [];
 
@@ -1320,7 +1320,7 @@ export function draftPlacement(validated: ValidatedIntent, projectName: string, 
     captions: groupRects.map((r) => ({ text: r.name, x: r.x1 + 2, y: r.y1 + 2, name: r.name })),
   };
 
-  const report: DraftReport = {
+  const report: SchematicDraftReport = {
     groups: groupNames.map((g) => ({
       name: g,
       members: [...groupOf.entries()].filter(([, gg]) => gg === g).map(([r]) => r).sort((a, b) => a.localeCompare(b, undefined, { numeric: true })),

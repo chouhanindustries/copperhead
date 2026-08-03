@@ -6,7 +6,7 @@ Committed reference projects for control-testing the deterministic drafting engi
 
 For each board under this directory:
 
-1. `copperhead draft` on a copy of the project MUST reproduce `reference/<name>.kicad_sch` byte for byte. Any difference is an engine regression (or an intentional change, in which case the reference is regenerated and the diff reviewed).
+1. `copperhead draft schematic` on a copy of the project MUST reproduce `reference/<name>.kicad_sch` byte for byte. Any difference is an engine regression (or an intentional change, in which case the reference is regenerated and the diff reviewed).
 2. The drafted sheet MUST pass ERC with zero violations and the legibility checker with zero error-severity findings.
 3. `reference/<name>.png` is the visual reference. After an intentional engine change, re-render and eyeball the new image against the old one before replacing it; the byte diff says WHAT moved, the render says whether it still reads well.
 

@@ -5,7 +5,7 @@ import { mkdtemp, cp, rm, readFile, writeFile, mkdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dispatchTool, type RunContext } from '../src/agent/tools.js';
 import { ObligationsLedger } from '../src/agent/ledger.js';
-import { runDraft } from '../src/kicad/draft/draft.js';
+import { draftSchematic } from '../src/kicad/draft/draft.js';
 import { STAGES } from '../src/commands/create.js';
 
 /**
@@ -32,7 +32,7 @@ async function draftedRepo(): Promise<{ repo: string; cleanup: () => Promise<voi
   );
   // first draft vendors the fixture symbols into sym-lib-cache, after which the
   // repo is hermetic (tools and isComplete resolve from the cache)
-  const res = await runDraft({
+  const res = await draftSchematic({
     repoRoot: repo,
     schematic: 'board.kicad_sch',
     intentPath: 'schematic.intent.json',
@@ -190,7 +190,7 @@ describe('stage-4 drafting contract (AC-16.20)', () => {
       expect(await isComplete(repo, 'docs/')).toBe(false);
 
       // re-draft: complete again
-      const res = await runDraft({
+      const res = await draftSchematic({
         repoRoot: repo,
         schematic: 'board.kicad_sch',
         intentPath: 'schematic.intent.json',

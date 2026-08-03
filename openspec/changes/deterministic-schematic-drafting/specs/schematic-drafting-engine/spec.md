@@ -166,11 +166,11 @@ After placement and wiring, the engine SHALL run a deterministic alignment pass 
 
 ### Requirement: Drafting entry points
 
-The system SHALL expose the engine as `copperhead draft` (IR in, schematic and report out), deterministic, LLM-free, and network-free under the same contract class as `check`. The draft report SHALL state the groups placed, the wire and label counts, every net's resolved power class, any synthesized `PWR_FLAG`s, and SHALL embed the legibility checker's findings and the score for the freshly drafted sheet, so a draft, its check, and its score cost one call rather than three.
+The system SHALL expose the engine as `copperhead draft schematic` (IR in, schematic and report out), deterministic, LLM-free, and network-free under the same contract class as `check`. The draft report SHALL state the groups placed, the wire and label counts, every net's resolved power class, any synthesized `PWR_FLAG`s, and SHALL embed the legibility checker's findings and the score for the freshly drafted sheet, so a draft, its check, and its score cost one call rather than three.
 
 #### Scenario: draft is deterministic and offline
 
-- **WHEN** `copperhead draft` runs
+- **WHEN** `copperhead draft schematic` runs
 - **THEN** no language-model call and no network request is made
 
 #### Scenario: Report embeds check and score (AC-16.11)

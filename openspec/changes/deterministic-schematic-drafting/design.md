@@ -46,7 +46,7 @@ flowchart LR
     SCR --> TA & TB & TC
 ```
 
-Entry points: the `draft_schematic` agent tool and the `copperhead draft` command run IR through engine and emitter; `score_schematic` and `copperhead score` run the scorer alone; `check --json` surfaces the score as advisory data. The repair loop, when a gate objects, edits the IR and re-drafts; it never edits geometry.
+Entry points: the `draft_schematic` agent tool and the `copperhead draft schematic` command run IR through engine and emitter; `score_schematic` and `copperhead score schematic` run the scorer alone; `check --json` surfaces the score as advisory data. The repair loop, when a gate objects, edits the IR and re-drafts; it never edits geometry.
 
 ## Goals / Non-Goals
 
@@ -129,7 +129,7 @@ Carried over from the absorbed `readable-schematic-drafting` design; its origina
 
 ## Migration Plan
 
-Additive, in two phases within one change. Phase one lands the checker against the current model-authored flow: geometry accessors, check families, `check_legibility` tool, ledger obligation, `check` advisories, and the legibility condition in the stage-4 contract, immediately stopping unreadable sheets. Phase two lands the engine: emitter and IR first (usable standalone as `copperhead draft`), then the engine stages, scorer, and goldens, then the stage-4 restructure last, so `create` switches from model-authored geometry to engine drafting in a single reviewed step with the checker already in place to judge it. Rollback is config-free: reverting the stage-4 wiring restores the model-authored flow with the checker still gating; `draft`, `score`, and the corpus remain useful independently. External ordering: the `turn-budget-continue-and-loop-efficiency` change must archive first, since it owns the base text of the "Content-aware stage completion" requirement this change modifies.
+Additive, in two phases within one change. Phase one lands the checker against the current model-authored flow: geometry accessors, check families, `check_legibility` tool, ledger obligation, `check` advisories, and the legibility condition in the stage-4 contract, immediately stopping unreadable sheets. Phase two lands the engine: emitter and IR first (usable standalone as `copperhead draft schematic`), then the engine stages, scorer, and goldens, then the stage-4 restructure last, so `create` switches from model-authored geometry to engine drafting in a single reviewed step with the checker already in place to judge it. Rollback is config-free: reverting the stage-4 wiring restores the model-authored flow with the checker still gating; `draft`, `score`, and the corpus remain useful independently. External ordering: the `turn-budget-continue-and-loop-efficiency` change must archive first, since it owns the base text of the "Content-aware stage completion" requirement this change modifies.
 
 ## Open Questions
 

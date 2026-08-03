@@ -79,8 +79,8 @@
 
 ## 10. CLI and agent tools
 
-- [x] 10.1 `copperhead draft`: IR through engine and emitter, draft report, non-zero exit with findings on validation failure; LLM-free and network-free
-- [x] 10.2 `copperhead score`: score JSON, exit code independent of the composite; LLM-free and network-free
+- [x] 10.1 `copperhead draft schematic`: IR through engine and emitter, draft report, non-zero exit with findings on validation failure; LLM-free and network-free
+- [x] 10.2 `copperhead score schematic`: score JSON, exit code independent of the composite; LLM-free and network-free
 - [x] 10.3 `draft_schematic` tool: validate + draft + report with embedded checker findings and score, updating the legibility ledger obligation; spec-gated; failed draft leaves the schematic untouched
 - [x] 10.4 `score_schematic` tool: composite + breakdown + cap, graceful no-schematic path
 - [x] 10.5 Drafting-mode guard: refuse `edit_file`/`write_file` against an engine-drafted schematic, naming `draft_schematic`; `copperhead do` on human-drawn sheets untouched

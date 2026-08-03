@@ -5,7 +5,7 @@ import { existsSync } from 'node:fs';
 import { mkdtemp, cp, rm, readFile, writeFile, mkdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { SymbolSource, SymbolResolutionError, powerSymbolSource, powerNetToken } from '../src/kicad/draft/symsource.js';
-import { draftToText, runDraft } from '../src/kicad/draft/draft.js';
+import { draftSchematicToText, draftSchematic } from '../src/kicad/draft/draft.js';
 import { findMergedNets, findLabelOverlaps } from '../src/kicad/draft/engine.js';
 import { looksLikeDescription } from '../src/kicad/draft/ir.js';
 import { parseSexp } from '../src/kicad/sexp.js';
@@ -109,14 +109,14 @@ describe('merged nets are refused, not warned about', () => {
    * that a warning. The board it describes charges at the wrong current with no
    * temperature cutoff, and nothing in the pipeline stopped it.
    */
-  it('draftToText refuses when two nets share a label point', async () => {
+  it('draftSchematicToText refuses when two nets share a label point', async () => {
     const repo = await mkdtemp(path.join(tmpdir(), 'copperhead-merged-'));
     try {
       await cp(path.join(DRAFT_FIXTURE, 'docs'), path.join(repo, 'docs'), { recursive: true });
       const intent = JSON.parse(await readFile(path.join(DRAFT_FIXTURE, 'schematic.intent.json'), 'utf8'));
       await writeFile(path.join(repo, 'schematic.intent.json'), JSON.stringify(intent), 'utf8');
 
-      const clean = await draftToText({
+      const clean = await draftSchematicToText({
         repoRoot: repo,
         schematic: 'board.kicad_sch',
         intentPath: 'schematic.intent.json',
@@ -213,7 +213,7 @@ describe('overlapping label text is a budget, not a gate', () => {
       const intent = JSON.parse(await readFile(path.join(DRAFT_FIXTURE, 'schematic.intent.json'), 'utf8'));
       await writeFile(path.join(repo, 'schematic.intent.json'), JSON.stringify(intent), 'utf8');
 
-      const res = await draftToText({
+      const res = await draftSchematicToText({
         repoRoot: repo,
         schematic: 'board.kicad_sch',
         intentPath: 'schematic.intent.json',
@@ -230,11 +230,11 @@ describe('overlapping label text is a budget, not a gate', () => {
   });
 });
 
-/** Draft a one-off intent in a temp repo; returns the draftToText result. */
+/** Draft a one-off intent in a temp repo; returns the draftSchematicToText result. */
 async function draftIntent(
   intent: unknown,
   opts: { docs?: Record<string, string> } = {},
-): Promise<{ res: Awaited<ReturnType<typeof draftToText>>; repo: string; cleanup: () => Promise<void> }> {
+): Promise<{ res: Awaited<ReturnType<typeof draftSchematicToText>>; repo: string; cleanup: () => Promise<void> }> {
   const repo = await mkdtemp(path.join(tmpdir(), 'copperhead-hardening-'));
   await writeFile(path.join(repo, 'schematic.intent.json'), JSON.stringify(intent), 'utf8');
   let docsDir: string | undefined;
@@ -243,7 +243,7 @@ async function draftIntent(
     await mkdir(docsDir, { recursive: true });
     for (const [name, text] of Object.entries(opts.docs)) await writeFile(path.join(docsDir, name), text, 'utf8');
   }
-  const res = await draftToText({
+  const res = await draftSchematicToText({
     repoRoot: repo,
     schematic: 'board.kicad_sch',
     intentPath: 'schematic.intent.json',
@@ -283,7 +283,7 @@ describe('facing long-named labels draft clean by construction', () => {
         }),
         'utf8',
       );
-      const res = await runDraft({
+      const res = await draftSchematic({
         repoRoot: repo,
         schematic: 'board.kicad_sch',
         intentPath: 'schematic.intent.json',
@@ -467,7 +467,7 @@ describe('long single-token BOM values are drawable, prose is not', () => {
   });
 });
 
-describe('draftToText never touches the working tree', () => {
+describe('draftSchematicToText never touches the working tree', () => {
   /**
    * The docstring promised no disk writes, but symbol resolution vendored
    * uncached symbols into sym-lib-cache/ as a side effect — so the stage-4
@@ -478,7 +478,7 @@ describe('draftToText never touches the working tree', () => {
     try {
       await cp(path.join(DRAFT_FIXTURE, 'schematic.intent.json'), path.join(repo, 'schematic.intent.json'));
       await cp(path.join(DRAFT_FIXTURE, 'docs'), path.join(repo, 'docs'), { recursive: true });
-      const res = await draftToText({
+      const res = await draftSchematicToText({
         repoRoot: repo,
         schematic: 'board.kicad_sch',
         intentPath: 'schematic.intent.json',
@@ -498,7 +498,7 @@ describe('draft orchestration error paths', () => {
   it('a missing intent file is a finding, not a crash', async () => {
     const repo = await mkdtemp(path.join(tmpdir(), 'copperhead-nointent-'));
     try {
-      const res = await draftToText({ repoRoot: repo, schematic: 'board.kicad_sch', symbolDirs: [SYMLIB] });
+      const res = await draftSchematicToText({ repoRoot: repo, schematic: 'board.kicad_sch', symbolDirs: [SYMLIB] });
       expect(res.ok).toBe(false);
       if (res.ok) return;
       expect(res.findings[0]!.detail).toContain('does not exist');

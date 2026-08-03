@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { mkdtemp, cp, rm, readFile, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { runDraft, draftToText } from '../src/kicad/draft/draft.js';
+import { draftSchematic, draftSchematicToText } from '../src/kicad/draft/draft.js';
 import { SymbolSource } from '../src/kicad/draft/symsource.js';
 import { uuidv5, renameSymbolBlock } from '../src/kicad/emit.js';
 import { checkLegibility } from '../src/kicad/legibility.js';
@@ -57,13 +57,13 @@ describe('drafting engine: the reference IR end to end', () => {
   it('drafts byte-identically, passes the legibility gate, and round-trips connectivity (AC-16.1, AC-16.3)', async () => {
     const { repo, symDirs, cleanup } = await draftRepo();
     try {
-      const res = await runDraft(draftOpts(repo, symDirs));
+      const res = await draftSchematic(draftOpts(repo, symDirs));
       expect(res.ok).toBe(true);
       if (!res.ok) return;
 
       // byte-identical re-draft (AC-16.1 / AC-16.4)
       const first = await readFile(res.schematicPath, 'utf8');
-      const again = await runDraft(draftOpts(repo, symDirs));
+      const again = await draftSchematic(draftOpts(repo, symDirs));
       expect(again.ok).toBe(true);
       expect(await readFile(res.schematicPath, 'utf8')).toBe(first);
 
@@ -108,7 +108,7 @@ describe('drafting engine: the reference IR end to end', () => {
   it('passes ERC clean on the drafted output (gate-resolvability, AC-16.9/AC-16.10/AC-16.12)', async () => {
     const { repo, symDirs, cleanup } = await draftRepo();
     try {
-      const res = await runDraft(draftOpts(repo, symDirs));
+      const res = await draftSchematic(draftOpts(repo, symDirs));
       expect(res.ok).toBe(true);
       if (!res.ok) return;
       const erc = await runErc(res.schematicPath);
@@ -122,7 +122,7 @@ describe('drafting engine: the reference IR end to end', () => {
   it('draft is deterministic across processes: no clock in the output', async () => {
     const { repo, symDirs, cleanup } = await draftRepo();
     try {
-      const res = await runDraft(draftOpts(repo, symDirs));
+      const res = await draftSchematic(draftOpts(repo, symDirs));
       expect(res.ok).toBe(true);
       if (!res.ok) return;
       const text = await readFile(res.schematicPath, 'utf8');
@@ -143,11 +143,11 @@ describe('IR validation fails structured and early', () => {
       const { repo, symDirs, cleanup } = await draftRepo();
       try {
         // draft once so a previous schematic exists…
-        const first = await runDraft(draftOpts(repo, symDirs));
+        const first = await draftSchematic(draftOpts(repo, symDirs));
         expect(first.ok).toBe(true);
         const before = await readFile(path.join(repo, 'board.kicad_sch'), 'utf8');
         await mutateIntent(repo, mutate);
-        const res = await runDraft(draftOpts(repo, symDirs));
+        const res = await draftSchematic(draftOpts(repo, symDirs));
         expect(res.ok).toBe(false);
         if (res.ok) return;
         expect(res.findings.map((f) => f.detail).join('\n')).toMatch(expectDetail);
@@ -202,7 +202,7 @@ describe('hermetic symbol vendoring (AC-16.5)', () => {
       // vendor from a mutable copy of the fixture library
       const libDir = await mkdtemp(path.join(tmpdir(), 'copperhead-libs-'));
       await cp(SYMLIB, libDir, { recursive: true });
-      const first = await runDraft(draftOpts(repo, [libDir]));
+      const first = await draftSchematic(draftOpts(repo, [libDir]));
       expect(first.ok).toBe(true);
       const before = await readFile(path.join(repo, 'board.kicad_sch'), 'utf8');
       expect(existsSync(path.join(repo, 'sym-lib-cache', 'Device.kicad_sym'))).toBe(true);
@@ -218,7 +218,7 @@ describe('hermetic symbol vendoring (AC-16.5)', () => {
         ),
         'utf8',
       );
-      const again = await runDraft(draftOpts(repo, [libDir]));
+      const again = await draftSchematic(draftOpts(repo, [libDir]));
       expect(again.ok).toBe(true);
       expect(await readFile(path.join(repo, 'board.kicad_sch'), 'utf8')).toBe(before);
 
@@ -238,8 +238,8 @@ describe('hermetic symbol vendoring (AC-16.5)', () => {
     const a = await draftRepo();
     const b = await draftRepo();
     try {
-      const ra = await runDraft(draftOpts(a.repo, a.symDirs));
-      const rb = await runDraft(draftOpts(b.repo, b.symDirs));
+      const ra = await draftSchematic(draftOpts(a.repo, a.symDirs));
+      const rb = await draftSchematic(draftOpts(b.repo, b.symDirs));
       expect(ra.ok && rb.ok).toBe(true);
       expect(await readFile(path.join(a.repo, 'board.kicad_sch'), 'utf8')).toBe(
         await readFile(path.join(b.repo, 'board.kicad_sch'), 'utf8'),
@@ -273,7 +273,7 @@ describe('IR overrides', () => {
       await mutateIntent(repo, (i) => {
         i.nets.find((n: any) => n.name === 'VCC').kind = 'signal';
       });
-      const res = await draftToText(draftOpts(repo, symDirs));
+      const res = await draftSchematicToText(draftOpts(repo, symDirs));
       expect(res.ok).toBe(true);
       if (!res.ok) return;
       const vcc = res.report.netClasses.find((n) => n.name === 'VCC');
@@ -290,7 +290,7 @@ describe('IR overrides', () => {
         i.nets.find((n: any) => n.name === 'VCC').name = 'VBAT';
         // BOM/IR values untouched; only the net renamed
       });
-      const res = await draftToText(draftOpts(repo, symDirs));
+      const res = await draftSchematicToText(draftOpts(repo, symDirs));
       expect(res.ok).toBe(true);
       if (!res.ok) return;
       expect(res.report.netClasses.find((n) => n.name === 'VBAT')).toEqual({

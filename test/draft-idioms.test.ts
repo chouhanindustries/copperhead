@@ -3,7 +3,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mkdtemp, cp, rm, mkdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { runDraft } from '../src/kicad/draft/draft.js';
+import { draftSchematic } from '../src/kicad/draft/draft.js';
 import { checkLegibility } from '../src/kicad/legibility.js';
 import { listSymbols, readSheetGeometry } from '../src/kicad/sexp.js';
 
@@ -29,7 +29,7 @@ async function draftRepo(intent: unknown, groups: string[]): Promise<{
   await mkdir(docs, { recursive: true });
   await writeFile(path.join(docs, 'SUBSYSTEMS.md'), groups.map((g) => `## ${g}`).join('\n\n') + '\n', 'utf8');
   await writeFile(path.join(repo, 'schematic.intent.json'), JSON.stringify(intent), 'utf8');
-  const res = await runDraft({
+  const res = await draftSchematic({
     repoRoot: repo,
     schematic: 'board.kicad_sch',
     intentPath: 'schematic.intent.json',
@@ -249,7 +249,7 @@ describe('balanced sheet: content sits centered in the usable frame (7.5a)', () 
     try {
       await cp(path.join(DRAFT_FIXTURE, 'schematic.intent.json'), path.join(repo, 'schematic.intent.json'));
       await cp(path.join(DRAFT_FIXTURE, 'docs'), path.join(repo, 'docs'), { recursive: true });
-      const res = await runDraft({
+      const res = await draftSchematic({
         repoRoot: repo,
         schematic: 'board.kicad_sch',
         intentPath: 'schematic.intent.json',

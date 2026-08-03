@@ -19,7 +19,7 @@ for board_dir in manual-tests/control/*/; do
   cp -r "$board_dir"/. "$run/"
   rm -rf "$run/reference"
   echo "[$board] drafting..."
-  npx tsx src/cli.ts --repo "$run" draft
+  npx tsx src/cli.ts --repo "$run" draft schematic
   sch="$(node -e "console.log(JSON.parse(require('fs').readFileSync('$run/.copperhead/config.json','utf8')).schematic)")"
   ref="$board_dir/reference/$(basename "$sch")"
   if [ "$UPDATE" = 1 ]; then

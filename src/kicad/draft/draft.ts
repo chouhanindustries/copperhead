@@ -4,7 +4,7 @@ import path from 'node:path';
 import { emitSchematic } from '../emit.js';
 import { SymbolSource } from './symsource.js';
 import { parseIntent, validateIntent, formatIrFindings, INTENT_FILENAME, type IrFinding } from './ir.js';
-import { draftPlacement, type DraftReport } from './engine.js';
+import { draftSchematicPlacement, type SchematicDraftReport } from './engine.js';
 
 /**
  * Draft orchestration: intent file in, schematic out. Deterministic, LLM-free,
@@ -12,7 +12,7 @@ import { draftPlacement, type DraftReport } from './engine.js';
  * nothing — the previous schematic, if any, stays untouched (design D6).
  */
 
-export interface DraftOptions {
+export interface SchematicDraftOptions {
   repoRoot: string;
   /** Repo-relative schematic path to (re)write. */
   schematic: string;
@@ -25,10 +25,10 @@ export interface DraftOptions {
   today?: string;
 }
 
-export type DraftResult =
+export type SchematicDraftResult =
   | {
       ok: true;
-      report: DraftReport;
+      report: SchematicDraftReport;
       text: string;
       schematicPath: string;
       /** Engine-generated lib blocks (copperhead_power) to vendor. */
@@ -43,7 +43,7 @@ export function defaultIntentPath(schematic: string): string {
 }
 
 /** Draft to text without touching disk (staleness checks, dry runs). */
-export async function draftToText(opts: DraftOptions): Promise<DraftResult> {
+export async function draftSchematicToText(opts: SchematicDraftOptions): Promise<SchematicDraftResult> {
   const intentRel = opts.intentPath ?? defaultIntentPath(opts.schematic);
   const intentAbs = path.join(opts.repoRoot, intentRel);
   if (!existsSync(intentAbs)) {
@@ -53,7 +53,7 @@ export async function draftToText(opts: DraftOptions): Promise<DraftResult> {
   if (!intent) return { ok: false, findings: parseFindings, message: formatIrFindings(parseFindings) };
 
   // vendor: false — this path is documented as not touching disk, and it backs
-  // read-shaped callers (the stage-4 staleness probe); `runDraft` re-resolves
+  // read-shaped callers (the stage-4 staleness probe); `draftSchematic` re-resolves
   // with a vendoring source after it decides to write
   const symsource = new SymbolSource(opts.repoRoot, opts.symbolDirs, false);
   // docsDir may arrive repo-relative (config.docs); resolve against the repo
@@ -65,7 +65,7 @@ export async function draftToText(opts: DraftOptions): Promise<DraftResult> {
   const projectName = path.basename(opts.schematic).replace(/\.kicad_sch$/, '');
   // Date comes from the IR (hints.date), never the wall clock: the same IR
   // must emit identical bytes on every run and every day (design D4).
-  const { model, report } = draftPlacement(validated, projectName, opts.today ?? intent.hints?.date ?? '2020-01-01');
+  const { model, report } = draftSchematicPlacement(validated, projectName, opts.today ?? intent.hints?.date ?? '2020-01-01');
   // A merged net means the sheet does not implement the IR: two distinct nets
   // share a label point, and KiCad resolves them to one. Refused rather than
   // written, because the alternative is an electrically wrong board that ERC
@@ -97,8 +97,8 @@ export async function draftToText(opts: DraftOptions): Promise<DraftResult> {
 }
 
 /** Draft and write the schematic, the vendored power lib, and the sym-lib-table. */
-export async function runDraft(opts: DraftOptions): Promise<DraftResult> {
-  const res = await draftToText(opts);
+export async function draftSchematic(opts: SchematicDraftOptions): Promise<SchematicDraftResult> {
+  const res = await draftSchematicToText(opts);
   if (!res.ok) return res;
   await writeFile(res.schematicPath, res.text, 'utf8');
 
@@ -136,7 +136,7 @@ export async function runDraft(opts: DraftOptions): Promise<DraftResult> {
   return res;
 }
 
-export function formatDraftReport(report: DraftReport): string {
+export function formatSchematicDraftReport(report: SchematicDraftReport): string {
   const lines = [
     `drafted: ${report.groups.length} group(s), ${report.wireCount} wire segment(s), ${report.labelCount} label(s), ${report.noConnects} no-connect(s) on ${report.paper}`,
   ];
