@@ -56,7 +56,7 @@ schematic.intent.json          (model writes this: parts, nets, groups, hints)
 }
 ```
 
-Every part names its subsystem group (a SUBSYSTEMS.md heading) and is cross-checked against BOM.md at validation, so a transcription slip dies before anything is drawn. `kind` overrides the automatic power-net recognition when the inference is wrong; the draft report always lists every net's resolved class. `hints.date` fills the title block: it belongs to the intent, not the wall clock, so the same intent emits the same bytes on any day.
+Every part names its subsystem group (a SUBSYSTEMS.md heading) and is cross-checked against BOM.md at validation, so a transcription slip dies before anything is drawn. `kind` overrides the automatic power-net recognition when the inference is wrong; the draft report always lists every net's resolved class. `hints.date` fills the title block: it belongs to the intent, not the wall clock, so the same intent emits the same bytes on any day. The full field-by-field specification, including every validation rule and refusal, is on [The schematic intent file](/reference/schematic-intent/).
 
 ## What the model controls, and what it cannot
 
