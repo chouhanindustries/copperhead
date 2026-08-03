@@ -104,6 +104,58 @@ describe('spec-seed isComplete', () => {
       expect(await stageNamed('spec-seed')(root, DOCS)).toBe(true);
     });
   });
+
+  it('returns true when SPEC.md Budgets section contains nested headings', async () => {
+    await withTmpDir(async (root) => {
+      await mkdir(path.join(root, DOCS), { recursive: true });
+
+      await writeFile(
+    path.join(root, DOCS, 'SPEC.md'),
+    `# My Project
+
+## Budgets
+
+### Sleep
+
+- sleep_current_uA: 25
+
+### Peak current
+
+- peak_current_mA: 500
+
+## Assumptions
+
+- USB-C assumed ASSUMED
+  `,
+    'utf8',
+  );
+
+      expect(await stageNamed('spec-seed')(root, DOCS)).toBe(true);
+    });
+  });
+
+  it('returns false when a non-Budgets heading contains the word budget', async () => {
+    await withTmpDir(async (root) => {
+      await mkdir(path.join(root, DOCS), { recursive: true });
+
+      await writeFile(
+        path.join(root, DOCS, 'SPEC.md'),
+        `# My Project
+
+## Cost budget notes
+
+- This is explanatory text only.
+
+## Assumptions
+
+- USB-C assumed ASSUMED
+  `,
+        'utf8',
+      );
+
+      expect(await stageNamed('spec-seed')(root, DOCS)).toBe(false);
+    });
+  });
 });
 
 // ---------------------------------------------------------------------------
