@@ -227,6 +227,47 @@ TBD
       expect(await stageNamed('spec-seed')(root, DOCS)).toBe(true);
     });
   });
+
+  it('returns false when the Budgets heading is split across lines', async () => {
+    await withTmpDir(async (root) => {
+      await mkdir(path.join(root, DOCS), { recursive: true });
+
+      await writeFile(
+        path.join(root, DOCS, 'SPEC.md'),
+        `# My Project
+
+##
+Budgets
+
+- sleep_current_uA: 25
+`,
+        'utf8',
+      );
+
+      expect(await stageNamed('spec-seed')(root, DOCS)).toBe(false);
+    });
+  });
+
+  it('returns false when a budget entry has no value', async () => {
+    await withTmpDir(async (root) => {
+      await mkdir(path.join(root, DOCS), { recursive: true });
+
+      await writeFile(
+        path.join(root, DOCS, 'SPEC.md'),
+        `# My Project
+
+## Budgets
+
+- current_mA:
+
+## Assumptions
+`,
+        'utf8',
+      );
+
+      expect(await stageNamed('spec-seed')(root, DOCS)).toBe(false);
+    });
+  });
 });
 
 // ---------------------------------------------------------------------------

@@ -90,7 +90,7 @@ export const STAGES: Stage[] = [
       // Ignore commented-out headings.
       const searchableText = text.replace(/<!--[\s\S]*?-->/g, '');
 
-      const budgetsHeading = /^##\s+(?:\d+\.\s*)?Budgets?\s*$/im;
+      const budgetsHeading = /^##[ \t]+(?:\d+\.[ \t]*)?Budgets?[ \t]*$/im;
 
       const match = budgetsHeading.exec(searchableText);
       if (!match) return false;
@@ -101,8 +101,7 @@ export const STAGES: Stage[] = [
       const nextSection = afterHeadingLine.search(/^##\s/m);
       const section = nextSection >= 0 ? afterHeadingLine.slice(0, nextSection) : afterHeadingLine;
       const cleanSection = section.replace(/<!--[\s\S]*?-->/g, '');
-      const budgetLine =
-        /^\s*(?:[-*]\s*)?[A-Za-z][A-Za-z0-9_-]*\s*:/m;
+      const budgetLine = /^\s*(?:[-*]\s*)?[A-Za-z][A-Za-z0-9_-]*\s*:\s*\S+/m;
       return budgetLine.test(cleanSection);
     },
        prompt: (brief) =>
