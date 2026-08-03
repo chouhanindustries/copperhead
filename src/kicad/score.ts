@@ -104,7 +104,10 @@ export function scoreFromGeometry(
   for (const [k, v] of Object.entries(config?.score?.weights ?? {})) {
     if (k in weights && typeof v === 'number' && Number.isFinite(v) && v >= 0) weights[k] = v;
   }
-  const floor = config?.score?.floor ?? DEFAULT_FLOOR;
+  // Sanitized like the weights above: a floor of 0 (or a non-number) would
+  // push the error cap `min(ERROR_CAP, floor - 1)` negative or NaN.
+  const rawFloor = config?.score?.floor;
+  const floor = typeof rawFloor === 'number' && Number.isFinite(rawFloor) && rawFloor >= 1 ? rawFloor : DEFAULT_FLOOR;
 
   // ---- collect geometry across sheets ----
   const segs: Seg[] = sheets.flatMap((s) => s.wires);

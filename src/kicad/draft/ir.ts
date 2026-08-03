@@ -1,7 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
-import { SymbolSource, SymbolResolutionError, type ResolvedSymbol } from './symsource.js';
+import { SymbolSource, SymbolResolutionError, powerNetToken, type ResolvedSymbol } from './symsource.js';
 import { parseBomTable, normalizeValue } from '../../memory/bom-table.js';
 
 /**
@@ -109,14 +109,18 @@ async function bomRowsOf(file: string): Promise<{ ref: string; value: string }[]
  * `JST_PH_S2B-PH-K_1x02_P2.00mm`) is left alone:
  *  - a comma-separated clause list where a later clause contains a space
  *    (`4.7uF, X5R, 10V, 0603` is a value; `P-MOSFET, divider gate` is prose), or
- *  - a cell that is simply too long to draw (> MAX_DRAWN_VALUE chars).
+ *  - a cell too long to draw (> MAX_DRAWN_VALUE chars) that contains a space.
+ *    A single unbroken token over the cap (`JST_PH_S2B-PH-K_1x02_P2.00mm`,
+ *    28 chars) is a real part identifier with no prose to move into Rationale,
+ *    so length alone never refuses it — a wide Value field costs legibility
+ *    score, but a hard refusal with no escape hatch would wedge the pipeline.
  */
 const MAX_DRAWN_VALUE = 24;
 
 export function looksLikeDescription(value: string): boolean {
   const v = value.replace(/`/g, '').trim();
   if (!v) return false;
-  if (v.length > MAX_DRAWN_VALUE) return true;
+  if (v.length > MAX_DRAWN_VALUE && v.includes(' ')) return true;
   const clauses = v.split(',').map((c) => c.trim());
   return clauses.length > 1 && clauses.slice(1).some((c) => c.includes(' ') && /[a-z]{3}/i.test(c));
 }
@@ -160,12 +164,23 @@ export async function validateIntent(
     findings.push({ detail });
   };
 
-  // parts: shape, duplicates, lib resolution
+  // parts: shape, duplicates, lib resolution. Field TYPES are checked here so a
+  // type-confused-but-valid JSON part ("group": 5) comes back as a numbered
+  // finding the model can act on, not a TypeError surfaced as an opaque tool
+  // error — the repair contract matters most exactly when the input is wrong.
   const symbols = new Map<string, ResolvedSymbol>();
   const partByRef = new Map<string, IntentPart>();
   for (const p of intent.parts) {
-    if (!p?.ref || !p.libId || typeof p.value !== 'string') {
-      add(`part ${JSON.stringify(p?.ref ?? '(missing ref)')} needs ref, libId, and value`);
+    if (typeof (p as unknown as { ref?: unknown })?.ref !== 'string' || !p.ref || typeof p.libId !== 'string' || !p.libId || typeof p.value !== 'string') {
+      add(`part ${JSON.stringify(p?.ref ?? '(missing ref)')} needs string ref, libId, and value fields`);
+      continue;
+    }
+    if (p.group !== undefined && typeof p.group !== 'string') {
+      add(`${p.ref}: "group" must be a string (a SUBSYSTEMS.md heading), got ${JSON.stringify(p.group)}`);
+      continue;
+    }
+    if (p.footprint !== undefined && typeof p.footprint !== 'string') {
+      add(`${p.ref}: "footprint" must be a string, got ${JSON.stringify(p.footprint)}`);
       continue;
     }
     if (partByRef.has(p.ref)) {
@@ -198,14 +213,28 @@ export async function validateIntent(
   const usedPins = new Set<string>();
   const netNames = new Set<string>();
   for (const net of intent.nets) {
-    if (!net?.name || !Array.isArray(net.pins)) {
-      add(`net ${JSON.stringify(net?.name ?? '(unnamed)')} needs a name and a pins array`);
+    if (typeof (net as unknown as { name?: unknown })?.name !== 'string' || !net.name || !Array.isArray(net.pins)) {
+      add(`net ${JSON.stringify(net?.name ?? '(unnamed)')} needs a string name and a pins array`);
       continue;
+    }
+    // The name is drawn as label text and embedded verbatim in the generated
+    // power-symbol source; a quote, backslash, or control character would emit
+    // a structurally corrupt schematic, so it dies here as a finding instead.
+    if ([...net.name].some((c) => c === '"' || c === '\\' || c.charCodeAt(0) < 32 || c.charCodeAt(0) === 127)) {
+      add(`net name ${JSON.stringify(net.name)} contains characters that cannot be drawn (quotes, backslashes, or control characters); rename the net`);
+      continue;
+    }
+    if (net.kind !== undefined && net.kind !== 'power' && net.kind !== 'ground' && net.kind !== 'signal') {
+      add(`net ${net.name}: "kind" must be "power", "ground", or "signal", got ${JSON.stringify(net.kind)}`);
     }
     if (netNames.has(net.name)) add(`duplicate net name ${net.name}`);
     netNames.add(net.name);
     if (net.pins.length < 2) add(`net ${net.name} has ${net.pins.length} endpoint(s); a net needs at least two`);
     for (const ep of net.pins) {
+      if (typeof ep !== 'string') {
+        add(`net ${net.name}: endpoint ${JSON.stringify(ep)} must be a "REF.PIN" string`);
+        continue;
+      }
       const m = /^([^.]+)\.(.+)$/.exec(ep);
       if (!m) {
         add(`net ${net.name}: endpoint "${ep}" is not of the form REF.PIN`);
@@ -225,18 +254,75 @@ export async function validateIntent(
     }
   }
 
-  // no-connects: pin exists and is not in any net
-  for (const ep of intent.noConnect ?? []) {
-    const m = /^([^.]+)\.(.+)$/.exec(ep);
-    if (!m) {
-      add(`noConnect entry "${ep}" is not of the form REF.PIN`);
-      continue;
+  // Two power-class nets whose names sanitize to one symbol token would share
+  // one generated `copperhead_power:` lib_id and one embedded pin name, so
+  // KiCad's netlist can quietly merge the rails (last write wins in the
+  // lib_symbols map). Refused here as a finding, before any placement.
+  const isPowerClass = (net: IntentNet): boolean => {
+    if (net.kind === 'power' || net.kind === 'ground') return true;
+    if (net.kind === 'signal') return false;
+    return net.pins.some((ep) => {
+      const m = typeof ep === 'string' ? /^([^.]+)\.(.+)$/.exec(ep) : null;
+      if (!m) return false;
+      const pin = symbols.get(m[1]!)?.pins.find((pn) => pn.number === m[2]);
+      return pin !== undefined && (pin.etype === 'power_in' || pin.etype === 'power_out');
+    });
+  };
+  const byToken = new Map<string, Set<string>>();
+  for (const net of intent.nets) {
+    if (typeof (net as unknown as { name?: unknown })?.name !== 'string' || !Array.isArray(net.pins)) continue;
+    if (!isPowerClass(net)) continue;
+    const token = powerNetToken(net.name);
+    const names = byToken.get(token) ?? new Set<string>();
+    names.add(net.name);
+    byToken.set(token, names);
+  }
+  for (const [token, names] of byToken) {
+    if (names.size > 1) {
+      add(
+        `power nets ${[...names].sort().join(' and ')} both sanitize to the symbol token "${token}", ` +
+          `which would give them one shared power symbol and merge the rails; rename one so the tokens differ`,
+      );
     }
-    const [, ref, pin] = m;
-    const sym = symbols.get(ref!);
-    if (!partByRef.has(ref!)) add(`noConnect "${ep}" references unknown part ${ref}`);
-    else if (sym && !sym.pins.some((p) => p.number === pin)) add(`noConnect "${ep}": ${ref} has no pin ${pin}`);
-    if (usedPins.has(`${ref}.${pin}`)) add(`pin ${ep} is declared no-connect but appears in a net`);
+  }
+
+  // no-connects: an array of REF.PIN strings; each pin exists and is not in any net
+  const noConnect = intent.noConnect ?? [];
+  if (!Array.isArray(noConnect) || noConnect.some((e) => typeof e !== 'string')) {
+    add(`"noConnect" must be an array of "REF.PIN" strings, got ${JSON.stringify(intent.noConnect)}`);
+  } else {
+    for (const ep of noConnect) {
+      const m = /^([^.]+)\.(.+)$/.exec(ep);
+      if (!m) {
+        add(`noConnect entry "${ep}" is not of the form REF.PIN`);
+        continue;
+      }
+      const [, ref, pin] = m;
+      const sym = symbols.get(ref!);
+      if (!partByRef.has(ref!)) add(`noConnect "${ep}" references unknown part ${ref}`);
+      else if (sym && !sym.pins.some((p) => p.number === pin)) add(`noConnect "${ep}": ${ref} has no pin ${pin}`);
+      if (usedPins.has(`${ref}.${pin}`)) add(`pin ${ep} is declared no-connect but appears in a net`);
+    }
+  }
+
+  // hints: every field the engine or emitter dereferences is type-checked here,
+  // so "hints": {"groupOrder": "Power"} steers back as a finding instead of a
+  // TypeError inside the placement pass
+  const hints = intent.hints;
+  if (hints !== undefined) {
+    if (hints === null || typeof hints !== 'object' || Array.isArray(hints)) {
+      add(`"hints" must be an object, got ${JSON.stringify(hints)}`);
+    } else {
+      if (hints.groupOrder !== undefined && (!Array.isArray(hints.groupOrder) || hints.groupOrder.some((g) => typeof g !== 'string'))) {
+        add(`"hints.groupOrder" must be an array of group-name strings, got ${JSON.stringify(hints.groupOrder)}`);
+      }
+      if (hints.paper !== undefined && typeof hints.paper !== 'string') {
+        add(`"hints.paper" must be a string (a standard sheet name like "A3"), got ${JSON.stringify(hints.paper)}`);
+      }
+      if (hints.date !== undefined && typeof hints.date !== 'string') {
+        add(`"hints.date" must be a string, got ${JSON.stringify(hints.date)}`);
+      }
+    }
   }
 
   // BOM cross-check: a transcription slip dies here, not at the drift gate (D6)

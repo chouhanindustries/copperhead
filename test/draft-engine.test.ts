@@ -126,8 +126,11 @@ describe('drafting engine: the reference IR end to end', () => {
       expect(res.ok).toBe(true);
       if (!res.ok) return;
       const text = await readFile(res.schematicPath, 'utf8');
-      const year = String(new Date().getFullYear());
-      expect(text).not.toContain(`"${year}-`); // fixed epoch stamp, never the wall clock
+      // The title-block date is the pinned epoch stamp exactly — asserting the
+      // absence of the wall-clock year would prove nothing in most years and
+      // false-fail whenever a fixture legitimately contains the current one.
+      expect(text).toContain('(date "2020-01-01")');
+      expect(text.match(/\(date "[^"]*"\)/g)).toEqual(['(date "2020-01-01")']);
     } finally {
       await cleanup();
     }

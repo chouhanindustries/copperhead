@@ -52,7 +52,10 @@ export async function draftToText(opts: DraftOptions): Promise<DraftResult> {
   const { intent, findings: parseFindings } = parseIntent(await readFile(intentAbs, 'utf8'));
   if (!intent) return { ok: false, findings: parseFindings, message: formatIrFindings(parseFindings) };
 
-  const symsource = new SymbolSource(opts.repoRoot, opts.symbolDirs);
+  // vendor: false — this path is documented as not touching disk, and it backs
+  // read-shaped callers (the stage-4 staleness probe); `runDraft` re-resolves
+  // with a vendoring source after it decides to write
+  const symsource = new SymbolSource(opts.repoRoot, opts.symbolDirs, false);
   // docsDir may arrive repo-relative (config.docs); resolve against the repo
   const docsDir =
     opts.docsDir === undefined || opts.docsDir === null ? null : path.resolve(opts.repoRoot, opts.docsDir);

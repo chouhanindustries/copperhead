@@ -22,7 +22,11 @@ export function parseSexp(text: string): SexpNode[] {
       let s = '';
       while (j < text.length && text[j] !== '"') {
         if (text[j] === '\\' && j + 1 < text.length) {
-          s += text[j + 1];
+          // KiCad writes multi-line text as `\n` (and tabs as `\t`) inside the
+          // quoted atom; mapping the escape to the literal letter would give
+          // the legibility width model a one-line `line1nline2` string.
+          const e = text[j + 1];
+          s += e === 'n' ? '\n' : e === 't' ? '\t' : e!;
           j += 2;
         } else {
           s += text[j];
@@ -315,6 +319,12 @@ export interface LabelItem {
   y: number;
   rot: number;
   height: number;
+  /** Horizontal component of `(justify …)`, or null when unspecified. KiCad
+   * normalizes angles 180/270 to 0/90 at draw time and the stored justify
+   * describes that DRAWN frame, so a leftward label appears as angle 180 (no
+   * justify), angle 180 + justify right, or angle 0 + justify right — all the
+   * same box. */
+  justify: 'left' | 'right' | null;
 }
 
 export interface RectItem {
@@ -462,6 +472,8 @@ export async function readSheetGeometry(rootSch: string): Promise<SheetGeometry[
     for (const kind of ['label', 'global_label', 'hierarchical_label'] as const) {
       for (const l of children(sheet.root, kind)) {
         const at = child(l, 'at');
+        const effects = child(l, 'effects');
+        const justify = effects ? child(effects, 'justify') : undefined;
         labels.push({
           name: atomAt(l, 1) ?? '',
           kind,
@@ -469,6 +481,7 @@ export async function readSheetGeometry(rootSch: string): Promise<SheetGeometry[
           y: num(at, 2),
           rot: num(at, 3),
           height: effectsOf(l).height,
+          justify: justify?.some((c) => c === 'right') ? 'right' : justify?.some((c) => c === 'left') ? 'left' : null,
         });
       }
     }

@@ -18,7 +18,7 @@ The drafting engine SHALL accept a versioned netlist-intent document (`schematic
 
 ### Requirement: IR validation fails structured and early
 
-The engine SHALL validate the IR before any placement: lib_ids must resolve, every referenced pin must exist on its symbol, every net must have at least two endpoints, every non-power part must belong to exactly one group present in SUBSYSTEMS.md, a pin declared no-connect must exist and must appear in no net, and the IR's parts SHALL be cross-checked against BOM.md (refdes present, value matching), so a transcription slip fails validation immediately rather than surfacing later at the drift gate. Validation failures SHALL be reported as a numbered finding list in the same shape as `verify_symbols` output, and a failed draft SHALL leave any existing schematic untouched.
+The engine SHALL validate the IR before any placement: lib_ids must resolve, every referenced pin must exist on its symbol, every net must have at least two endpoints, every non-power part must belong to exactly one group present in SUBSYSTEMS.md, a pin declared no-connect must exist and must appear in no net, and the IR's parts SHALL be cross-checked against BOM.md (refdes present, value matching), so a transcription slip fails validation immediately rather than surfacing later at the drift gate. Validation SHALL also cover the field types the engine and emitter dereference (part fields, net kind, endpoint strings, `noConnect`, `hints.*`), so type-confused-but-valid JSON comes back as findings rather than a TypeError surfaced as an opaque tool error; SHALL refuse a net name containing a quote, backslash, or control character, since the name is embedded verbatim in the generated power-symbol source where such a character corrupts the emitted file; and SHALL refuse two power-class nets whose names sanitize to the same generated-symbol token, since they would share one `lib_id` and quietly merge their rails. Validation failures SHALL be reported as a numbered finding list in the same shape as `verify_symbols` output, and a failed draft SHALL leave any existing schematic untouched.
 
 #### Scenario: Unknown pin is rejected (AC-16.6)
 
@@ -39,6 +39,16 @@ The engine SHALL validate the IR before any placement: lib_ids must resolve, eve
 
 - **WHEN** a pin is declared no-connect and also appears as a net endpoint
 - **THEN** validation fails naming the pin and the conflicting net
+
+#### Scenario: Type-confused fields are findings, not crashes
+
+- **WHEN** the IR is valid JSON with a wrong-typed field the engine dereferences (a numeric `group`, a string `hints.groupOrder`, a string `noConnect`, a non-string net endpoint)
+- **THEN** validation fails with a numbered finding naming the field and the expected shape, and no TypeError reaches the tool layer
+
+#### Scenario: Undrawable and colliding net names are refused
+
+- **WHEN** a net name contains a quote, backslash, or control character, or two power-class net names sanitize to the same generated-symbol token
+- **THEN** validation fails naming the offending net name(s), before any placement runs
 
 ### Requirement: Deterministic power-net recognition
 

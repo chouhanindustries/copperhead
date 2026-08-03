@@ -132,3 +132,38 @@ describe('scorer metrics: hand-computed values', () => {
     expect(tuned.metrics.find((m) => m.name === 'wire-crossings')!.contribution).toBe(0);
   });
 });
+describe('score config sanitization', () => {
+  // A configured floor of 0 (or a non-number) used to flow raw into the error
+  // cap min(ERROR_CAP, floor - 1), reporting a -1/100 or NaN/100 composite.
+  const offGrid = `
+      (label "X" (at 50.1 100 0)
+        (effects (font (size 1.27 1.27)))
+        (uuid "5c0e0000-0000-4000-8000-00000000l001")
+      )`;
+
+  it('a floor of 0 falls back to the default instead of going negative', async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), 'copperhead-floor-'));
+    try {
+      const file = path.join(dir, 'x.kicad_sch');
+      await writeFile(file, sch(offGrid), 'utf8');
+      const report = await scoreSchematic(file, { config: { score: { floor: 0 } } });
+      expect(report.composite).toBeGreaterThanOrEqual(0);
+      expect(Number.isFinite(report.composite)).toBe(true);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('a non-numeric floor falls back to the default instead of NaN', async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), 'copperhead-floor-nan-'));
+    try {
+      const file = path.join(dir, 'x.kicad_sch');
+      await writeFile(file, sch(offGrid), 'utf8');
+      const report = await scoreSchematic(file, { config: { score: { floor: 'high' as unknown as number } } });
+      expect(Number.isFinite(report.composite)).toBe(true);
+      expect(report.composite).toBeGreaterThanOrEqual(0);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+});

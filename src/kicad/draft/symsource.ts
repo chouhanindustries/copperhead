@@ -189,10 +189,15 @@ export class SymbolSource {
   /**
    * @param repoRoot project root; the vendored cache lives at `<root>/sym-lib-cache/`
    * @param searchDirs override for the installed-library search path (tests)
+   * @param vendor when false, resolution never writes: symbols come from the
+   *   vendored cache or the installed libraries verbatim, but nothing is copied
+   *   into `sym-lib-cache/`. For read-shaped callers (`draftToText`, staleness
+   *   probes) that must not mutate the working tree.
    */
   constructor(
     private readonly repoRoot: string,
     private readonly searchDirs?: string[],
+    private readonly vendor: boolean = true,
   ) {}
 
   cacheDir(): string {
@@ -281,9 +286,11 @@ export class SymbolSource {
         const candidates = names.filter((k) => k.toLowerCase().includes(q) || q.includes(k.toLowerCase())).slice(0, 8);
         throw new SymbolResolutionError(libId, 'no-symbol', candidates);
       }
-      await mkdir(this.cacheDir(), { recursive: true });
-      const existing = existsSync(vendored) ? await readFile(vendored, 'utf8') : emptyVendorLib();
-      await writeFile(vendored, appendToVendorLib(existing, block), 'utf8');
+      if (this.vendor) {
+        await mkdir(this.cacheDir(), { recursive: true });
+        const existing = existsSync(vendored) ? await readFile(vendored, 'utf8') : emptyVendorLib();
+        await writeFile(vendored, appendToVendorLib(existing, block), 'utf8');
+      }
       this.libs.add(lib);
     }
 
@@ -301,14 +308,30 @@ export class SymbolSource {
 }
 
 /**
+ * The symbol-name token a power-class net's generated symbol lives under
+ * (`copperhead_power:<token>`), which is also what its vendored file is named
+ * from. Two nets that sanitize to one token would share one `lib_id` and one
+ * embedded pin name, quietly merging their rails in KiCad's netlist —
+ * `validateIntent` refuses that pair using this same function, so the collision
+ * dies as a numbered finding instead.
+ */
+export const powerNetToken = (net: string): string => net.replace(/[^A-Za-z0-9_+.-]/g, '_');
+
+/** Escape a string for embedding inside a quoted s-expression atom. Defense in
+ * depth: `validateIntent` already refuses net names containing `"` or `\`, but
+ * this template must not be able to corrupt a schematic even if called raw. */
+const sexpQuote = (s: string): string => s.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+
+/**
  * Engine-authored power-port and PWR_FLAG symbols (design D6a). Authored here,
  * not copied from a library: the engine must be able to satisfy ERC's
  * undriven-rail check on any machine without depending on the installed power
  * library's naming. Pin at the origin; the body draws above (rail) or below
  * (ground) it.
  */
-export function powerSymbolSource(net: string, kind: 'rail' | 'ground'): { libId: string; sourceText: string } {
-  const name = net.replace(/[^A-Za-z0-9_+.-]/g, '_');
+export function powerSymbolSource(rawNet: string, kind: 'rail' | 'ground'): { libId: string; sourceText: string } {
+  const net = sexpQuote(rawNet);
+  const name = powerNetToken(rawNet);
   const libId = `copperhead_power:${name}`;
   // Symbol space is Y-up and the schematic transform flips it: negative-Y
   // graphics here render BELOW the connection point on the sheet. Ground bars

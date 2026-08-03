@@ -196,15 +196,32 @@ function textBounds(t: { text: string; x: number; y: number; rot: number; height
  * 270 downward in schematic Y-down coordinates). Centering the box instead
  * would bleed half of it across the attachment point and invent collisions
  * with the very symbol the label serves — the false positive C3 forbids.
+ *
+ * KiCad never draws a label upside down: angles 180/270 are normalized to 0/90
+ * at draw time with the DEFAULT justification mirrored, and a stored
+ * `(justify …)` describes that drawn frame. So the effective justification is
+ * the stored one when present, else left for 0/90 and right for 180/270 — and
+ * left-justified text starts at the anchor (extends right / up) while
+ * right-justified text ends there (extends left / down). This makes the three
+ * wild encodings of a leftward label — angle 180 alone, angle 180 + justify
+ * right (eeschema's own output, pinned by the open-key golden), and angle 0 +
+ * justify right (the engine's emitter) — measure the same box; measuring any
+ * of them on the wrong side of the anchor either invents a collision with the
+ * symbol the label serves or hides a real one.
  */
-function labelBounds(l: { name: string; x: number; y: number; rot: number; height: number }): Bounds {
+function labelBounds(l: { name: string; x: number; y: number; rot: number; height: number; justify?: 'left' | 'right' | null }): Bounds {
   const w = Math.max(1, l.name.length) * TEXT_ADVANCE * l.height;
   const h = l.height;
   const rot = ((l.rot % 360) + 360) % 360;
-  if (rot === 180) return { minX: l.x - w, minY: l.y - h / 2, maxX: l.x, maxY: l.y + h / 2 };
-  if (rot === 90) return { minX: l.x - h / 2, minY: l.y - w, maxX: l.x + h / 2, maxY: l.y };
-  if (rot === 270) return { minX: l.x - h / 2, minY: l.y, maxX: l.x + h / 2, maxY: l.y + w };
-  return { minX: l.x, minY: l.y - h / 2, maxX: l.x + w, maxY: l.y + h / 2 };
+  const justified = l.justify ?? (rot === 180 || rot === 270 ? 'right' : 'left');
+  if (rot === 90 || rot === 270) {
+    return justified === 'left'
+      ? { minX: l.x - h / 2, minY: l.y - w, maxX: l.x + h / 2, maxY: l.y }
+      : { minX: l.x - h / 2, minY: l.y, maxX: l.x + h / 2, maxY: l.y + w };
+  }
+  return justified === 'right'
+    ? { minX: l.x - w, minY: l.y - h / 2, maxX: l.x, maxY: l.y + h / 2 }
+    : { minX: l.x, minY: l.y - h / 2, maxX: l.x + w, maxY: l.y + h / 2 };
 }
 
 function segIntersectsBounds(s: WireSeg, b: Bounds): boolean {
