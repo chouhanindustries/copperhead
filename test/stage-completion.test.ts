@@ -104,6 +104,46 @@ describe('spec-seed isComplete', () => {
       expect(await stageNamed('spec-seed')(root, DOCS)).toBe(true);
     });
   });
+
+  // I17: the budgets live under subsections, so the parent heading's own body is
+  // empty. Ending the section at the next heading of ANY depth read this fully
+  // populated spec as an unfilled placeholder and failed the stage after it had
+  // already committed its work.
+  it('returns true when the Budgets section carries its content in subsections', async () => {
+    await withTmpDir(async (root) => {
+      await mkdir(path.join(root, DOCS), { recursive: true });
+      await writeFile(
+        path.join(root, DOCS, 'SPEC.md'),
+        `# My Project\n\n## 3. Electrical budgets\n\n### 3.1 Input and rails\n\n| ID | Budget | Value |\n|----|--------|-------|\n| B-1 | VIN | 12 V |\n\n### 3.2 Battery\n\n- charge_current_mA: 500\n\n## 4. Motion requirements\n\n- 90 deg index\n`,
+        'utf8',
+      );
+      expect(await stageNamed('spec-seed')(root, DOCS)).toBe(true);
+    });
+  });
+
+  it('returns false when the Budgets section holds subheadings but no content', async () => {
+    await withTmpDir(async (root) => {
+      await mkdir(path.join(root, DOCS), { recursive: true });
+      await writeFile(
+        path.join(root, DOCS, 'SPEC.md'),
+        `# My Project\n\n## Budgets\n\n### Power\n\n<!-- TODO -->\n\n### Thermal\n\n## Assumptions\n`,
+        'utf8',
+      );
+      expect(await stageNamed('spec-seed')(root, DOCS)).toBe(false);
+    });
+  });
+
+  it('does not let a later sibling section satisfy the Budgets contract', async () => {
+    await withTmpDir(async (root) => {
+      await mkdir(path.join(root, DOCS), { recursive: true });
+      await writeFile(
+        path.join(root, DOCS, 'SPEC.md'),
+        `# My Project\n\n## Budgets\n\n<!-- Add hard budgets here -->\n\n## Assumptions\n\n- USB-C assumed ASSUMED\n`,
+        'utf8',
+      );
+      expect(await stageNamed('spec-seed')(root, DOCS)).toBe(false);
+    });
+  });
 });
 
 // ---------------------------------------------------------------------------
