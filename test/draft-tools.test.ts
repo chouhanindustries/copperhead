@@ -219,3 +219,44 @@ describe('draft path is LLM-free by construction', () => {
     }
   });
 });
+describe('draft_schematic input guards', () => {
+  it('malformed intent_json is refused before anything is written', async () => {
+    const { repo, cleanup } = await draftedRepo();
+    try {
+      const before = await readFile(path.join(repo, 'schematic.intent.json'), 'utf8');
+      const schBefore = await readFile(path.join(repo, 'board.kicad_sch'), 'utf8');
+      const ctx = await makeCtx(repo);
+      const out = await dispatchTool(ctx, 'draft_schematic', { intent_json: '{"version": 1,' });
+      expect(out).toContain('intent_json is not valid JSON');
+      expect(await readFile(path.join(repo, 'schematic.intent.json'), 'utf8')).toBe(before);
+      expect(await readFile(path.join(repo, 'board.kicad_sch'), 'utf8')).toBe(schBefore);
+    } finally {
+      await cleanup();
+    }
+  }, 60000);
+});
+
+describe('check_legibility without a schematic', () => {
+  // Mirrors check_drift's vacuous path: nothing can be illegible, and a stuck
+  // obligation here would deadlock any stage that edited a stray .kicad_sch
+  // before config wiring. This is the path that clears the ledger.
+  it('clears the legibility obligation instead of deadlocking', async () => {
+    const repo = await mkdtemp(path.join(tmpdir(), 'copperhead-nosch-'));
+    try {
+      await mkdir(path.join(repo, '.copperhead'), { recursive: true });
+      await writeFile(
+        path.join(repo, '.copperhead', 'config.json'),
+        JSON.stringify({ docs: 'docs/', origin: 'create' }),
+        'utf8',
+      );
+      const ctx = await makeCtx(repo);
+      ctx.ledger.add('legibility', 'schematic changed; run check_legibility', 'edit_file');
+      expect(ctx.ledger.openOfKind('legibility')).toHaveLength(1);
+      const out = await dispatchTool(ctx, 'check_legibility', {});
+      expect(out).toContain('legibility does not apply yet');
+      expect(ctx.ledger.openOfKind('legibility')).toHaveLength(0);
+    } finally {
+      await rm(repo, { recursive: true, force: true });
+    }
+  });
+});
