@@ -7,7 +7,7 @@ sidebar:
 
 The [Quickstart](/getting-started/quickstart/) lists the commands. This page walks the path, in order, on a board you already own — and spends most of its length on the parts where people get stuck.
 
-Budget about twenty minutes. At the end you will have one small, ERC-verified, committed change, and enough of a feel for the loop to decide whether you trust it with a bigger one.
+Budget about twenty minutes. If your baseline is clean and verification passes, you end with one small, ERC-verified, committed change. If it does not, you end with a rolled-back tree and a written reason, which is the other half of what you are here to see. Either way you will have enough of a feel for the loop to decide whether you trust it with something bigger.
 
 :::note[Shell syntax on this page]
 Commands are written for bash (macOS, Linux, Git Bash). On **Windows `cmd`**, swap `export FOO=bar` for `set "FOO=bar"`, and use `\` in paths. Both variants are given wherever it actually matters.
@@ -90,8 +90,14 @@ You need a KiCad project in a git repository. Not a copy on the desktop — an a
 
 ```bash
 cd my-board
-git init && git add -A && git commit -m "baseline before copperhead"
+git init
+printf '.env\n.copperhead/runs/\n' >> .gitignore
+git add -A
+git status                       # read this list before committing
+git commit -m "baseline before copperhead"
 ```
+
+Read that `git status` output rather than skipping past it. `git add -A` stages everything it finds, and a baseline commit is a bad place to discover you have captured a `.env`, a vendor archive, or someone's local scratch files.
 
 Working on something you cannot commit yet? Pass `--allow-dirty`, which snapshots through `git stash create` instead.
 
@@ -129,13 +135,25 @@ If `kicad-cli` fails here, go back to the PATH note in Install — and remember 
 
 ## Step 2: Choose one model backend
 
-You need exactly one. Not zero, and — this trips people up — not two.
+You need to name exactly one. What copperhead refuses is not two credentials existing, it is having to guess between them: with `COPPERHEAD_MODEL` (or `--model`) set, extra credentials in your environment are simply ignored.
 
-If you already use Codex CLI or Claude Code, reuse that login and skip API keys entirely:
+If you already use Codex CLI, Claude Code, or Cursor, reuse that login and skip API keys entirely:
 
 ```bash
 export COPPERHEAD_MODEL=codex          # or: claude-code, cursor
 ```
+
+```text
+set "COPPERHEAD_MODEL=codex"
+```
+
+Each of those needs its own CLI authenticated first:
+
+| Backend | Authenticate with | Check it |
+| --- | --- | --- |
+| `codex` | the Codex CLI's own ChatGPT login | `codex login status` |
+| `cursor` | `agent login` | `agent status` |
+| `claude-code` | see the token step below | `claude setup-token` |
 
 For Claude Code you also need its token. Generate one:
 
@@ -157,10 +175,14 @@ set "CLAUDE_CODE_OAUTH_TOKEN=<the token it printed>"
 set "COPPERHEAD_MODEL=claude-code"
 ```
 
-Otherwise export a single API key:
+Otherwise supply a single API key:
 
 ```bash
-export ANTHROPIC_API_KEY=...           # or OPENAI_API_KEY, not both
+export ANTHROPIC_API_KEY=...           # or OPENAI_API_KEY
+```
+
+```text
+set "ANTHROPIC_API_KEY=..."
 ```
 
 :::caution[Two ways a perfectly good token still fails]
@@ -188,9 +210,9 @@ From bash:
 echo ${#CLAUDE_CODE_OAUTH_TOKEN}
 ```
 
-The quotes in `set "VAR=value"` and `export VAR="value"` above are what keep a stray space from truncating the value.
+The quotes in `set "VAR=value"` and `export VAR="value"` keep the shell from splitting the assignment at that space, so the whole broken value is stored rather than a truncated one. They cannot repair the token itself. A token with a space inside it is corrupt either way: copy it again, or generate a fresh one.
 
-**It only lived in one window.** `set` and `export` last for that terminal session only. Open a new window and the credential is gone, and `doctor` reports no model configured again. Use `setx` on Windows, or your shell profile on macOS and Linux, to make it stick.
+**It only lived in one window.** `set` and `export` last for that terminal session only. Open a new window and the credential is gone, and `doctor` reports no model configured again. Use `setx` on Windows, or your shell profile on macOS and Linux, to make it stick. `setx` writes the value for *future* processes only, so close the terminal and open a new one before re-running `doctor`, exactly as with the PATH fix.
 :::
 
 :::danger[Two keys in your environment is a hard stop]
@@ -280,7 +302,7 @@ What happens, in order:
 3. **Verify.** ERC runs, and DRC too if the board changed. Failures come back to the agent as its own error report to repair.
 4. **Commit.** One commit, with the verification result in the message, plus a line in `docs/CHANGELOG.md` and any real decision appended to `docs/DECISIONS.md`.
 
-If verification cannot be made to pass, the run rolls back to the pre-run snapshot and your tree is left exactly as it was.
+If verification cannot be made to pass, the run rolls back to the pre-run snapshot. On the normal path your tree is left exactly as it was. If the rollback itself fails, which git can do when it is in an odd state, the run says so explicitly and warns that the tree may be partial: read that line rather than assuming a clean revert, and check `git status` before rerunning.
 
 ## What a run costs
 
@@ -306,6 +328,8 @@ git add -A && git commit -m "brief"
 copperhead create --brief brief.md
 ```
 
+Only the copy differs on Windows: `copy path\to\brief.md brief.md` in `cmd`, or `Copy-Item path\to\brief.md brief.md` in PowerShell.
+
 Start from an example brief rather than your own. You are testing whether the pipeline runs on your machine, and a known-good input keeps a bad first result from being ambiguous. Each stage commits on its own, so an interrupted run resumes from the last finished one — re-running the same command picks up where it stopped.
 
 ## When it goes wrong
@@ -326,7 +350,7 @@ Start from an example brief rather than your own. You are testing whether the pi
 
 Two things worth knowing about that last column.
 
-**Failed work is not destroyed.** A failed run preserves everything it touched as a named git stash entry before rolling back, and prints the recovery command:
+**Failed work is normally not destroyed.** A failed run tries to preserve everything it touched as a named git stash entry before rolling back, and prints the stash id and the recovery command when it succeeds. Both steps are best-effort: if no preservation line appears, or the run reports a failed rollback, inspect `git status` and `git stash list` yourself rather than assuming either happened.
 
 ```bash
 git stash apply     # get the failed run's work back

@@ -78,7 +78,7 @@ copperhead check               # ERC + DRC + doc drift; no LLM, CI-safe
 
 Run `copperhead doctor` first: it reports every prerequisite in one pass and exits 0 only when the machine is ready. Two things it commonly catches:
 
-- **`kicad-cli` not on PATH.** Every command probes it before doing anything, so nothing runs until this is fixed. On macOS: `export PATH="/Applications/KiCad/KiCad.app/Contents/MacOS:$PATH"`.
+- **`kicad-cli` not on PATH.** Every KiCad-dependent command probes it before doing anything, so `init`, `do`, `check`, `sync`, and `create` all refuse until this is fixed. (`doctor` is the deliberate exception: it reports the missing tool instead of throwing.) On macOS: `export PATH="/Applications/KiCad/KiCad.app/Contents/MacOS:$PATH"`.
 - **Both `OPENAI_API_KEY` and `ANTHROPIC_API_KEY` exported.** copperhead refuses to guess between two credentials rather than silently send your design to a provider you did not pick. Name one with `export COPPERHEAD_MODEL=claude` (or `--model`).
 
 Note that `copperhead check` skips ERC and DRC — and still exits 0 — until `init` has pointed `.copperhead/config.json` at your files. Read its output lines, not just the exit code.

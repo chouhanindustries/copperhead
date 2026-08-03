@@ -14,7 +14,7 @@ So this is not a demo post. It is the first twenty minutes with [copperhead](htt
 
 copperhead is a CLI agent that works on a KiCad repository the way a coding agent works on a codebase. It reads your design docs, proposes a change as a validated spec, edits the real `.kicad_sch` and `.kicad_pcb` files, then runs `kicad-cli` ERC and DRC on its own work until the tools agree.
 
-KiCad stays your editor. Nothing moves into a walled garden. The files it edits are the files you already have, in the git repo you already have, and every artifact it produces is markdown you can read in a diff.
+KiCad stays your editor. Nothing moves into a walled garden. The files it edits are the files you already have, in the git repo you already have, and every artifact it produces is plain text you can read in a diff: s-expressions for the schematic and board, markdown for the design docs and the reasoning behind them.
 
 Two rules hold the whole thing up, and it is worth stating them before anything else, because everything below is a consequence of one of them:
 
