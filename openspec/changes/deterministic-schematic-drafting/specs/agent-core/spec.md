@@ -41,6 +41,13 @@ On repos whose schematic copperhead authored (create origin), an error-severity 
 
 A gate scoped by a marker is only as real as the marker's writer, so `create` SHALL write `origin: "create"` into `.copperhead/config.json` itself: once at the start of every run (covering resumed repos whose project predates the marker) and again on every project scaffold (covering the rollback path, where `git clean` deletes an uncommitted config). A repo produced by a real `create` run SHALL therefore always satisfy the create-origin predicate this requirement scopes by.
 
+The gate SHALL additionally require that the configured schematic is still copperhead-authored, detected by the generator stamp every copperhead-written sheet carries (the bootstrap scaffold and every engine draft). A human taking the sheet over in KiCad re-saves it under KiCad's own generator, and from that moment the obligation SHALL NOT open: the drawing is no longer the engine's to regenerate, so wedging `finish` on its legibility would demand geometry work the IR cannot express. A create repo whose schematic is not yet scaffolded SHALL keep the gate, since the sheet stage 4 will produce is copperhead-authored by construction.
+
+#### Scenario: Hand takeover releases the gate
+
+- **WHEN** a create-origin repo's schematic has been re-saved by KiCad (the copperhead generator stamp is gone) and a later run edits the repo
+- **THEN** the legibility obligation does not open, and findings reach the agent and `check` as advisory information only
+
 #### Scenario: A real create run is create-origin
 
 - **WHEN** `create` scaffolds or resumes a project and any stage begins

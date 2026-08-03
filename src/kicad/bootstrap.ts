@@ -38,8 +38,8 @@ function uuidFrom(seed: string): string {
 function emptySchematic(rootUuid: string): string {
   return `(kicad_sch
 	(version 20231120)
-	(generator "eeschema")
-	(generator_version "8.0")
+	(generator "copperhead-draft")
+	(generator_version "0")
 	(uuid "${rootUuid}")
 	(paper "A4")
 	(lib_symbols)
