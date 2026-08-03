@@ -39,6 +39,13 @@ The agent loop's stated workflow SHALL include `check_legibility` in the verific
 
 On repos whose schematic copperhead authored (create origin), an error-severity legibility finding outstanding at the time `finish` is called SHALL be reported by `finish` as an unmet obligation, in the same list that already carries drift, constraint dual-write, and verification obligations. On repos with a hand-drawn schematic (init-ed or hand-maintained), the obligation SHALL NOT open: a pre-existing sheet could never satisfy the standard without a full redraw, so the same findings reach the agent and `check` as advisory information only, matching the check-reports-create-gates split. The obligation SHALL follow the ledger's existing edit-reopens, clean-run-clears lifecycle: a schematic mutation, whether an anchored edit or a `draft_schematic` run, opens (or re-opens) the legibility obligation through the same post-tool-call hook that re-opens the ERC and drift obligations, a `check_legibility` run with zero error-severity findings clears it, and a run with error-severity findings leaves it open carrying the current finding list. "Outstanding" therefore always means the most recent checker result against the file as edited, never a stale finding list, and `finish` and the stage-completion recheck judge the same state.
 
+A gate scoped by a marker is only as real as the marker's writer, so `create` SHALL write `origin: "create"` into `.copperhead/config.json` itself: once at the start of every run (covering resumed repos whose project predates the marker) and again on every project scaffold (covering the rollback path, where `git clean` deletes an uncommitted config). A repo produced by a real `create` run SHALL therefore always satisfy the create-origin predicate this requirement scopes by.
+
+#### Scenario: A real create run is create-origin
+
+- **WHEN** `create` scaffolds or resumes a project and any stage begins
+- **THEN** `.copperhead/config.json` carries `origin: "create"`, so the legibility obligation lifecycle above is live rather than silently inert
+
 #### Scenario: `finish` refuses while the sheet is illegible (AC-16.24)
 
 - **WHEN** the agent calls `finish` with outcome "done" while error-severity legibility findings remain

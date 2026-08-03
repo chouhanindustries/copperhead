@@ -3,7 +3,7 @@ import { existsSync } from 'node:fs';
 import { readFile, mkdir, writeFile, readdir } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { loadConfig, resolveCompatSettings } from '../config.js';
-import { bootstrapKicadProject } from '../kicad/bootstrap.js';
+import { bootstrapKicadProject, markCreateOrigin } from '../kicad/bootstrap.js';
 import { exportSvg, runErc } from '../kicad/cli.js';
 import { listSymbols } from '../kicad/sexp.js';
 import { checkLegibility } from '../kicad/legibility.js';
@@ -730,6 +730,11 @@ export async function runCreate(opts: CreateOptions): Promise<{ ok: boolean; com
   const pruned = await pruneHistoryDir(opts.repoRoot);
   if (pruned) opts.log(dim(`startup: pruned ${pruned} old .history/ entrie(s) to cap local-history growth`));
   await openspecInit(opts.repoRoot);
+  // Stamp the repo create-produced before any stage runs: the marker scopes the
+  // legibility finish gate and the fab release gate, and it must hold on
+  // resumed runs whose project predates the marker (bootstrapKicadProject
+  // no-ops on those, so it cannot be the only writer).
+  await markCreateOrigin(opts.repoRoot);
   const completed: string[] = [];
   const stageCosts: StageCost[] = [];
 
