@@ -10,7 +10,7 @@ mkdir -p "$OUT"
 shopt -s nullglob
 count=0
 for sch in test/fixtures/golden/*.kicad_sch test/fixtures/legibility/*.kicad_sch \
-  test/fixtures/open-key/hardware/*.kicad_sch manual-tests/control/*/reference/*.kicad_sch; do
+  test/fixtures/open-key/hardware/*.kicad_sch manual-tests/reference-boards/*/reference/*.kicad_sch; do
   name="$(echo "${sch%.kicad_sch}" | tr '/' '_')"
   kicad-cli sch export svg --no-background-color -o "$OUT/$name" "$sch" >/dev/null
   count=$((count + 1))

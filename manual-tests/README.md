@@ -10,7 +10,7 @@ Sandboxes for exercising the CLI end to end, by hand, against a real git reposit
 
 ## Control boards
 
-`manual-tests/control/` holds committed reference projects for the deterministic drafting engine, with symbols vendored from the real KiCad libraries. `npm run control` re-drafts each board, byte-compares against its reference, and renders a PNG for visual comparison; `npm run control -- --update` regenerates the references after a deliberate engine change. The byte contract also runs in CI (`test/draft-control.test.ts`). See [control/README.md](control/README.md).
+`manual-tests/reference-boards/` holds committed reference projects for the deterministic drafting engine, with symbols vendored from the real KiCad libraries. `npm run refboards` re-drafts each board, byte-compares against its reference, and renders a PNG for visual comparison; `npm run refboards -- --update` regenerates the references after a deliberate engine change. The byte contract also runs in CI (`test/draft-reference-boards.test.ts`). See [reference-boards/README.md](reference-boards/README.md).
 
 ## Variants
 

@@ -13,12 +13,12 @@ import { checkLegibility } from '../src/kicad/legibility.js';
  * Sheet-level layout passes: shelf-wrap, stacked-pin collapse, power-value
  * placement, and label nudging. These run on the placement model rather than
  * the emitted bytes, so a failure names the geometry that moved instead of
- * pointing at a diff. The byte contract itself lives in draft-control.test.ts.
+ * pointing at a diff. The byte contract itself lives in draft-reference-boards.test.ts.
  */
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const SYMLIB = path.join(HERE, 'fixtures', 'symlib');
-const CONTROL = path.join(HERE, '..', 'manual-tests', 'control');
+const CONTROL = path.join(HERE, '..', 'manual-tests', 'reference-boards');
 const U = 1.27;
 /** Default stub length, grid units (engine STUB). */
 const STUB = 2;

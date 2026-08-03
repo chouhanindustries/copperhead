@@ -147,7 +147,7 @@ describe('drop chains: series passives restack as one straight run (AC-16.31)', 
     // U1.5 (directly below the anchor U1.4 on the same side) carries its own
     // net, so its stub end sits exactly on the would-be chain axis. The pass
     // must leave the columns alone; the first version of this pass shorted 5V
-    // into DRIVE on the npn-switch control board in exactly this shape.
+    // into DRIVE on the npn-switch reference board in exactly this shape.
     const { syms, cleanup } = await draftRepo(
       {
         version: 1,
