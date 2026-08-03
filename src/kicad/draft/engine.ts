@@ -910,6 +910,13 @@ export function draftSchematicPlacement(validated: ValidatedIntent, projectName:
   // pin of a connector-style part (2 grid rows apart) and short two nets.
   // Horizontal stubs run 4 units so their symbol clears the 2-unit signal
   // stubs and label anchors of neighbouring rows.
+  const powerBodies = [...placed.values()].map((p) => p.body);
+  /** Visible power value texts placed so far, for the collision rules below. */
+  const shownPowerValues: { net: string; box: Bounds }[] = [];
+  const powerValueBox = (net: string, x: number, y: number): Bounds => {
+    const w = Math.max(1, net.length) * LABEL_ADVANCE * LABEL_HEIGHT;
+    return { minX: x - w / 2, minY: y - LABEL_HEIGHT / 2, maxX: x + w / 2, maxY: y + LABEL_HEIGHT / 2 };
+  };
   for (const net of [...powerNets].sort((a, b) => a.name.localeCompare(b.name))) {
     const cls = netClasses.get(net.name)!.cls;
     const src = powerSymbolSource(net.name, cls === 'ground' ? 'ground' : 'rail');
@@ -918,8 +925,39 @@ export function draftSchematicPlacement(validated: ValidatedIntent, projectName:
     const eps = endpointsOf(net);
     eps.forEach((ep, i) => {
       const o = outward(ep.pin);
-      const len = o.dx !== 0 ? STUB + 2 : STUB;
-      const stubEnd = { x: ep.at.x + o.dx * len * U, y: ep.at.y + o.dy * len * U };
+      let len = o.dx !== 0 ? STUB + 2 : STUB;
+      const at = (l: number): { x: number; y: number } => ({ x: ep.at.x + o.dx * l * U, y: ep.at.y + o.dy * l * U });
+      const valueAtOf = (end: { x: number; y: number }): { x: number; y: number } => ({
+        x: end.x,
+        y: end.y + (o.dy !== 0 ? o.dy * 3.556 : cls === 'ground' ? 3.556 : -3.556),
+      });
+      // Adjacent power pins collide their value texts two ways, resolved two
+      // ways. The SAME net repeated (a TQFP's VCC pins one row apart) hides
+      // the duplicates: one visible name per cluster carries the same
+      // information. A DIFFERENT net's name may never be hidden, so its
+      // symbol rides its own stub outward, a bounded grid step at a time,
+      // until the text clears — keeping "every gate failure is resolvable
+      // through the IR" true for a collision the IR cannot otherwise reach.
+      let hideValue = false;
+      {
+        const first = valueAtOf(at(len));
+        const firstBox = powerValueBox(net.name, first.x, first.y);
+        if (shownPowerValues.some((p) => p.net === net.name && boundsOverlap(p.box, firstBox))) {
+          hideValue = true;
+        } else {
+          for (let extra = 0; extra < 4; extra++) {
+            const v = valueAtOf(at(len));
+            const b = powerValueBox(net.name, v.x, v.y);
+            if (!shownPowerValues.some((p) => p.net !== net.name && boundsOverlap(p.box, b))) break;
+            const extended = at(len + 2);
+            if (powerBodies.some((bd) => segCrossesBody(ep.at.x, ep.at.y, extended.x, extended.y, bd))) break;
+            len += 2;
+          }
+        }
+      }
+      const stubEnd = at(len);
+      const valueAt = valueAtOf(stubEnd);
+      if (!hideValue) shownPowerValues.push({ net: net.name, box: powerValueBox(net.name, valueAt.x, valueAt.y) });
       addWire(net.name, ep.at.x, ep.at.y, stubEnd.x, stubEnd.y);
       pwrSeq++;
       extraSymbols.push({
@@ -936,12 +974,12 @@ export function draftSchematicPlacement(validated: ValidatedIntent, projectName:
         // a rail hanging off a downward pin puts "+5V" on the symbol above it.
         // The text follows the stub outward, so it always lands on the far
         // side of the symbol from the part it serves.
-        valueAt: { x: stubEnd.x, y: stubEnd.y + (o.dy !== 0 ? o.dy * 3.556 : cls === 'ground' ? 3.556 : -3.556) },
+        valueAt,
         hideRef: true,
         // the net name IS the flag's meaning: an anonymous bar tells a
         // reviewer nothing, so the value stays visible like stock power
         // symbols (the checker verifies it collides with nothing)
-        hideValue: false,
+        hideValue,
         pinNumbers: ['1'],
       });
       if (i === 0 && !hasDriver) {
@@ -965,29 +1003,6 @@ export function draftSchematicPlacement(validated: ValidatedIntent, projectName:
         pwrFlags.push(net.name);
       }
     });
-  }
-
-  // Adjacent same-net power pins keep ONE visible rail name per cluster. A
-  // TQFP's supply pins sit one grid row apart on the same side (VCC at pin 4,
-  // VCC at pin 6, AVCC at 18), so their per-pin symbols' value texts overlap:
-  // an error-severity text collision the IR cannot reach, over text that
-  // repeats the same word. Later symbols whose visible value box overlaps an
-  // earlier one of the same net hide theirs; a different net never hides.
-  const shownPowerValues: { net: string; box: Bounds }[] = [];
-  for (const s of extraSymbols) {
-    if (s.hideValue) continue;
-    const w = Math.max(1, s.value.length) * LABEL_ADVANCE * LABEL_HEIGHT;
-    const box: Bounds = {
-      minX: s.valueAt.x - w / 2,
-      minY: s.valueAt.y - LABEL_HEIGHT / 2,
-      maxX: s.valueAt.x + w / 2,
-      maxY: s.valueAt.y + LABEL_HEIGHT / 2,
-    };
-    if (shownPowerValues.some((p) => p.net === s.value && boundsOverlap(p.box, box))) {
-      s.hideValue = true;
-      continue;
-    }
-    shownPowerValues.push({ net: s.value, box });
   }
 
   // signal nets: local nets wired, everything else labelled at a stub
