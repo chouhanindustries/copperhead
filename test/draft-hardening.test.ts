@@ -455,6 +455,54 @@ describe('power net names cannot corrupt the generated symbol source', () => {
   });
 });
 
+describe('power symbols never fight over their value text', () => {
+  /**
+   * Two DIFFERENT rails on adjacent same-side pins used to stack their value
+   * texts into an error-severity collision no IR change could reach (hiding a
+   * different net's name would lose information). The later symbol now rides
+   * its own stub outward until the text clears; same-net duplicates keep the
+   * existing one-visible-name-per-cluster rule.
+   */
+  it('a different-net collision resolves by extending a stub, both names visible', async () => {
+    const repo = await mkdtemp(path.join(tmpdir(), 'copperhead-pwrtext-'));
+    try {
+      await writeFile(
+        path.join(repo, 'schematic.intent.json'),
+        JSON.stringify({
+          version: 1,
+          parts: [
+            { ref: 'X1', libId: 'CopperStack:TopPins2', value: 'TopPins2', group: 'A' },
+            { ref: 'R1', libId: 'Device:R', value: '1k', group: 'A' },
+            { ref: 'R2', libId: 'Device:R', value: '1k', group: 'A' },
+          ],
+          nets: [
+            { name: 'RAIL_A', pins: ['X1.1', 'R1.1'], kind: 'power' },
+            { name: 'RAIL_B', pins: ['X1.2', 'R2.1'], kind: 'power' },
+            { name: 'SIG', pins: ['X1.3', 'R1.2'] },
+          ],
+        }),
+        'utf8',
+      );
+      const res = await draftSchematic({ repoRoot: repo, schematic: 'b.kicad_sch', symbolDirs: [SYMLIB] });
+      expect(res.ok, res.ok ? '' : res.message).toBe(true);
+      if (!res.ok) return;
+      const text = await readFile(res.schematicPath, 'utf8');
+      // both rail names stay visible: a different net's name is never hidden
+      for (const rail of ['RAIL_A', 'RAIL_B']) {
+        const m = new RegExp(`\\(property "Value" "${rail}"[^\\n]*\\n([^\\n]*)`).exec(text);
+        expect(m, `${rail} value present`).not.toBeNull();
+      }
+      const hidden = [...text.matchAll(/\(property "Value" "(RAIL_[AB])"[\s\S]{0,200}?hide yes/g)].map((m) => m[1]);
+      expect(hidden).toEqual([]);
+      // and the checker sees no collision
+      const leg = await checkLegibility(res.schematicPath, {});
+      expect(leg.findings.filter((f) => f.severity === 'error')).toEqual([]);
+    } finally {
+      await rm(repo, { recursive: true, force: true });
+    }
+  }, 30000);
+});
+
 describe('type-confused IR fields come back as numbered findings, not TypeErrors', () => {
   const base = () => ({
     version: 1,
