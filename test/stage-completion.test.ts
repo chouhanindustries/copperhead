@@ -101,6 +101,27 @@ describe('spec-seed isComplete', () => {
         `# My Project\n\n## Budgets\n\n- sleep_current_uA: 25\n- peak_current_mA: 500\n\n## Assumptions\n\n- USB-C assumed ASSUMED\n`,
         'utf8',
       );
+      await mkdir(path.join(root, '.copperhead'), { recursive: true });
+      await writeFile(
+        path.join(root, '.copperhead', 'constraints.json'),
+        JSON.stringify(
+          {
+            'power.sleep_current_uA': {
+              max: 25,
+              source: 'docs/SPEC.md',
+              affects: [],
+            },
+            'power.peak_current_mA': {
+              max: 500,
+              source: 'docs/SPEC.md',
+              affects: [],
+            },
+          },
+          null,
+          2,
+        ) + '\n',
+        'utf8',
+      );
       expect(await stageNamed('spec-seed')(root, DOCS)).toBe(true);
     });
   });
