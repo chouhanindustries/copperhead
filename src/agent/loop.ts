@@ -4,6 +4,7 @@ import { execa } from 'execa';
 import type { Msg, Provider, Turn } from './types.js';
 import { availableTools, dispatchTool, type RunContext } from './tools.js';
 import { CachingProvider } from './response-cache.js';
+import { capHistory } from './history.js';
 import { withTimeout, TurnTimeoutError } from './recovery.js';
 import { buildSystemPrompt } from './prompts.js';
 import { loadConstraints, reopenDeferredAffects } from '../memory/constraints.js';
@@ -362,6 +363,8 @@ async function runWithMemory(
   let tokensIn = 0;
   let tokensOut = 0;
   let turnsUsed = 0;
+  /** Characters kept out of the wire by history capping, summed over the run. */
+  let capCharsSaved = 0;
   const perTurn: { turn: number; in: number; out: number }[] = [];
   let plan: string | null = null;
   let nudges = 0;
@@ -378,6 +381,7 @@ async function runWithMemory(
     tokensOut,
     perTurn,
     durationMs: Date.now() - startMs,
+    ...(capCharsSaved ? { capCharsSaved } : {}),
   });
 
   /** One outcome line, printed last at every terminal branch (AC-8.5). */
@@ -514,11 +518,21 @@ async function runWithMemory(
           )
         : null;
     heartbeat?.unref?.();
+    // Trim settled history out of the request only - `messages` itself stays
+    // whole, so the transcript, the ledger, and the next turn's own capping all
+    // still see full fidelity. Length and order are preserved, which is what
+    // keeps the claude-code session-resume index (`sentCount`) and every
+    // provider's toolCallId pairing valid.
+    const sent = config.historyCap ? capHistory(messages) : { messages, stats: null };
+    if (sent.stats?.charsSaved) {
+      capCharsSaved += sent.stats.charsSaved;
+      await transcript.event('history-capped', { turn: turn + 1, ...sent.stats });
+    }
     try {
       res = await withRetry(
         () =>
           withTimeout(
-            () => provider.chat(messages, tools, { onStream: (chars) => (streamedChars = chars) }),
+            () => provider.chat(sent.messages, tools, { onStream: (chars) => (streamedChars = chars) }),
             config.turnTimeoutMs,
             () => provider.close?.(),
           ),

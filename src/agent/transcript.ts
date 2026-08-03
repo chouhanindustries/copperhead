@@ -26,6 +26,9 @@ export interface RunStats {
   tokensOut: number;
   perTurn: { turn: number; in: number; out: number }[];
   durationMs: number;
+  /** Characters history capping kept off the wire across the run. Absent when
+   *  capping is disabled or never had anything to trim. */
+  capCharsSaved?: number;
 }
 
 export interface RunSummaryData {

@@ -1,0 +1,42 @@
+# agent-core — Delta Spec
+
+## ADDED Requirements
+
+### Requirement: The conversation sent each turn is capped
+The agent loop SHALL send the provider a capped view of the conversation rather than the full accumulated history, so a long stage does not re-send and re-pay for content the model no longer needs. Capping SHALL affect only the request: the run's own message history, the JSONL transcript, and the obligations ledger SHALL retain full fidelity. Capping SHALL be enabled by default and disableable with the `historyCap` config field.
+
+#### Scenario: a settled oversized tool result is clipped
+- **GIVEN** a conversation with a tool result longer than the result cap, outside the recent window
+- **WHEN** the next turn is sent to the provider
+- **THEN** the provider receives a clipped result that states how much was removed and how to recover it, and the untouched original remains in the transcript
+
+#### Scenario: capping can be turned off
+- **GIVEN** `historyCap` is set to false in `.copperhead/config.json`
+- **WHEN** a turn is sent
+- **THEN** the provider receives the conversation exactly as accumulated, with nothing trimmed
+
+### Requirement: Capping preserves message identity
+Capping SHALL preserve the number of messages, their order, their roles, and every `toolCallId`, shrinking only content strings and oversized tool-call argument strings. It SHALL NOT drop, merge, reorder, or re-identify a message, because the session-resume path indexes into the message array (`renderDelta(messages, sentCount)`) and every provider pairs a tool result to its call by id.
+
+#### Scenario: identity survives a capping pass
+- **GIVEN** a conversation in which several messages are eligible for trimming
+- **WHEN** the capped view is built
+- **THEN** it has the same length, the same sequence of roles, and the same `toolCallId` values in the same order as the input
+
+#### Scenario: the caller's history is not mutated
+- **GIVEN** a conversation passed to the capping function
+- **WHEN** the capped view is built
+- **THEN** the original array and its messages are unchanged
+
+### Requirement: A superseded file read is replaced rather than re-sent
+When a `read_file` result is followed later in the same conversation by another read of the same path, the earlier result SHALL be replaced with a short stub naming the path, since the current contents are already present in the conversation. This replacement SHALL apply regardless of how recent the earlier read is, because it is not lossy. The most recent read of a path SHALL always be sent in full.
+
+#### Scenario: an earlier read of a re-read path is replaced
+- **GIVEN** a conversation that reads the same schematic twice
+- **WHEN** the capped view is built
+- **THEN** the earlier result is replaced by a stub naming the path and directing the model to the newer read, and the later result is sent in full
+
+#### Scenario: reads of different paths are independent
+- **GIVEN** a conversation that reads two different files once each
+- **WHEN** the capped view is built
+- **THEN** neither result is superseded
