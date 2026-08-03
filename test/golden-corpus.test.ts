@@ -6,7 +6,7 @@ import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { checkLegibility } from '../src/kicad/legibility.js';
 import { scoreSchematic } from '../src/kicad/score.js';
-import { runDraft } from '../src/kicad/draft/draft.js';
+import { draftSchematic } from '../src/kicad/draft/draft.js';
 
 /**
  * The three-tier golden benchmark corpus (design D8).
@@ -83,7 +83,7 @@ describe('golden corpus: Tier C (engine output, AC-16.18)', () => {
     try {
       await cp(path.join(HERE, 'fixtures', 'draft', 'schematic.intent.json'), path.join(repo, 'schematic.intent.json'));
       await cp(path.join(HERE, 'fixtures', 'draft', 'docs'), path.join(repo, 'docs'), { recursive: true });
-      const res = await runDraft({
+      const res = await draftSchematic({
         repoRoot: repo,
         schematic: 'board.kicad_sch',
         intentPath: 'schematic.intent.json',

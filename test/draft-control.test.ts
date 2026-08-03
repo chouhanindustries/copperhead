@@ -3,7 +3,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mkdtemp, cp, rm, readFile, readdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { runDraft } from '../src/kicad/draft/draft.js';
+import { draftSchematic } from '../src/kicad/draft/draft.js';
 import { checkLegibility } from '../src/kicad/legibility.js';
 import { runErc } from '../src/kicad/cli.js';
 
@@ -30,7 +30,7 @@ describe('control boards: the engine reproduces the committed references', async
         const config = JSON.parse(await readFile(path.join(src, '.copperhead', 'config.json'), 'utf8')) as {
           schematic: string;
         };
-        const res = await runDraft({
+        const res = await draftSchematic({
           repoRoot: repo,
           schematic: config.schematic,
           docsDir: 'docs/',

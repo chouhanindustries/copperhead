@@ -179,22 +179,28 @@ program
   .description('ERC + DRC + doc-drift + spec validation; no LLM calls; CI-safe')
   .action(checkAction);
 
-program
+// `draft` and `score` are command groups taking the artifact as a noun
+// (`draft schematic` today, `draft pcb` when layout drafting exists), so the
+// verb alone never has to guess what it applies to.
+const draftGroup = program
   .command('draft')
-  .description('draft the schematic deterministically from schematic.intent.json; no LLM, no network')
+  .description('deterministically draft an artifact from its declared intent; no LLM, no network');
+draftGroup
+  .command('schematic')
+  .description('draft the schematic from schematic.intent.json')
   .option('--intent <path>', 'repo-relative intent file (default: schematic.intent.json beside the schematic)')
   .action(async (opts: { intent?: string }) => {
     const repo = repoOf(program.opts());
     const json = Boolean(program.opts().json);
     try {
       const { loadConfig } = await import('./config.js');
-      const { runDraft, defaultIntentPath, formatDraftReport } = await import('./kicad/draft/draft.js');
+      const { draftSchematic, defaultIntentPath, formatSchematicDraftReport } = await import('./kicad/draft/draft.js');
       const config = await loadConfig(repo);
       if (!config.schematic) {
         console.error('no schematic configured in .copperhead/config.json');
         process.exit(1);
       }
-      const res = await runDraft({
+      const res = await draftSchematic({
         repoRoot: repo,
         schematic: config.schematic,
         intentPath: opts.intent ?? defaultIntentPath(config.schematic),
@@ -206,7 +212,7 @@ program
         process.exit(1);
       }
       if (json) console.log(JSON.stringify({ ok: true, report: res.report }, null, 2));
-      else console.log(formatDraftReport(res.report));
+      else console.log(formatSchematicDraftReport(res.report));
       process.exit(0);
     } catch (err) {
       console.error((err as Error).message);
@@ -214,9 +220,12 @@ program
     }
   });
 
-program
+const scoreGroup = program
   .command('score')
-  .description('quantitative legibility score for the schematic; advisory exit code; no LLM, no network')
+  .description('quantitative quality score for an artifact; advisory exit code; no LLM, no network');
+scoreGroup
+  .command('schematic')
+  .description('legibility and layout score for the schematic')
   .action(async () => {
     const repo = repoOf(program.opts());
     const json = Boolean(program.opts().json);

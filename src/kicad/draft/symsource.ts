@@ -191,7 +191,7 @@ export class SymbolSource {
    * @param searchDirs override for the installed-library search path (tests)
    * @param vendor when false, resolution never writes: symbols come from the
    *   vendored cache or the installed libraries verbatim, but nothing is copied
-   *   into `sym-lib-cache/`. For read-shaped callers (`draftToText`, staleness
+   *   into `sym-lib-cache/`. For read-shaped callers (`draftSchematicToText`, staleness
    *   probes) that must not mutate the working tree.
    */
   constructor(

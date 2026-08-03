@@ -8,7 +8,7 @@ import { formatViolations, type CheckReport } from '../kicad/report.js';
 import { listSymbols, listNets } from '../kicad/sexp.js';
 import { checkLegibility, formatLegibility } from '../kicad/legibility.js';
 import { scoreSchematic, formatScore } from '../kicad/score.js';
-import { runDraft, defaultIntentPath, formatDraftReport } from '../kicad/draft/draft.js';
+import { draftSchematic, defaultIntentPath, formatSchematicDraftReport } from '../kicad/draft/draft.js';
 import { verifySchematicSymbols } from '../kicad/symlib.js';
 import { checkDrift } from '../memory/drift.js';
 import { saveConstraint, classifyAffectsTarget, affectsTargetExists } from '../memory/constraints.js';
@@ -390,7 +390,7 @@ export const TOOLS: ToolDef[] = [
         await writeFile(resolveInRepo(ctx.repoRoot, intentRel), args.intent_json, 'utf8');
         ctx.filesTouched.add(intentRel);
       }
-      const res = await runDraft({
+      const res = await draftSchematic({
         repoRoot: ctx.repoRoot,
         schematic: ctx.config.schematic,
         intentPath: intentRel,
@@ -413,7 +413,7 @@ export const TOOLS: ToolDef[] = [
         ...(ctx.config.legibility ? { config: ctx.config.legibility } : {}),
       });
       ctx.lastScore = score.composite;
-      return [formatDraftReport(res.report), formatLegibility(leg), formatScore(score)].join('\n');
+      return [formatSchematicDraftReport(res.report), formatLegibility(leg), formatScore(score)].join('\n');
     },
   },
   {

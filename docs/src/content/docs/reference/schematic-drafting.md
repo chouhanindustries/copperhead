@@ -96,15 +96,15 @@ Three instruments run against every drafted sheet, and none of them is the engin
 
 - **ERC** (via `kicad-cli`) checks the electrical facts, as it always has.
 - **The legibility checker** evaluates the [thirteen check families](/reference/schematic-legibility/) read-only. Error-severity findings block the schematic stage from completing.
-- **The score** (`copperhead score`) measures the judgment calls: wire crossings and bends, total wire length, alignment, page utilization, label-to-wire ratio, group cohesion, and flow direction, combined into a weighted 0-100 composite whose per-metric breakdown is always printed. Any error-severity finding caps the composite, so a good number can never hide a real defect.
+- **The score** (`copperhead score schematic`) measures the judgment calls: wire crossings and bends, total wire length, alignment, page utilization, label-to-wire ratio, group cohesion, and flow direction, combined into a weighted 0-100 composite whose per-metric breakdown is always printed. Any error-severity finding caps the composite, so a good number can never hide a real defect.
 
 Behind these sits a golden corpus in CI: known-good hand-drawn sheets that must stay finding-free and above a score floor (catching checker false positives), known-bad sheets that must keep producing their exact findings (catching detection regressions), and reference intents whose drafted output is pinned byte-for-byte with its score (catching engine regressions). Goldens change only through an explicit update flag, and the resulting diff is reviewed like any other code change.
 
 ## Trying it
 
 ```bash
-copperhead draft   # intent in, schematic out; deterministic, offline
-copperhead score   # score JSON for the configured schematic
+copperhead draft schematic   # intent in, schematic out; deterministic, offline
+copperhead score schematic   # score JSON for the configured schematic
 copperhead check   # ERC plus legibility findings and score, advisory, exit code unchanged
 ```
 

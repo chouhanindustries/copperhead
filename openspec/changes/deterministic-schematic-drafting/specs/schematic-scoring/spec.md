@@ -32,7 +32,7 @@ The scorer SHALL roll the metrics into a 0-100 composite using weights from the 
 
 ### Requirement: Score surfaces
 
-The score SHALL surface in three places: recorded in the run summary of any create run that drafts a schematic; present in `check --json` under `legibility.score` as advisory data that never affects the exit code; and available standalone via `copperhead score`, which SHALL be LLM-free and network-free.
+The score SHALL surface in three places: recorded in the run summary of any create run that drafts a schematic; present in `check --json` under `legibility.score` as advisory data that never affects the exit code; and available standalone via `copperhead score schematic`, which SHALL be LLM-free and network-free.
 
 #### Scenario: Run summary records the score
 
@@ -41,7 +41,7 @@ The score SHALL surface in three places: recorded in the run summary of any crea
 
 #### Scenario: score command is offline
 
-- **WHEN** `copperhead score` runs
+- **WHEN** `copperhead score schematic` runs
 - **THEN** no language-model call and no network request is made, and the score JSON is printed
 
 ### Requirement: Golden benchmark corpus

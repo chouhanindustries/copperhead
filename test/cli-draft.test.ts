@@ -29,8 +29,8 @@ async function fixtureRepo(): Promise<{ repo: string; cleanup: () => Promise<voi
   );
   // Vendor the fixture symbols so the spawned CLI (which has no symbolDirs
   // override) resolves hermetically from the committed-style cache.
-  const { runDraft } = await import('../src/kicad/draft/draft.js');
-  const res = await runDraft({
+  const { draftSchematic } = await import('../src/kicad/draft/draft.js');
+  const res = await draftSchematic({
     repoRoot: repo,
     schematic: 'board.kicad_sch',
     intentPath: 'schematic.intent.json',
@@ -44,15 +44,15 @@ async function fixtureRepo(): Promise<{ repo: string; cleanup: () => Promise<voi
 const cli = (repo: string, ...args: string[]) =>
   execa('npx', ['tsx', 'src/cli.ts', '--repo', repo, ...args], { cwd: ROOT, reject: false, env: { NO_COLOR: '1' } });
 
-describe('copperhead draft (CLI)', () => {
+describe('copperhead draft schematic (CLI)', () => {
   it('exits 0 and prints the report on a good intent; --json is machine-readable', async () => {
     const { repo, cleanup } = await fixtureRepo();
     try {
-      const prose = await cli(repo, 'draft');
+      const prose = await cli(repo, 'draft', 'schematic');
       expect(prose.exitCode).toBe(0);
       expect(prose.stdout).toContain('drafted:');
 
-      const json = await cli(repo, '--json', 'draft');
+      const json = await cli(repo, '--json', 'draft', 'schematic');
       expect(json.exitCode).toBe(0);
       const parsed = JSON.parse(json.stdout) as { ok: boolean; report: { paper: string } };
       expect(parsed.ok).toBe(true);
@@ -71,11 +71,11 @@ describe('copperhead draft (CLI)', () => {
       bad.nets.push({ name: 'GHOST', pins: ['U9.1', 'U9.2'] });
       await writeFile(path.join(repo, 'schematic.intent.json'), JSON.stringify(bad), 'utf8');
 
-      const res = await cli(repo, 'draft');
+      const res = await cli(repo, 'draft', 'schematic');
       expect(res.exitCode).toBe(1);
       expect(res.stderr).toContain('unknown part U9');
 
-      const json = await cli(repo, '--json', 'draft');
+      const json = await cli(repo, '--json', 'draft', 'schematic');
       expect(json.exitCode).toBe(1);
       const parsed = JSON.parse(json.stdout) as { ok: boolean; findings: { detail: string }[] };
       expect(parsed.ok).toBe(false);
@@ -90,7 +90,7 @@ describe('copperhead draft (CLI)', () => {
     try {
       await mkdir(path.join(repo, '.copperhead'), { recursive: true });
       await writeFile(path.join(repo, '.copperhead', 'config.json'), '{}', 'utf8');
-      const res = await cli(repo, 'draft');
+      const res = await cli(repo, 'draft', 'schematic');
       expect(res.exitCode).toBe(1);
       expect(res.stderr).toContain('no schematic configured');
     } finally {
@@ -99,15 +99,15 @@ describe('copperhead draft (CLI)', () => {
   }, 120_000);
 });
 
-describe('copperhead score (CLI)', () => {
+describe('copperhead score schematic (CLI)', () => {
   it('exits 0 regardless of the composite, in prose and JSON', async () => {
     const { repo, cleanup } = await fixtureRepo();
     try {
-      const prose = await cli(repo, 'score');
+      const prose = await cli(repo, 'score', 'schematic');
       expect(prose.exitCode).toBe(0);
       expect(prose.stdout).toMatch(/\/100/);
 
-      const json = await cli(repo, '--json', 'score');
+      const json = await cli(repo, '--json', 'score', 'schematic');
       expect(json.exitCode).toBe(0);
       const parsed = JSON.parse(json.stdout) as { composite: number; metrics: unknown[] };
       expect(Number.isFinite(parsed.composite)).toBe(true);

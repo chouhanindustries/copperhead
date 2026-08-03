@@ -7,7 +7,7 @@ import { bootstrapKicadProject, markCreateOrigin } from '../kicad/bootstrap.js';
 import { exportSvg, runErc } from '../kicad/cli.js';
 import { listSymbols } from '../kicad/sexp.js';
 import { checkLegibility } from '../kicad/legibility.js';
-import { draftToText, defaultIntentPath } from '../kicad/draft/draft.js';
+import { draftSchematicToText, defaultIntentPath } from '../kicad/draft/draft.js';
 import { isDirty, commitAll, changedFiles } from '../util/git.js';
 import type { CompatSettings, CopperheadConfig } from '../config.js';
 import { checkDrift } from '../memory/drift.js';
@@ -199,7 +199,7 @@ export const STAGES: Stage[] = [
       // active until a re-draft.
       const intentRel = defaultIntentPath(config.schematic);
       if (existsSync(path.join(root, intentRel))) {
-        const dry = await draftToText({
+        const dry = await draftSchematicToText({
           repoRoot: root,
           schematic: config.schematic,
           intentPath: intentRel,

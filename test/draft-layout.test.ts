@@ -5,8 +5,8 @@ import { mkdtemp, mkdir, cp, rm, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { SymbolSource } from '../src/kicad/draft/symsource.js';
 import { validateIntent, type SchematicIntent } from '../src/kicad/draft/ir.js';
-import { draftPlacement } from '../src/kicad/draft/engine.js';
-import { runDraft } from '../src/kicad/draft/draft.js';
+import { draftSchematicPlacement } from '../src/kicad/draft/engine.js';
+import { draftSchematic } from '../src/kicad/draft/draft.js';
 import { checkLegibility } from '../src/kicad/legibility.js';
 
 /**
@@ -30,7 +30,7 @@ async function place(intent: SchematicIntent, docsDir: string | null = null) {
     const symsource = new SymbolSource(repo, [SYMLIB]);
     const v = await validateIntent(intent, symsource, docsDir);
     expect(v.ok, v.findings.map((f) => f.detail).join('; ')).toBe(true);
-    const { model, report } = draftPlacement(v.validated!, 'board', '2020-01-01');
+    const { model, report } = draftSchematicPlacement(v.validated!, 'board', '2020-01-01');
     return { model, report, symbols: v.validated!.symbols };
   } finally {
     await rm(repo, { recursive: true, force: true });
@@ -140,7 +140,7 @@ describe('shelf-wrap: the group ribbon reflows into rows (design D12)', () => {
       );
       await writeFile(path.join(repo, 'schematic.intent.json'), JSON.stringify(intent, null, 2), 'utf8');
 
-      const res = await runDraft({
+      const res = await draftSchematic({
         repoRoot: repo,
         schematic: 'board.kicad_sch',
         docsDir: 'docs',
@@ -256,7 +256,7 @@ describe('label nudging keeps a stub label attached and clear', () => {
       const symsource = new SymbolSource(repo, []);
       const v = await validateIntent(intent, symsource, path.join(repo, 'docs'));
       expect(v.ok, v.findings.map((f) => f.detail).join('; ')).toBe(true);
-      const { model } = draftPlacement(v.validated!, 'buck-12v-5v', '2020-01-01');
+      const { model } = draftSchematicPlacement(v.validated!, 'buck-12v-5v', '2020-01-01');
 
       // pin points of every placed part, to tell a pin stub from a trunk
       const pinPoints = new Set<string>();
