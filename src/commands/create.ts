@@ -55,6 +55,25 @@ async function docHasHeading(repoRoot: string, rel: string, word: string): Promi
   return re.test(await readFile(p, 'utf8'));
 }
 
+export async function writeBriefHash(
+  repoRoot: string,
+  briefMeta: { path: string; sha256: string },
+): Promise<void> {
+  const file = path.join(repoRoot, 'docs', 'BRIEF.sha256');
+
+  if (existsSync(file)) return;
+
+  await mkdir(path.dirname(file), { recursive: true });
+
+  await writeFile(
+    file,
+    `brief: ${briefMeta.path}
+sha256: ${briefMeta.sha256}
+`,
+    'utf8',
+  );
+}
+
 /**
  * Returns true when a directory exists and contains at least one file
  * matching the optional glob-style extension list (case-insensitive).
@@ -818,6 +837,9 @@ export async function runCreate(opts: CreateOptions): Promise<{ ok: boolean; com
       return { ok: false, completed };
     }
     completed.push(stage.name);
+    if (stage.name === 'spec-seed') {
+      await writeBriefHash(opts.repoRoot, briefMeta);
+    }
     await renderStageArtifacts(opts, stage.name, stageTranscriptDir);
     await emitJlcpcbAfterOutputs(stage.name, opts);
     logCumulative(opts, stageCosts);
