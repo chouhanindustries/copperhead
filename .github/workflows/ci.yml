@@ -31,6 +31,17 @@ jobs:
           sudo apt-get update
           sudo apt-get install --yes --no-install-recommends kicad kicad-footprints
           kicad-cli --version
+          # Installing the libraries is not enough: kicad-cli resolves footprint
+          # links through the user's global fp-lib-table and never creates the
+          # default one headlessly, so a fresh runner still reports every stock
+          # library as "not included in the configuration". Seed the default
+          # table from KiCad's own template. The global sym-lib-table is left
+          # absent on purpose: symbols are vendored per project, kicad-symbols
+          # is not installed, and a table naming missing files would only add
+          # noise.
+          KICAD_VER="$(kicad-cli --version | cut -d. -f1,2)"
+          mkdir -p "$HOME/.config/kicad/$KICAD_VER"
+          cp /usr/share/kicad/template/fp-lib-table "$HOME/.config/kicad/$KICAD_VER/"
 
       - run: npm ci
       - run: npm run lint:md
