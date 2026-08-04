@@ -261,6 +261,25 @@ describe('create pipeline resilience (review F3)', () => {
       externalDir = await mkdtemp(path.join(tmpdir(), 'brief-'));
       const externalBrief = path.join(externalDir, 'outside-brief.md');
       await writeFile(externalBrief, '# external\n', 'utf8');
+      await mkdir(path.join(repo, '.copperhead'), { recursive: true });
+      mockRunAgentLoop.mockImplementation(async (opts) => {
+        await writeStageDoc(opts.repoRoot, opts.request);
+        return ok();
+      });
+      const res = await runCreate({
+        repoRoot: repo,
+        briefPath: externalBrief,
+        model: 'gpt-5',
+        log: () => {},
+      });
+      expect(res.completed).toContain('spec-seed');
+      const briefHash = await readFile(
+        path.join(repo, 'docs', 'BRIEF.sha256'),
+        'utf8',
+      );
+
+      expect(briefHash).toContain('brief: external:outside-brief.md');
+      expect(briefHash).not.toContain(externalBrief);
     } finally {
       if (externalDir) {
         await rm(externalDir, { recursive: true, force: true });
