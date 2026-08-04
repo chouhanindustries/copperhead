@@ -1,11 +1,11 @@
 ---
 title: Your first run
-description: A guided first hour with copperhead on a board you already have — including what it looks like when something goes wrong.
+description: A guided first hour with copperhead on a board you already have, including what it looks like when something goes wrong.
 sidebar:
   order: 3
 ---
 
-The [Quickstart](/getting-started/quickstart/) lists the commands. This page walks the path, in order, on a board you already own — and spends most of its length on the parts where people get stuck.
+The [Quickstart](/getting-started/quickstart/) lists the commands. This page walks the path, in order, on a board you already own, and spends most of its length on the parts where people get stuck.
 
 Budget about twenty minutes. If your baseline is clean and verification passes, you end with one small, ERC-verified, committed change. If it does not, you end with a rolled-back tree and a written reason, which is the other half of what you are here to see. Either way you will have enough of a feel for the loop to decide whether you trust it with something bigger.
 
@@ -42,16 +42,20 @@ It is roughly a 1 GB download and the installer takes a few minutes, so start it
 :::caution[KiCad does not put itself on your PATH]
 This is the single most common setup failure, and the error you get (`kicad-cli not found on PATH`) does not say that KiCad is installed fine and merely invisible. It usually is.
 
-**Windows** — the installer does not touch PATH at all. Run this once in PowerShell, adjusting `10.0` to your version:
+**Windows**: the installer does not touch PATH at all. Run this once in PowerShell, adjusting `10.0` to your version. The guard keeps a second run from appending a duplicate entry:
 
 ```powershell
-[Environment]::SetEnvironmentVariable("Path", [Environment]::GetEnvironmentVariable("Path","User") + ";C:\Program Files\KiCad\10.0\bin", "User")
+if ($env:Path -notlike "*KiCad*") {
+  [Environment]::SetEnvironmentVariable("Path", [Environment]::GetEnvironmentVariable("Path","User") + ";C:\Program Files\KiCad\10.0\bin", "User")
+}
 ```
 
-**macOS** — the binary lives inside the app bundle:
+One caveat: that call rewrites your user `Path` as a plain string, so any `%USERPROFILE%`-style entries already in it stop expanding. If yours contains those, use the GUI instead (search "Edit environment variables for your account"), which preserves them.
+
+**macOS**: the binary lives inside the app bundle. Append it to your shell profile rather than exporting it into one session, or the next step throws the fix away:
 
 ```bash
-export PATH="/Applications/KiCad/KiCad.app/Contents/MacOS:$PATH"
+echo 'export PATH="/Applications/KiCad/KiCad.app/Contents/MacOS:$PATH"' >> ~/.zshrc
 ```
 
 Then **open a new terminal.** A PATH change never reaches a window that was already open, so re-running `doctor` in the same one will fail again and send you chasing a problem you have already fixed.
@@ -84,9 +88,9 @@ Install copperhead for this repo using https://raw.githubusercontent.com/chouhan
 
 ## Before you start
 
-You need a KiCad project in a git repository. Not a copy on the desktop — an actual repo, because copperhead snapshots with git before it edits and rolls back to that snapshot when verification fails. No repo, no safety net, and the preflight will refuse to run.
+You need a KiCad project in a git repository. Not a copy on the desktop: an actual repo, because copperhead snapshots with git before it edits and rolls back to that snapshot when verification fails. No repo, no safety net, and the preflight will refuse to run.
 
-**Everything must be committed before you run.** copperhead refuses to start on a tree with uncommitted changes, because its snapshot-and-rollback contract cannot tell your unsaved work from its own. A fresh `git init` alone is not enough — the first commit has to exist too.
+**Commit everything before `do` or the interactive shell.** Those two refuse to start on a tree with uncommitted changes, because the snapshot-and-rollback contract cannot tell your unsaved work from its own. (`create` deliberately allows a dirty tree so its stages can build on each other, and `init`, `check`, `doctor`, and `sync` never inspect it.) A fresh `git init` alone is not enough either: the first commit has to exist.
 
 ```bash
 cd my-board
@@ -99,7 +103,7 @@ git commit -m "baseline before copperhead"
 
 Read that `git status` output rather than skipping past it. `git add -A` stages everything it finds, and a baseline commit is a bad place to discover you have captured a `.env`, a vendor archive, or someone's local scratch files.
 
-Working on something you cannot commit yet? Pass `--allow-dirty`, which snapshots through `git stash create` instead.
+Working on something you cannot commit yet? `do` and the interactive shell take `--allow-dirty`, which snapshots through `git stash create` instead. No other command accepts the flag.
 
 Work on a branch for the first run. Nothing here is destructive, but a branch makes "throw it all away" a one-liner:
 
@@ -109,7 +113,7 @@ git switch -c copperhead-trial
 
 ## Step 1: Ask what is missing
 
-Run this before anything else. It calls no model and touches no network — it just tells you whether the machine is ready.
+Run this before anything else. It calls no model and touches no network; it just tells you whether the machine is ready.
 
 ```bash
 copperhead doctor
@@ -129,9 +133,9 @@ On a machine that is not ready yet:
 not ready: fix the [FAIL] items above
 ```
 
-`[info]` lines are notes, not problems — the missing `config.json` on that last line is exactly what Step 3 creates. Only `[FAIL]` blocks you. Exit code is 0 when ready, 1 when not, so this is safe to put in a setup script.
+`[info]` lines are notes, not problems: the missing `config.json` on that last line is exactly what Step 3 creates. Only `[FAIL]` blocks you. Exit code is 0 when ready, 1 when not, so this is safe to put in a setup script.
 
-If `kicad-cli` fails here, go back to the PATH note in Install — and remember that the fix only takes effect in a new terminal.
+If `kicad-cli` fails here, go back to the PATH note in Install, and remember that the fix only takes effect in a new terminal.
 
 ## Step 2: Choose one model backend
 
@@ -153,7 +157,7 @@ Each of those needs its own CLI authenticated first:
 | --- | --- | --- |
 | `codex` | the Codex CLI's own ChatGPT login | `codex login status` |
 | `cursor` | `agent login` | `agent status` |
-| `claude-code` | see the token step below | `claude setup-token` |
+| `claude-code` | see the token step below | `copperhead doctor` |
 
 For Claude Code you also need its token. Generate one:
 
@@ -216,7 +220,7 @@ The quotes in `set "VAR=value"` and `export VAR="value"` keep the shell from spl
 :::
 
 :::danger[Two keys in your environment is a hard stop]
-If you have both `OPENAI_API_KEY` and `ANTHROPIC_API_KEY` exported — common on a developer machine — copperhead refuses to guess:
+If you have both `OPENAI_API_KEY` and `ANTHROPIC_API_KEY` exported: common on a developer machine: copperhead refuses to guess:
 
 ```text
   [FAIL] provider  ambiguous: multiple credentials, no model selected
@@ -252,11 +256,11 @@ Your key is read from the environment only. It is never written into `.copperhea
 copperhead init
 ```
 
-This reads your schematic and scaffolds `docs/` — `SPEC.md`, `SUBSYSTEMS.md`, `BOM.md`, `PINOUT.md`, `LAYOUT.md` — plus `.copperhead/config.json` pointing at your schematic and board. It also installs a `pre-commit` hook that runs `copperhead check`, and it will not clobber a hook you already have.
+This reads your schematic and scaffolds `docs/`: `SPEC.md`, `SUBSYSTEMS.md`, `BOM.md`, `PINOUT.md`, `LAYOUT.md`: plus `.copperhead/config.json` pointing at your schematic and board. It also installs a `pre-commit` hook that runs `copperhead check`, and it will not clobber a hook you already have.
 
 `init` is idempotent. Re-run it freely: it reports `unchanged` for files it already wrote, and it **refuses** to overwrite a generated doc you have since hand-edited, exiting non-zero and naming the files it skipped. Pass `--force` only when you genuinely want them regenerated.
 
-Read what it produced before continuing. The scaffolded docs are the agent's memory — every later run reads them first, so a wrong value here becomes a wrong assumption in every change after it. This is the highest-leverage ten minutes in the whole process.
+Read what it produced before continuing. The scaffolded docs are the agent's memory: every later run reads them first, so a wrong value here becomes a wrong assumption in every change after it. This is the highest-leverage ten minutes in the whole process.
 
 ## Step 4: Establish a baseline
 
@@ -264,7 +268,7 @@ Read what it produced before continuing. The scaffolded docs are the agent's mem
 copperhead check          # alias: copperhead verify
 ```
 
-This runs ERC, DRC, doc-drift detection, constraint checks, and spec validation. It makes no LLM calls and opens no network connections, by contract — which is why it is safe in CI and in that pre-commit hook.
+This runs ERC, DRC, doc-drift detection, constraint checks, and spec validation. It makes no LLM calls and opens no network connections, by contract: which is why it is safe in CI and in that pre-commit hook.
 
 :::caution[A green check on an un-adopted repo means nothing]
 If `init` has not run, or `config.json` does not point at your files, `check` skips everything and still exits 0:
@@ -274,10 +278,10 @@ ERC skipped (no schematic configured; run copperhead init)
 DRC skipped (no board configured)
 ```
 
-That is a pass over an empty set, not a clean board. Read the lines, not the exit code — if you see `skipped`, fix the config before you trust anything downstream.
+That is a pass over an empty set, not a clean board. Read the lines, not the exit code: if you see `skipped`, fix the config before you trust anything downstream.
 :::
 
-Expect real findings on a real board. Fix them, or note them, before the agent starts making changes — otherwise you cannot tell its mistakes from your pre-existing ones.
+Expect real findings on a real board. Fix them, or note them, before the agent starts making changes: otherwise you cannot tell its mistakes from your pre-existing ones.
 
 ## Step 5: One small change
 
@@ -297,7 +301,7 @@ copperhead do "rename net KEY_DAH to KEY_DASH" --interactive
 
 What happens, in order:
 
-1. **Propose.** The agent writes an OpenSpec change proposal — why, what changes, the task list. Until this validates, its edit tools do not exist. Not discouraged: absent from the tool list it is given.
+1. **Propose.** The agent writes an OpenSpec change proposal: why, what changes, the task list. Until this validates, its edit tools do not exist. Not discouraged: absent from the tool list it is given.
 2. **Edit.** Anchored exact-match replacements in the `.kicad_sch` and in every doc that mentions the net.
 3. **Verify.** ERC runs, and DRC too if the board changed. Failures come back to the agent as its own error report to repair.
 4. **Commit.** One commit, with the verification result in the message, plus a line in `docs/CHANGELOG.md` and any real decision appended to `docs/DECISIONS.md`.
@@ -310,11 +314,11 @@ Worth calibrating before you reach for the big commands:
 
 | Command | Typical shape |
 |---|---|
-| `check`, `doctor`, `draft`, `score`, `export bom` | Seconds. No model, no network, no cost. |
+| `check`, `doctor`, `export bom` | Seconds. No model, no network, no cost. |
 | `do "<small change>"` | A handful of turns, a few minutes. |
 | `create --brief brief.md` | Eight stages. Hours, not minutes. |
 
-`create` is a full pipeline — spec, architecture, part selection, schematic, layout, outputs, firmware, dev plan. Individual stages can legitimately run over an hour. It is not hung; it prints a heartbeat every 30 seconds while a turn is in flight. Try it first on a small brief from [examples/simple](https://github.com/chouhanindustries/copperhead/tree/main/examples/simple).
+`create` is a full pipeline: spec, architecture, part selection, schematic, layout, outputs, firmware, dev plan. Individual stages can legitimately run over an hour. It is not hung; it prints a heartbeat every 30 seconds while a turn is in flight. Try it first on a small brief from [examples/simple](https://github.com/chouhanindustries/copperhead/tree/main/examples/simple).
 
 ### Starting a new board instead
 
@@ -330,7 +334,7 @@ copperhead create --brief brief.md
 
 Only the copy differs on Windows: `copy path\to\brief.md brief.md` in `cmd`, or `Copy-Item path\to\brief.md brief.md` in PowerShell.
 
-Start from an example brief rather than your own. You are testing whether the pipeline runs on your machine, and a known-good input keeps a bad first result from being ambiguous. Each stage commits on its own, so an interrupted run resumes from the last finished one — re-running the same command picks up where it stopped.
+Start from an example brief rather than your own. You are testing whether the pipeline runs on your machine, and a known-good input keeps a bad first result from being ambiguous. Each stage commits on its own, so an interrupted run resumes from the last finished one: re-running the same command picks up where it stopped.
 
 ## When it goes wrong
 
@@ -343,7 +347,7 @@ Start from an example brief rather than your own. You are testing whether the pi
 | `no model configured`, but you set one | `set` / `export` only covered the old window | Re-set it here, or persist it with `setx` / your shell profile |
 | `401 OAuth access token is invalid` | Usually a space pasted into the token, not a revoked one | Check its length, re-set it quoted and unbroken |
 | `Connection closed mid-response` | Transient network drop | Nothing: the pipeline diagnoses and retries the stage itself |
-| Preflight refuses on a dirty tree | Uncommitted changes would be caught in the snapshot | Commit or stash first, or pass `--allow-dirty` |
+| Preflight refuses on a dirty tree | Uncommitted changes would be caught in the snapshot | Commit or stash first, or pass `--allow-dirty` (on `do` and the shell only) |
 | `ERC skipped (no schematic configured)` | `init` has not run, or config points nowhere | `copperhead init` |
 | `run failed: ... working tree restored` | Verification never passed; changes were rolled back | See the preserved-work note below |
 | `session/usage limit reached` | Saved-login quota, not a bug | Wait for the stated reset, re-run the same command |
