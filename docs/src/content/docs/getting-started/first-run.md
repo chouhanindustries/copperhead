@@ -5,17 +5,40 @@ sidebar:
   order: 3
 ---
 
-The [Quickstart](/getting-started/quickstart/) lists the commands. This page walks the path, in order, on a board you already own, and spends most of its length on the parts where people get stuck.
+The [Quickstart](/getting-started/quickstart/) lists the commands. This page walks the path, in order, and spends most of its length on the parts where people get stuck.
 
 Budget about twenty minutes. If your baseline is clean and verification passes, you end with one small, ERC-verified, committed change. If it does not, you end with a rolled-back tree and a written reason, which is the other half of what you are here to see. Either way you will have enough of a feel for the loop to decide whether you trust it with something bigger.
 
+## Which path are you on?
+
+copperhead has two, and confusing them is the fastest way to waste an hour. Everyone does the same Install below; after that the two diverge.
+
+| | **You have a KiCad board already** | **You are starting from nothing** |
+| --- | --- | --- |
+| Command | `copperhead do "<request>"` | `copperhead create --brief brief.md` |
+| Input | a change request in plain English | a product brief, in markdown |
+| Takes | minutes | hours: eight stages |
+| Follow | Steps 1 to 5 below, in order | Install, Step 1, Step 2, then [Starting from nothing](#starting-from-nothing) |
+
+The interactive shell (`copperhead` with no arguments) is the conversational form of `do`, so it belongs to the left column. Open it on a repo with no schematic and every command reports `null`, because there is no design to read yet. Build the board with `create` first, then the shell becomes useful.
+
 :::note[Shell syntax on this page]
-Commands are written for bash (macOS, Linux, Git Bash). On **Windows `cmd`**, swap `export FOO=bar` for `set "FOO=bar"`, and use `\` in paths. Both variants are given wherever it actually matters.
+Commands are written for bash (macOS, Linux, Git Bash). Windows `cmd` differs in three ways that bite: `export` is `set`, `cp` is `copy`, and `&&` skips the rest of the line when the first command fails. Every block that needs one carries its `cmd` version underneath, so you never have to translate.
 :::
 
 ## Install
 
-Four things. copperhead checks three of them for you in Step 1, so install first and let it grade your work.
+:::tip[Skip all of this if you use an AI coding assistant]
+Working inside Claude Code, Cursor, or Codex? Paste this and it does the whole install for you, then reports what it found:
+
+```text
+Install copperhead for this repo using https://raw.githubusercontent.com/chouhanindustries/copperhead/main/agent-install-prompt.md
+```
+
+Then jump to [Which path are you on?](#which-path-are-you-on) above.
+:::
+
+Doing it by hand: four things. copperhead checks three of them for you in Step 1, so install first and let it grade your work.
 
 ### 1. Node.js 20 or newer
 
@@ -86,12 +109,6 @@ npm install -g copperhead
 copperhead --version
 ```
 
-Already inside an AI coding assistant? Paste this instead and it will do the whole setup for you:
-
-```text
-Install copperhead for this repo using https://raw.githubusercontent.com/chouhanindustries/copperhead/main/agent-install-prompt.md
-```
-
 ## Before you start
 
 You need a KiCad project in a git repository. Not a copy on the desktop: an actual repo, because copperhead snapshots with git before it edits and rolls back to that snapshot when verification fails. No repo, no safety net, and the preflight will refuse to run.
@@ -104,6 +121,17 @@ git init
 printf '.env\n.copperhead/runs/\n' >> .gitignore
 git add -A
 git status                       # read this list before committing
+git commit -m "baseline before copperhead"
+```
+
+The same thing in Windows `cmd`:
+
+```text
+cd my-board
+git init
+(echo .env& echo .copperhead/runs/) >> .gitignore
+git add -A
+git status
 git commit -m "baseline before copperhead"
 ```
 
@@ -153,6 +181,8 @@ If you already use Codex CLI, Claude Code, or Cursor, reuse that login and skip 
 export COPPERHEAD_MODEL=codex          # or: claude-code, cursor
 ```
 
+Windows `cmd`:
+
 ```text
 set "COPPERHEAD_MODEL=codex"
 ```
@@ -191,6 +221,8 @@ Otherwise supply a single API key:
 export ANTHROPIC_API_KEY=...           # or OPENAI_API_KEY
 ```
 
+Windows `cmd`:
+
 ```text
 set "ANTHROPIC_API_KEY=..."
 ```
@@ -226,7 +258,7 @@ The quotes in `set "VAR=value"` and `export VAR="value"` keep the shell from spl
 :::
 
 :::danger[Two keys in your environment is a hard stop]
-If you have both `OPENAI_API_KEY` and `ANTHROPIC_API_KEY` exported: common on a developer machine: copperhead refuses to guess:
+If you have both `OPENAI_API_KEY` and `ANTHROPIC_API_KEY` exported (common on a developer machine), copperhead refuses to guess:
 
 ```text
   [FAIL] provider  ambiguous: multiple credentials, no model selected
@@ -326,21 +358,41 @@ Worth calibrating before you reach for the big commands:
 
 `create` is a full pipeline: spec, architecture, part selection, schematic, layout, outputs, firmware, dev plan. Individual stages can legitimately run over an hour. It is not hung; it prints a heartbeat every 30 seconds while a turn is in flight. Try it first on a small brief from [examples/simple](https://github.com/chouhanindustries/copperhead/tree/main/examples/simple).
 
-### Starting a new board instead
+### Starting from nothing
 
-This page assumes a board you already have. From nothing, the shape is the same but the command is `create`:
+Steps 3 to 5 above adopt a board you already have. With no board, do Install, Step 1, and Step 2, then come straight here: an empty repo, a brief, and one command.
 
 ```bash
-mkdir my-board && cd my-board
+mkdir my-board
+cd my-board
 git init
-cp path/to/examples/simple/coin-cell-led-beacon.md brief.md
-git add -A && git commit -m "brief"
+cp ../copperhead/examples/simple/coin-cell-led-beacon.md brief.md
+git add -A
+git commit -m "brief"
 copperhead create --brief brief.md
 ```
 
-Only the copy differs on Windows: `copy path\to\brief.md brief.md` in `cmd`, or `Copy-Item path\to\brief.md brief.md` in PowerShell.
+The same thing in Windows `cmd`:
+
+```text
+mkdir my-board
+cd my-board
+git init
+copy ..\copperhead\examples\simple\coin-cell-led-beacon.md brief.md
+git add -A
+git commit -m "brief"
+copperhead create --brief brief.md
+```
+
+:::caution[Run those one line at a time on `cmd`]
+Do not join them with `&&`. If `mkdir my-board` fails because the directory already exists, `&&` skips the `cd` without stopping, and everything after it runs one level up: `git init` then turns that parent directory into a repository, which is a genuinely annoying thing to undo when the parent is somewhere like `Downloads`.
+
+If it happens, nothing is lost. Delete the stray repository (`rmdir /s /q .git` in the parent, `rm -rf .git` on bash), check you are in the right directory with `cd`, and start the block again.
+:::
 
 Start from an example brief rather than your own. You are testing whether the pipeline runs on your machine, and a known-good input keeps a bad first result from being ambiguous. Each stage commits on its own, so an interrupted run resumes from the last finished one: re-running the same command picks up where it stopped.
+
+When it finishes you have a schematic, and the interactive shell becomes useful: `copperhead` on its own, then `/status`, `/parts`, or a change request in plain English.
 
 ## When it goes wrong
 
