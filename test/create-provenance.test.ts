@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import path from 'node:path';
-import { mkdir, readFile } from 'node:fs/promises';
+import { readFile } from 'node:fs/promises';
 import { tempFixtureRepo } from './helpers.js';
 import { writeBriefHash } from '../src/commands/create.js';
 
@@ -9,9 +9,7 @@ describe('writeBriefHash', () => {
     const { repo, cleanup } = await tempFixtureRepo();
 
     try {
-      await mkdir(path.join(repo, 'docs'), { recursive: true });
-
-      await writeBriefHash(repo, {
+      await writeBriefHash(repo, 'docs', {
         path: 'brief.md',
         sha256: 'abc123',
       });
@@ -32,18 +30,15 @@ describe('writeBriefHash', () => {
     const { repo, cleanup } = await tempFixtureRepo();
 
     try {
-      await mkdir(path.join(repo, 'docs'), { recursive: true });
-
-      await writeBriefHash(repo, {
+      await writeBriefHash(repo, 'docs', {
         path: 'brief.md',
         sha256: '111111',
       });
 
-      await writeBriefHash(repo, {
+      await writeBriefHash(repo, 'docs', {
         path: 'other.md',
         sha256: '222222',
       });
-
       const text = await readFile(
         path.join(repo, 'docs', 'BRIEF.sha256'),
         'utf8',
