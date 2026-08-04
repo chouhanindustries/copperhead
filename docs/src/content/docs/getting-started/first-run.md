@@ -42,13 +42,19 @@ It is roughly a 1 GB download and the installer takes a few minutes, so start it
 :::caution[KiCad does not put itself on your PATH]
 This is the single most common setup failure, and the error you get (`kicad-cli not found on PATH`) does not say that KiCad is installed fine and merely invisible. It usually is.
 
-**Windows**: the installer does not touch PATH at all. Run this once in PowerShell, adjusting `10.0` to your version. The guard keeps a second run from appending a duplicate entry:
+**Windows**: the installer does not touch PATH at all. Paste this into PowerShell. It finds the install itself, so you do not need to know your KiCad version, and the guard keeps a second run from appending a duplicate:
 
 ```powershell
-if ($env:Path -notlike "*KiCad*") {
-  [Environment]::SetEnvironmentVariable("Path", [Environment]::GetEnvironmentVariable("Path","User") + ";C:\Program Files\KiCad\10.0\bin", "User")
+$bin = (Get-ChildItem "C:\Program Files\KiCad" -Filter kicad-cli.exe -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1).Directory.FullName
+if (-not $bin) { "kicad-cli.exe not found: is KiCad installed?" }
+elseif ($env:Path -like "*KiCad*") { "already on PATH" }
+else {
+  [Environment]::SetEnvironmentVariable("Path", [Environment]::GetEnvironmentVariable("Path","User") + ";$bin", "User")
+  "added $bin"
 }
 ```
+
+It prints what it did. Setting the path by hand instead? The directory is `C:\Program Files\KiCad\<VERSION>\bin`, where `<VERSION>` is the release you installed (`8.0`, `9.0`, `10.0`, ...), not the full version number.
 
 One caveat: that call rewrites your user `Path` as a plain string, so any `%USERPROFILE%`-style entries already in it stop expanding. If yours contains those, use the GUI instead (search "Edit environment variables for your account"), which preserves them.
 
@@ -60,10 +66,10 @@ echo 'export PATH="/Applications/KiCad/KiCad.app/Contents/MacOS:$PATH"' >> ~/.zs
 
 Then **open a new terminal.** A PATH change never reaches a window that was already open, so re-running `doctor` in the same one will fail again and send you chasing a problem you have already fixed.
 
-Not sure where it landed? Find it:
+Installed somewhere other than `C:\Program Files`? Widen the search and use the directory it reports:
 
 ```powershell
-Get-ChildItem "C:\Program Files\KiCad" -Filter kicad-cli.exe -Recurse | Select FullName
+Get-ChildItem C:\ -Filter kicad-cli.exe -Recurse -ErrorAction SilentlyContinue | Select FullName
 ```
 :::
 
