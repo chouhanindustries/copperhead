@@ -19,7 +19,7 @@ KiCad stays your editor. Nothing moves into a walled garden. The files it edits 
 Two rules hold the whole thing up, and it is worth stating them before anything else, because everything below is a consequence of one of them:
 
 1. **Nothing starts without a spec.** The agent cannot touch a KiCad file until a change proposal exists and validates. Not "is told not to" — the edit tools are absent from the list of tools it is given until that proposal passes. An ungated edit is not something it attempts and fails at. It is not expressible.
-2. **Nothing is done until the tools agree.** Every file mutation is followed by ERC, and DRC if the board changed. If verification cannot be made to pass, the run rolls back to a git snapshot taken before it started.
+2. **Nothing is done until the tools agree.** Every file mutation is followed by ERC, and DRC if the board changed. If verification cannot be made to pass, the run rolls back to a git snapshot taken before it started, and reports it loudly on the rare occasion that the rollback itself cannot complete.
 
 Those are guardrails against the failure mode that actually matters. Not "the AI said something wrong" — you would catch that. The one that matters is "the AI changed a net name in the schematic but not in the pinout doc, and nobody noticed for three weeks."
 
@@ -117,7 +117,7 @@ I have worked with people who lacked that discipline.
 
 **It is not the engineer of record.** Not an autorouter, not a replacement for your judgment, and it never claims a board is fab-ready — only that ERC and DRC are clean. A human still signs off. That framing is in the docs, unhedged, which I respect more than the alternative.
 
-**Failed work is recoverable.** When a run cannot make verification pass, it rolls back — but it stashes everything it touched first, under a named git stash entry, and prints the command to get it back.
+**Failed work is normally recoverable.** When a run cannot make verification pass, it rolls back — but it tries to stash everything it touched first, under a named git stash entry, and prints the command to get it back. Both steps are best-effort rather than guaranteed: if the rollback itself fails, the run says so and warns that the tree may be partial, which is your cue to read `git status` instead of assuming a clean revert.
 
 ## The part that actually matters
 
