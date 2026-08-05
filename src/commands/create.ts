@@ -106,26 +106,31 @@ export const STAGES: Stage[] = [
     name: 'spec-seed',
     isComplete: async (root, docs) => {
       // The init scaffold writes SPEC.md with a "## Budgets" heading and an
-      // HTML comment placeholder — that alone must not count as complete.
-      // Require the heading AND at least one non-comment, non-blank line
-      // of real budget content beneath it (a filled section vs. an empty placeholder).
+      // HTML comment placeholder. Treat the stage as complete only when the
+      // ## Budgets section contains at least one "- name: value" budget entry.
       const p = path.join(root, docs, 'SPEC.md');
       if (!existsSync(p)) return false;
       const text = await readFile(p, 'utf8');
-      const budgetsMatch = /^#{1,6}\s.*\bBudgets?\b/im.test(text);
-      if (!budgetsMatch) return false;
-      // Find the Budgets section and strip HTML comments (single or multi-line)
-      const afterBudgets = text.split(/^#{1,6}\s.*\bBudgets?\b/im)[1] ?? '';
+
+      // Ignore commented-out headings.
+      const searchableText = text.replace(/<!--[\s\S]*?-->/g, '');
+
+      const budgetsHeading = /^##[ \t]+(?:\d+\.[ \t]*)?Budgets?[ \t]*$/im;
+
+      const match = budgetsHeading.exec(searchableText);
+      if (!match) return false;
+
+      const afterBudgets = searchableText.slice(match.index + match[0].length);
       const firstNewline = afterBudgets.indexOf('\n');
       const afterHeadingLine = firstNewline >= 0 ? afterBudgets.slice(firstNewline + 1) : '';
-      const nextSection = afterHeadingLine.search(/^#{1,6}\s/m);
+      const nextSection = afterHeadingLine.search(/^#{1,2}\s/m);
       const section = nextSection >= 0 ? afterHeadingLine.slice(0, nextSection) : afterHeadingLine;
-      const cleanSection = section.replace(/<!--[\s\S]*?-->/g, '');
-      const realLines = cleanSection.split('\n').filter((l) => l.trim().length > 0);
-      return realLines.length > 0;
+      const cleanSection = section;
+      const budgetLine = /^\s*(?:(?:[-*]|\d+\.)\s*)?[A-Za-z][A-Za-z0-9_-]*\s*:\s*\S+/m;
+      return budgetLine.test(cleanSection);
     },
-    prompt: (brief) =>
-      `Stage 1 of the create pipeline: seed the requirements. From the product brief below, write docs/SPEC.md (what the device is, top-level constraints and budgets). Every budget you state must also be recorded with record_constraint. Anything the brief does not state: propose a sensible default and flag it ASSUMED. If an openspec/ workspace exists, also seed openspec/specs/ with per-capability requirements using Given/When/Then scenarios.\n\nBrief:\n${brief}`,
+       prompt: (brief) =>
+        `Stage 1 of the create pipeline: seed the requirements. From the product brief below, populate docs/SPEC.md (what the device is, top-level constraints and budgets). List each budget under the ## Budgets heading as a plain "- name: value" line. If docs/SPEC.md already exists (for example after copperhead init created the scaffold), update it with edit_file instead of write_file. Use write_file only if docs/SPEC.md does not yet exist. Every budget you state must also be recorded with record_constraint. Anything the brief does not state: propose a sensible default and flag it ASSUMED. If an openspec/ workspace exists, also seed openspec/specs/ with per-capability requirements using Given/When/Then scenarios.\n\nBrief:\n${brief}`,
   },
   {
     name: 'architecture',
