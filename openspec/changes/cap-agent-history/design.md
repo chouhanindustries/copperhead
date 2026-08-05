@@ -34,6 +34,14 @@ A read is now recorded with the span it returned, an absent bound meaning "to th
 
 Containment is checked against *any* later read, not merely the most recent one, so a narrow read late in a conversation does not resurrect earlier copies that a wider intervening read had already made redundant.
 
+Two details follow from mirroring the tool rather than its schema. `toolReadFile` returns the whole file whenever `start_line` is absent, ignoring `end_line`, so such a read is recorded as whole-file rather than as `[1, end_line]`; recording the narrower span would understate what the model actually received. And `dispatchTool` turns a throwing handler into an ordinary `error: ...` result, so a read that failed is shape-identical to one that succeeded: failed results are excluded from the candidate set entirely, since replacing real content with a pointer to a read that returned nothing is strictly worse than sending the content again.
+
+## D3b. The request view is structurally independent, not merely a fresh array
+
+Returning a new array is not enough on its own: the message objects inside it would still be the run's own. A provider that mutated what it was handed would be writing directly into the history the transcript and the finish gate read from.
+
+Every message in the view is therefore a fresh object, with fresh tool-call arrays and fresh argument objects. This is cheap in the way that matters: strings are immutable in JavaScript and shared by reference, so the copy allocates object shells, not the payload bytes that make the history expensive in the first place.
+
 ## D4. Trims are announced in-band
 
 A model that cannot distinguish "this file is short" from "this file was clipped" will confidently reason about content it never saw. Every trim leaves a marker saying what happened, how much was removed, and how to get it back (`read_file` with a line range; re-run the tool). The superseded stub names the path, so the model can re-read precisely.

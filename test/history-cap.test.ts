@@ -59,6 +59,32 @@ describe('capHistory — invariants that keep it safe in front of any provider',
     expect(msgs).toEqual(before);
   });
 
+  it('hands the provider structurally independent messages', () => {
+    // A new array alone is not enough: if the message objects are shared, a
+    // provider that mutates what it is handed rewrites the run's own history.
+    const msgs: Msg[] = [
+      { role: 'user', content: 'original user text' },
+      {
+        role: 'assistant',
+        content: null,
+        toolCalls: [{ id: 'c1', name: 'edit_file', args: { path: 'a.kicad_sch', new_string: 'original payload' } }],
+      },
+      { role: 'tool', toolCallId: 'c1', content: 'ok' },
+      ...filler(2),
+    ];
+    const { messages: out } = capHistory(msgs, opts);
+
+    // Simulate a badly behaved provider mutating every level it can reach.
+    (out[0] as { content: string }).content = 'MUTATED';
+    const call = out[1].role === 'assistant' ? out[1].toolCalls![0]! : null;
+    call!.args.new_string = 'MUTATED';
+    (out[2] as { content: string }).content = 'MUTATED';
+
+    expect(msgs[0]).toEqual({ role: 'user', content: 'original user text' });
+    expect(msgs[1].role === 'assistant' && msgs[1].toolCalls![0]!.args.new_string).toBe('original payload');
+    expect(msgs[2].role === 'tool' && msgs[2].content).toBe('ok');
+  });
+
   it('returns short conversations unchanged, but never as the caller\'s own array', () => {
     const msgs: Msg[] = [{ role: 'user', content: 'hi' }, { role: 'assistant', content: 'hello' }];
     const { messages: out, stats } = capHistory(msgs, opts);
@@ -134,6 +160,37 @@ describe('capHistory — what it actually trims', () => {
     const { messages: out, stats } = capHistory(msgs, { ...opts, maxToolResultChars: 100000 });
     expect(out[1].role === 'tool' && out[1].content).toContain('superseded');
     expect(stats.superseded).toBe(1);
+  });
+
+  it('does not let a failed later read supersede a successful earlier one', () => {
+    // dispatchTool turns a throwing handler into an `error: ...` tool result, so
+    // a read that failed looks structurally identical to one that succeeded.
+    // Superseding on it would swap real content for a stub pointing at a read
+    // the model never received.
+    const good = 'GOOD'.repeat(2000);
+    const msgs: Msg[] = [
+      ...read('c1', 'a.kicad_sch', good),
+      ...read('c2', 'a.kicad_sch', 'error: ENOENT: no such file or directory'),
+      ...filler(2),
+    ];
+    const { messages: out, stats } = capHistory(msgs, { ...opts, maxToolResultChars: 100000 });
+    expect(out[1].role === 'tool' && out[1].content).toBe(good);
+    expect(stats.superseded).toBe(0);
+  });
+
+  it('treats a read with end_line but no start_line as a whole-file read', () => {
+    // toolReadFile returns the entire file whenever start_line is absent, so
+    // recording this as [1, 50] would understate it and let a later narrower
+    // read wrongly supersede it.
+    const whole = 'WHOLE'.repeat(2000);
+    const msgs: Msg[] = [
+      ...read('c1', 'a.kicad_sch', whole, { end: 50 }),
+      ...read('c2', 'a.kicad_sch', 'lines 1-40', { start: 1, end: 40 }),
+      ...filler(2),
+    ];
+    const { messages: out, stats } = capHistory(msgs, { ...opts, maxToolResultChars: 100000 });
+    expect(out[1].role === 'tool' && out[1].content).toBe(whole);
+    expect(stats.superseded).toBe(0);
   });
 
   it('does not supersede across different paths', () => {
@@ -281,12 +338,16 @@ describe('capHistory — what it actually trims', () => {
 describe('capHistory in the agent loop', () => {
   /** Reads a big file twice (so the first read is superseded), then rate-limits
    *  the third turn once before finishing. */
-  function retryingProvider(): Provider {
+  function retryingProvider(): Provider & { seen: Msg[][] } {
     let turn = 0;
     let thrown = false;
+    const seen: Msg[][] = [];
     return {
       name: 'scripted-429',
-      async chat(): Promise<Turn> {
+      seen,
+      async chat(messages: Msg[]): Promise<Turn> {
+        // Record what actually went over the wire, not just what was computed.
+        seen.push(messages.map((m) => JSON.parse(JSON.stringify(m)) as Msg));
         turn++;
         const usage = { inputTokens: 100, outputTokens: 10 };
         if (turn <= 2) {
@@ -318,12 +379,16 @@ describe('capHistory in the agent loop', () => {
       await execa('git', ['add', '-A'], { cwd: repo });
       await execa('git', ['commit', '-q', '-m', 'fixture'], { cwd: repo });
 
+      const provider = retryingProvider();
       const res = await runAgentLoop({
         repoRoot: repo,
         request: 'read it twice, then get rate limited',
         model: 'gpt-5',
-        provider: retryingProvider(),
-        maxTurns: 6,
+        provider,
+        // Comfortably above 6: at maxTurns 6 the loop injects its
+        // "only 5 turns remain" nudge, which adds a message and muddies the
+        // identity assertions below.
+        maxTurns: 20,
         log: () => {},
         meta: { command: 'do', modelSource: 'flag', version: '0.0.0-test', kicadCliVersion: '0.0.0' },
       });
@@ -331,8 +396,25 @@ describe('capHistory in the agent loop', () => {
       // Turn 3 is capped once, sent, rejected with a 429, then sent again. Both
       // requests genuinely kept those characters off the wire, so the run-level
       // total must reflect two attempts, not one.
-      const perAttempt = 'a big file\n'.repeat(2000).length;
-      expect(res.stats.capCharsSaved).toBeGreaterThan(perAttempt * 1.5);
+      const body = 'a big file\n'.repeat(2000);
+      expect(res.stats.capCharsSaved).toBeGreaterThan(body.length * 1.5);
+
+      // The counter alone could be right while the provider was still handed the
+      // uncapped history, so assert against what it actually received. The two
+      // rate-limited attempts are the last two requests.
+      const attempts = provider.seen.slice(-2);
+      expect(attempts).toHaveLength(2);
+      for (const sent of attempts) {
+        const stubs = sent.filter((m) => m.role === 'tool' && m.content.includes('superseded'));
+        expect(stubs).toHaveLength(1); // the first read was replaced
+        expect(sent.some((m) => m.role === 'tool' && m.content === body)).toBe(true); // the second survives
+        // Identity invariants must hold on the wire, not just in the unit tests.
+        expect(sent).toHaveLength(6); // system, user, a1, t1, a2, t2
+        expect(sent.map((m) => m.role)).toEqual(['system', 'user', 'assistant', 'tool', 'assistant', 'tool']);
+        expect(sent.flatMap((m) => (m.role === 'tool' ? [m.toolCallId] : []))).toEqual(['read-1', 'read-2']);
+      }
+      // Both attempts sent the same capped view.
+      expect(attempts[0]).toEqual(attempts[1]);
     } finally {
       await cleanup();
     }

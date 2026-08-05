@@ -28,6 +28,11 @@ Capping SHALL preserve the number of messages, their order, their roles, and eve
 - **WHEN** the capped view is built
 - **THEN** the original array and its messages are unchanged
 
+#### Scenario: the capped view is structurally independent
+- **GIVEN** a capped view handed to a provider
+- **WHEN** the provider mutates a message's content, or a tool call's arguments, in what it was handed
+- **THEN** the run's own history is unaffected, because the view's messages, tool-call arrays, and argument objects are all fresh
+
 ### Requirement: A superseded file read is replaced rather than re-sent
 When a `read_file` result is followed later in the same conversation by another read of the same path whose line span contains the earlier read's span, the earlier result SHALL be replaced with a short stub naming the path, since those contents are already present in the conversation. A read with no `start_line`/`end_line` SHALL be treated as covering the whole file. An earlier read SHALL NOT be superseded by a later read that covers only part of it, because `read_file` returns only the requested span and the earlier content would otherwise be lost. This replacement SHALL apply regardless of how recent the earlier read is, because it is not lossy. The most recent read of a path SHALL always be sent in full.
 
@@ -55,3 +60,8 @@ When a `read_file` result is followed later in the same conversation by another 
 - **GIVEN** a conversation that reads two different files once each
 - **WHEN** the capped view is built
 - **THEN** neither result is superseded
+
+#### Scenario: a failed read never supersedes a successful one
+- **GIVEN** a conversation that reads a file successfully, then attempts the same path again and gets a failure result
+- **WHEN** the capped view is built
+- **THEN** the successful result is sent unchanged, because a failed read returned no content to replace it with

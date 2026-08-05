@@ -22,7 +22,9 @@ import type { Msg, ToolCall } from './types.js';
  *    reordered, so capping never does either.
  * 2. **The transcript is untouched.** Capping builds a view for the request; the
  *    JSONL transcript and the obligations ledger still see full fidelity, so a
- *    postmortem loses nothing.
+ *    postmortem loses nothing. The view is structurally independent (fresh
+ *    message objects, tool-call arrays, and argument objects), so a provider
+ *    that mutates what it is handed cannot reach the run's history through it.
  *
  * Trimming is always announced in-band. A truncated result says how much was cut
  * and how to get it back (`read_file` with a line range), because a model that
@@ -111,10 +113,35 @@ function pathOf(call: ToolCall): string | null {
 function rangeOf(call: ToolCall): { start: number; end: number } {
   const s = call.args?.start_line;
   const e = call.args?.end_line;
-  return {
-    start: typeof s === 'number' && Number.isFinite(s) ? s : 1,
-    end: typeof e === 'number' && Number.isFinite(e) ? e : Infinity,
-  };
+  // Mirror `toolReadFile` exactly: it returns the whole file whenever
+  // `start_line` is absent, ignoring `end_line`. Modelling that read as
+  // `[1, end_line]` would understate what it actually returned and could let a
+  // later, genuinely narrower read supersede it.
+  if (typeof s !== 'number' || !Number.isFinite(s)) return { start: 1, end: Infinity };
+  return { start: s, end: typeof e === 'number' && Number.isFinite(e) ? e : Infinity };
+}
+
+/**
+ * A tool result that reports a failure rather than returning content.
+ *
+ * `dispatchTool` catches a throwing handler and returns `error: <message>` as an
+ * ordinary tool result, so a `read_file` that failed (missing path, outside the
+ * repo) is indistinguishable from a successful one by shape alone. Such a result
+ * carries no file content, so it must never be treated as replacing a read that
+ * did return content.
+ */
+function isFailedResult(content: string): boolean {
+  return content.startsWith('error: ') || content.startsWith('tool "');
+}
+
+/** Every message returned gets fresh objects, so a provider that mutates what it
+ *  is handed cannot reach the run's own history. Strings are immutable and
+ *  shared by reference, so this costs object shells, not payload bytes. */
+function copyMsg(m: Msg): Msg {
+  if (m.role === 'assistant' && m.toolCalls) {
+    return { ...m, toolCalls: m.toolCalls.map((c) => ({ ...c, args: { ...c.args } })) };
+  }
+  return { ...m };
 }
 
 /**
@@ -134,7 +161,7 @@ export function capHistory(
   const truncateBefore = messages.length - opts.keepRecent;
   // Still a fresh array: the contract is that callers may hand the result to a
   // provider without it becoming an alias for the run's own history.
-  if (messages.length <= 2) return { messages: [...messages], stats };
+  if (messages.length <= 2) return { messages: messages.map(copyMsg), stats };
 
   // Pair each tool result back to the call that produced it. Providers key this
   // by id, and only the assistant message carries the tool name and arguments.
@@ -162,6 +189,10 @@ export function capHistory(
     if (m.role !== 'tool') return;
     const call = callById.get(m.toolCallId);
     if (!call || call.name !== 'read_file') return;
+    // A read that failed returned no content, so it cannot stand in for one
+    // that succeeded; letting it supersede would swap real file content for a
+    // stub pointing at a read the model never actually received.
+    if (isFailedResult(m.content)) return;
     const p = pathOf(call);
     if (!p) return;
     const { start, end } = rangeOf(call);
@@ -234,5 +265,8 @@ export function capHistory(
     return m;
   });
 
-  return { messages: out, stats };
+  // Copy last, uniformly: the branches above hand back the input object for any
+  // message they chose not to trim, and those are exactly the ones a provider
+  // could otherwise mutate straight into the run's history.
+  return { messages: out.map(copyMsg), stats };
 }
