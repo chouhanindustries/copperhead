@@ -2,6 +2,7 @@ import { existsSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import type { Msg, Provider } from './types.js';
+import type { ExitPath } from './transcript.js';
 
 /** Thrown when a single provider turn blows past its watchdog deadline. */
 export class TurnTimeoutError extends Error {
@@ -132,6 +133,13 @@ export async function diagnoseStageFailure(
     excerpt: string;
     attempt: number;
     maxAttempts: number;
+    /** Machine-readable cause of the failed attempt, so "ran out of turns" is
+     *  distinguishable from "bad edit" without parsing the prose (issue #135). */
+    exitPath?: ExitPath;
+    /** Set when the pipeline has already scheduled a larger budget for the next
+     *  attempt. The supervisor is told so it does not abort over a constraint
+     *  that has just been lifted. */
+    nextAttemptMaxTurns?: number;
   },
 ): Promise<StageDiagnosis> {
   const system =
@@ -143,6 +151,11 @@ export async function diagnoseStageFailure(
     `Stage: ${input.stageName}\n` +
     `Stage goal: ${input.stageGoal}\n` +
     `Failure: ${input.failure}\n` +
+    (input.exitPath ? `exitPath: ${input.exitPath}\n` : '') +
+    (input.nextAttemptMaxTurns !== undefined
+      ? `The next attempt has already been granted a larger turn budget of ${input.nextAttemptMaxTurns} turns, ` +
+        'so the budget alone is not a reason to abort.\n'
+      : '') +
     `This was attempt ${input.attempt} of ${input.maxAttempts}.\n\n` +
     `Recent transcript (most recent last):\n${input.excerpt}\n\n` +
     'Reply with ONLY a JSON object, no prose:\n' +

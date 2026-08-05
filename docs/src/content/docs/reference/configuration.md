@@ -30,6 +30,7 @@ Written by `copperhead init`. Every key is optional; the defaults below apply wh
 | `docs` | `"docs/"` | The design docs directory: [docs-as-memory](/concepts/docs-as-memory/). |
 | `model` | `null` | Default model. Overridden by `--model` and `COPPERHEAD_MODEL`. |
 | `maxTurns` | `40` | Turn budget per run. |
+| `stageMaxTurns` | unset | Per-stage turn budgets for `create`, keyed by stage name. Highest precedence of all: it beats `create --max-turns` for the stage it names. |
 | `maxRepairCycles` | `5` | ERC/DRC repair attempts before the run rolls back to the git snapshot. |
 | `budgets` | `{}` | Free-form hard constraints, surfaced verbatim into every run's system prompt. |
 | `baseURL` | unset | Base URL of an OpenAI-compatible endpoint. Read **only** by the `compat` model route. |

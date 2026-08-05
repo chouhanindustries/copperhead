@@ -1,12 +1,15 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import path from 'node:path';
+import { PassThrough } from 'node:stream';
 import { fileURLToPath } from 'node:url';
 import { execa } from 'execa';
 import {
+  budgetContinuePrompt,
   budgetExtraTurns,
   budgetPromptText,
   parseMaxTurns,
   repoOf,
+  type PromptIo,
 } from '../src/util/cli-args.js';
 import { setColorEnabled, styleOutcome, styleHeaderLines } from '../src/agent/theme.js';
 
@@ -67,6 +70,49 @@ describe('budget-exhausted prompt (design D1)', () => {
     expect(q).toContain('2 file(s) touched');
     expect(q).toContain('1 open obligation(s)');
     expect(q).toContain('Continue with 20 more turns?');
+  });
+
+  // Issue #135: gating on stdout as well as stdin removed the escape hatch from
+  // every `| tee run.log` run, which is how a long create pipeline is watched.
+  describe('is offered whenever stdin is a terminal', () => {
+    function io(stdinTty: boolean, stdoutTty: boolean): PromptIo & { asked: string[] } {
+      const stdin = Object.assign(new PassThrough(), { isTTY: stdinTty });
+      const stdout = Object.assign(new PassThrough(), { isTTY: stdoutTty });
+      const stderr = new PassThrough();
+      const asked: string[] = [];
+      stdout.on('data', (c: Buffer) => asked.push(`stdout:${c.toString()}`));
+      stderr.on('data', (c: Buffer) => asked.push(`stderr:${c.toString()}`));
+      return { stdin, stdout, stderr, asked };
+    }
+
+    it('is returned when stdin is a TTY and stdout is not, and asks on stderr', async () => {
+      const { stdin, stdout, stderr, asked } = io(true, false);
+      const prompt = budgetContinuePrompt({ stdin, stdout, stderr });
+      expect(prompt).toBeTypeOf('function');
+
+      const answered = prompt!(stats);
+      stdin.write('y\n');
+      expect(await answered).toBe(20); // budgetExtraTurns(40)
+
+      const text = asked.join('');
+      expect(text).toContain('stderr:');
+      expect(text).toContain('Turn budget exhausted');
+      expect(text).not.toContain('stdout:');
+    });
+
+    it('asks on stdout when stdout is a TTY too', async () => {
+      const { stdin, stdout, stderr, asked } = io(true, true);
+      const answered = budgetContinuePrompt({ stdin, stdout, stderr })!(stats);
+      stdin.write('n\n');
+      expect(await answered).toBe(0); // declined: fail and restore
+
+      expect(asked.join('')).toContain('stdout:');
+    });
+
+    it('is absent when stdin is not a TTY, so CI keeps fail-and-restore', () => {
+      const { stdin, stdout, stderr } = io(false, true);
+      expect(budgetContinuePrompt({ stdin, stdout, stderr })).toBeUndefined();
+    });
   });
 });
 
@@ -139,5 +185,25 @@ describe('demo --tour honours --json', () => {
     expect(res.exitCode).toBe(0);
     expect(() => JSON.parse(res.stdout)).toThrow();
     expect(res.stdout).toContain('copperhead');
+  }, 60_000);
+});
+
+describe('create --max-turns (issue #135)', () => {
+  it('is advertised in the help and refuses a bad value before doing any work', async () => {
+    const help = await execa('npx', ['tsx', 'src/cli.ts', 'create', '--help'], {
+      cwd: ROOT,
+      reject: false,
+      env: { NO_COLOR: '1' },
+    });
+    expect(help.exitCode).toBe(0);
+    expect(help.stdout).toContain('--max-turns');
+
+    const bad = await execa(
+      'npx',
+      ['tsx', 'src/cli.ts', 'create', '--brief', 'nope.md', '--max-turns', '5oops'],
+      { cwd: ROOT, reject: false, env: { NO_COLOR: '1' } },
+    );
+    expect(bad.exitCode).not.toBe(0);
+    expect(`${bad.stdout}${bad.stderr}`).toContain('--max-turns must be a positive integer');
   }, 60_000);
 });

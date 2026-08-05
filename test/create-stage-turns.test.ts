@@ -90,7 +90,11 @@ describe('create pipeline per-stage turn budgets (AC-15.18, AC-15.19)', () => {
       const specSeed = calls.find((o) => o.request.includes('spec-seed'));
       const architecture = calls.find((o) => o.request.includes('architecture'));
       expect(specSeed?.maxTurns).toBe(60);
-      expect(architecture?.maxTurns).toBeUndefined();
+      // No stageMaxTurns entry, no --max-turns, no built-in default for this
+      // stage: the global config default is now resolved explicitly rather than
+      // left for the loop to fill in, because escalation needs a base to
+      // measure from (issue #135).
+      expect(architecture?.maxTurns).toBe(40);
     } finally {
       await cleanup();
     }

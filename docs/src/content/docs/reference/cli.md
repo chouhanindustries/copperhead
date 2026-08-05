@@ -176,16 +176,23 @@ Exit code 2 is the important one. A requirement violation means the as-built des
 The full pipeline from a product brief to the output package.
 
 ```bash
-copperhead create --brief brief.md [--model <model>] [--interactive]
+copperhead create --brief brief.md [--model <model>] [--max-turns <n>] [--interactive]
 ```
 
 | Option | Description |
 | --- | --- |
 | `--brief <file>` | **Required.** The product brief, in markdown. |
 | `--model <model>` | `codex`, `cursor`, `gpt-5`, `claude`, or `claude-code` (saved-login; no model API key for those three). |
+| `--max-turns <n>` | Turn budget per stage. A `stageMaxTurns` entry in [config](/reference/configuration/) still wins for the stage it names. |
 | `--interactive` | Re-enable the human gates: spec approval, and a pause before export. |
 
 Exits 1 if any stage fails to complete, 0 when the pipeline finishes.
+
+### Turn budgets
+
+Each stage resolves its budget in this order: `stageMaxTurns[stage]` from config, then `--max-turns`, then the built-in per-stage defaults (`schematic` 100, `layout` 80), then the global `maxTurns`.
+
+A stage attempt that runs out of turns is not retried at the budget that just proved too small: the next attempt gets half again as many turns (40, then 60, then 90 on the default budget), and the raise is printed as its own line. Any other kind of failure retries unchanged. When every attempt ran out of turns, the pipeline says so and names the two settings that fix it, instead of leaving you to infer it from three identical failures.
 
 ### Pipeline stages
 
