@@ -12,12 +12,32 @@ const mockRunAgentLoop = vi.hoisted(() =>
     const { default: pathMod } = await import('node:path');
     const docs = pathMod.join(opts.repoRoot, 'docs');
     await mkdirFs(docs, { recursive: true });
-    if (opts.request.includes('spec-seed'))
+    if (opts.request.includes('spec-seed')) {
       await writeFileFs(
         pathMod.join(docs, 'SPEC.md'),
         '# spec\n\n## Budgets\n\n- sleep_current_uA: 25\n',
         'utf8',
       );
+
+      const copperhead = pathMod.join(opts.repoRoot, '.copperhead');
+      await mkdirFs(copperhead, { recursive: true });
+
+      await writeFileFs(
+        pathMod.join(copperhead, 'constraints.json'),
+        JSON.stringify(
+          {
+            sleep_current_uA: {
+              max: 25,
+              source: 'docs/SPEC.md',
+              affects: [],
+            },
+          },
+          null,
+          2,
+        ) + '\n',
+        'utf8',
+      );
+    }
     if (opts.request.includes('architecture'))
       await writeFileFs(
         pathMod.join(docs, 'SUBSYSTEMS.md'),

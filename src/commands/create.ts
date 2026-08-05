@@ -1,4 +1,5 @@
 import path from 'node:path';
+import { loadConstraints } from '../memory/constraints.js';
 import { existsSync } from 'node:fs';
 import { readFile, mkdir, writeFile, readdir } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
@@ -122,6 +123,16 @@ export const STAGES: Stage[] = [
       const section = nextSection >= 0 ? afterHeadingLine.slice(0, nextSection) : afterHeadingLine;
       const cleanSection = section.replace(/<!--[\s\S]*?-->/g, '');
       const realLines = cleanSection.split('\n').filter((l) => l.trim().length > 0);
+      const registry = await loadConstraints(root);
+      if (Object.keys(registry).length === 0) return false;
+      const budgetKeys = new Set(
+        [...cleanSection.matchAll(/^\s*(?:[-*]\s*)?([A-Za-z][A-Za-z0-9_-]*)\s*:/gm)]
+          .map((m) => m[1]),
+      );
+      for (const key of Object.keys(registry)) {
+        const shortKey = key.split('.').pop()!;
+        if (!budgetKeys.has(shortKey)) return false;
+      }
       return realLines.length > 0;
     },
     prompt: (brief) =>
