@@ -29,12 +29,27 @@ Capping SHALL preserve the number of messages, their order, their roles, and eve
 - **THEN** the original array and its messages are unchanged
 
 ### Requirement: A superseded file read is replaced rather than re-sent
-When a `read_file` result is followed later in the same conversation by another read of the same path, the earlier result SHALL be replaced with a short stub naming the path, since the current contents are already present in the conversation. This replacement SHALL apply regardless of how recent the earlier read is, because it is not lossy. The most recent read of a path SHALL always be sent in full.
+When a `read_file` result is followed later in the same conversation by another read of the same path whose line span contains the earlier read's span, the earlier result SHALL be replaced with a short stub naming the path, since those contents are already present in the conversation. A read with no `start_line`/`end_line` SHALL be treated as covering the whole file. An earlier read SHALL NOT be superseded by a later read that covers only part of it, because `read_file` returns only the requested span and the earlier content would otherwise be lost. This replacement SHALL apply regardless of how recent the earlier read is, because it is not lossy. The most recent read of a path SHALL always be sent in full.
 
 #### Scenario: an earlier read of a re-read path is replaced
-- **GIVEN** a conversation that reads the same schematic twice
+- **GIVEN** a conversation that reads the same schematic in full twice
 - **WHEN** the capped view is built
 - **THEN** the earlier result is replaced by a stub naming the path and directing the model to the newer read, and the later result is sent in full
+
+#### Scenario: a partial later read does not supersede a whole-file read
+- **GIVEN** a conversation that reads a file in full, then reads only lines 100 to 120 of it
+- **WHEN** the capped view is built
+- **THEN** the whole-file result is sent unchanged, because the later read does not contain it
+
+#### Scenario: disjoint ranged reads do not supersede each other
+- **GIVEN** a conversation that reads lines 1 to 50 of a file, then lines 100 to 120 of the same file
+- **WHEN** the capped view is built
+- **THEN** neither result is superseded
+
+#### Scenario: a wider later read supersedes a narrower earlier one
+- **GIVEN** a conversation that reads lines 10 to 20 of a file, then lines 1 to 100 of the same file
+- **WHEN** the capped view is built
+- **THEN** the earlier narrower result is replaced by a stub, because the later read contains its span
 
 #### Scenario: reads of different paths are independent
 - **GIVEN** a conversation that reads two different files once each

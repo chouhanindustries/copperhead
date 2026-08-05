@@ -4,7 +4,7 @@
 
 - [x] 1.1 New `src/agent/history.ts` with `capHistory(messages, opts)` returning `{ messages, stats }`, plus `HISTORY_CAP_DEFAULTS`. Builds a new array; the caller's is never mutated (D1). Verified: `test/history-cap.test.ts` ("never mutates the caller's array").
 - [x] 1.2 Preserve length, order, roles, and `toolCallId` exactly; shrink only content and oversized argument strings (D2). Verified: `test/history-cap.test.ts` ("preserves length, order, roles, and tool-call ids exactly"), which also renders through `renderDelta` at the resume index to prove the session-resume slice still lands.
-- [x] 1.3 Supersede a `read_file` result when a later read of the same path exists, at any distance; never supersede the newest read of a path (D3). Verified: three tests — supersession fires, the newest read survives in full, different paths stay independent.
+- [x] 1.3 Supersede a `read_file` result when a later read of the same path *covering its line span* exists, at any distance; never supersede the newest read of a path (D3, D3a). Verified: six tests — supersession fires, the newest read survives in full, different paths stay independent, a partial later read does not supersede a whole-file read, disjoint ranges do not supersede, and a wider later read does supersede a narrower earlier one.
 - [x] 1.4 Head-and-tail clip oversized tool results and tool-call argument strings, outside the recent window only, each with an in-band marker (D4). Verified: two tests asserting head/tail retention, the marker text, and that short arguments (`path`) pass through untouched.
 
 ## 2. Wiring
@@ -24,11 +24,20 @@
 
 ## 5. Spec coherence
 
-- [x] 5.1 New `cap-agent-history` change with proposal, design (D1–D6), and an `agent-core` delta spec carrying three requirements and six scenarios. `openspec validate cap-agent-history` passes.
+- [x] 5.1 New `cap-agent-history` change with proposal, design (D1–D6, plus D3a from the review round), and an `agent-core` delta spec carrying three requirements and nine scenarios. `openspec validate cap-agent-history` passes.
 - [ ] 5.2 Add an AC to `SPEC.md`'s AC-3 block once the change is accepted, mapping 1:1 onto the delta spec's requirements, and fold the delta into `openspec/specs/` at archive time.
 
-## 6. Follow-ups (not in this change)
+## 6. Review round on PR #175
 
-- [ ] 6.1 Session resume for `claude-code` is implemented but opt-in behind `COPPERHEAD_CC_SESSION_RESUME=1` *and* mutually exclusive with `llmCache`, which defaults on — so the second-largest token saving is off by default. Worth revisiting whether the two can coexist.
-- [ ] 6.2 The OpenAI/compat provider sends no prompt-cache breakpoints, unlike the Anthropic provider's three. Relevant to the compat route's TPM-limited endpoints.
-- [ ] 6.3 Measure capping against a live run and record real per-stage token deltas next to the `pipeline-run-logs/` baselines; the 72.7% figure is a synthetic fixture, not a live run.
+- [x] 6.1 **Supersession ignored line ranges (real bug).** `read_file` honours `start_line`/`end_line`, so a later twenty-line read does not reproduce an earlier whole-file read, yet supersession matched on path alone and dropped the earlier result. Found in review. Fixed by recording each read's span (absent bound meaning end-of-file, so a whole-file read is `[1, Infinity]`) and superseding only when some later read of the same path contains that span (D3a). Verified: three new tests for partial, disjoint, and covering reads. Proposal, design, and the delta spec updated alongside.
+- [x] 6.2 **`clip` could grow a barely-oversized value.** The elision marker was appended *after* filling the cap, so a value one character over the limit came back longer than it went in and `charsSaved` went negative, making capping increase the request. Found in review. Fixed by reserving the marker's length inside `max` (using the largest count it could print, so the reservation is never short) and leaving the value whole when the cap cannot hold a marker plus content. Verified: two new tests (never grows, never reports a negative saving; tiny cap leaves the value intact).
+- [x] 6.3 **Unsettled tool-call arguments could be clipped.** Argument truncation is justified by the call having already run, but nothing checked for a matching result. Found in review. Fixed by collecting settled `toolCallId`s from `tool` messages and clipping only those calls' arguments. Verified: new test that a call with no result keeps its payload intact even well outside the recent window.
+- [x] 6.4 **The short-history path returned the caller's own array.** That broke the documented request-view contract: a provider mutating what it was handed would have reached the run's history. Found in review. Fixed by returning a shallow copy. The existing identity assertion was inverted to match the contract rather than the old behavior.
+- [x] 6.5 **`capCharsSaved` under-reported retried requests.** The capped view is built once but `withRetry` can put it on the wire several times, while the saving was counted once. Found in review. Fixed by counting inside the retry callback, so the figure measures characters actually kept off the wire, and emitting one `history-capped` event per attempt carrying its attempt number. Verified: new loop-level test that rate-limits a turn once and asserts the run total reflects both attempts.
+- [x] 6.6 **`capCharsSaved` was recorded but never rendered.** `renderRunStats` omitted it, so `summary.md` hid the saving. Found in review. Fixed by adding a line to the run-stats block, omitted when the value is absent.
+
+## 7. Follow-ups (not in this change)
+
+- [ ] 7.1 Session resume for `claude-code` is implemented but opt-in behind `COPPERHEAD_CC_SESSION_RESUME=1` *and* mutually exclusive with `llmCache`, which defaults on — so the second-largest token saving is off by default. Worth revisiting whether the two can coexist.
+- [ ] 7.2 The OpenAI/compat provider sends no prompt-cache breakpoints, unlike the Anthropic provider's three. Relevant to the compat route's TPM-limited endpoints.
+- [ ] 7.3 Measure capping against a live run and record real per-stage token deltas next to the `pipeline-run-logs/` baselines; the 72.7% figure is a synthetic fixture, not a live run.

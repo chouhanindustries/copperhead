@@ -21,10 +21,18 @@ The first implementation protected the last `keepRecent` messages from *all* tri
 
 The fix separates the two trims by how lossy they are:
 
-- **Supersession is not lossy.** A read is superseded only when a *later* read of the same path exists in the same conversation, so the current contents are still in front of the model. Distance is irrelevant to that argument, so no recency protection is warranted.
+- **Supersession is not lossy.** A read is superseded only when a *later* read of the same path covering the same lines exists in the same conversation, so the current contents are still in front of the model. Distance is irrelevant to that argument, so no recency protection is warranted.
 - **Truncation is lossy.** A clipped result cannot be recovered from the conversation, only by re-running the tool. So it applies only outside the recent window, where the model has already acted on the content.
 
 The newest read of a path is never superseded by construction, nothing is later than it.
+
+## D3a. Supersession compares line coverage, not just path
+
+The first implementation treated any later read of the same path as a replacement. That is wrong: `read_file` takes optional `start_line`/`end_line` and returns only that span, so a later twenty-line read does not reproduce an earlier whole-file read. Superseding on path alone silently deleted content the model could still be relying on, which is the one thing supersession was supposed to never do.
+
+A read is now recorded with the span it returned, an absent bound meaning "to the end of the file", so a whole-file read is `[1, Infinity]`. An earlier read is superseded only when some later read of the same path *contains* its span. Ordinary interval containment then covers every case without special-casing: two whole-file reads supersede (identical spans contain each other), a whole-file read supersedes any earlier ranged read, a ranged read never supersedes a whole-file read, and disjoint or partially overlapping ranges never supersede.
+
+Containment is checked against *any* later read, not merely the most recent one, so a narrow read late in a conversation does not resurrect earlier copies that a wider intervening read had already made redundant.
 
 ## D4. Trims are announced in-band
 

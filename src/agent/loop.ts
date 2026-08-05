@@ -524,18 +524,29 @@ async function runWithMemory(
     // keeps the claude-code session-resume index (`sentCount`) and every
     // provider's toolCallId pairing valid.
     const sent = config.historyCap ? capHistory(messages) : { messages, stats: null };
-    if (sent.stats?.charsSaved) {
-      capCharsSaved += sent.stats.charsSaved;
-      await transcript.event('history-capped', { turn: turn + 1, ...sent.stats });
-    }
+    // The capped view is built once but `withRetry` may put it on the wire more
+    // than once, so the saving is counted per attempt: `capCharsSaved` measures
+    // characters actually kept off the wire, not characters trimmed. The
+    // transcript event stays one per attempt too, carrying its attempt number,
+    // so a retried turn is legible rather than looking like double-counting.
+    let capAttempt = 0;
     try {
       res = await withRetry(
-        () =>
-          withTimeout(
+        async () => {
+          if (sent.stats?.charsSaved) {
+            capCharsSaved += sent.stats.charsSaved;
+            await transcript.event('history-capped', {
+              turn: turn + 1,
+              attempt: ++capAttempt,
+              ...sent.stats,
+            });
+          }
+          return withTimeout(
             () => provider.chat(sent.messages, tools, { onStream: (chars) => (streamedChars = chars) }),
             config.turnTimeoutMs,
             () => provider.close?.(),
-          ),
+          );
+        },
         { onRetry: (attempt) => log(`rate limited; retry ${attempt}`) },
       );
     } catch (err) {

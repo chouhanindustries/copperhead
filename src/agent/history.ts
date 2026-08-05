@@ -71,19 +71,50 @@ export interface HistoryCapStats {
   truncated: number;
 }
 
-/** Head/tail-preserving clip: the shape of a file matters as much as its start. */
+/**
+ * Head/tail-preserving clip: the shape of a file matters as much as its start.
+ *
+ * The marker counts against `max`, so the result is never longer than the cap
+ * and therefore never longer than the input (this only runs when the input
+ * already exceeds the cap). Without that reservation a barely-oversized value
+ * would come back *larger* than it went in, and `charsSaved` would go negative.
+ */
 function clip(text: string, max: number, note: string): string {
   if (text.length <= max) return text;
-  const head = Math.floor(max * 0.6);
-  const tail = max - head;
-  const cut = text.length - max;
-  return `${text.slice(0, head)}\n\n… [${cut} characters elided — ${note}] …\n\n${text.slice(text.length - tail)}`;
+  const marker = (cut: number): string => `\n\n... [${cut} characters elided: ${note}] ...\n\n`;
+  // Reserve using the largest count the marker could ever print, so the
+  // reservation can never come up short once the real count is known.
+  const reserve = marker(text.length).length;
+  const keep = max - reserve;
+  // A cap too small to hold the marker plus any content cannot be clipped
+  // usefully; sending the value whole beats sending a marker and nothing else.
+  if (keep <= 0) return text;
+  const head = Math.floor(keep * 0.6);
+  const tail = keep - head;
+  return `${text.slice(0, head)}${marker(text.length - keep)}${text.slice(text.length - tail)}`;
 }
 
 /** The path a tool call operated on, when it names one. */
 function pathOf(call: ToolCall): string | null {
   const p = call.args?.path;
   return typeof p === 'string' && p ? p : null;
+}
+
+/**
+ * The line span a `read_file` call actually returned.
+ *
+ * `read_file` takes optional `start_line`/`end_line` and returns only that
+ * range, so a read is not identified by its path alone. Treating an absent
+ * bound as the end of the file makes a whole-file read `[1, Infinity]`, which
+ * then compares against ranged reads with ordinary interval containment.
+ */
+function rangeOf(call: ToolCall): { start: number; end: number } {
+  const s = call.args?.start_line;
+  const e = call.args?.end_line;
+  return {
+    start: typeof s === 'number' && Number.isFinite(s) ? s : 1,
+    end: typeof e === 'number' && Number.isFinite(e) ? e : Infinity,
+  };
 }
 
 /**
@@ -101,7 +132,9 @@ export function capHistory(
   // fire, but it needs at least two reads of one path to have anything to do, so
   // a short conversation is returned untouched either way.
   const truncateBefore = messages.length - opts.keepRecent;
-  if (messages.length <= 2) return { messages, stats };
+  // Still a fresh array: the contract is that callers may hand the result to a
+  // provider without it becoming an alias for the run's own history.
+  if (messages.length <= 2) return { messages: [...messages], stats };
 
   // Pair each tool result back to the call that produced it. Providers key this
   // by id, and only the assistant message carries the tool name and arguments.
@@ -110,27 +143,45 @@ export function capHistory(
     if (m.role === 'assistant') for (const c of m.toolCalls ?? []) callById.set(c.id, c);
   }
 
-  // A read is superseded once the same path is read again later: the newer copy
-  // is strictly more current, so the older one is pure re-billed weight. Reads
-  // are matched by path only — `read_file` of the same path always returns the
-  // file as of that moment, so the last one wins regardless of line range.
-  const lastReadOfPath = new Map<string, number>();
+  // A call is settled once its result is in the conversation. Only a settled
+  // call's arguments may be clipped: the justification for clipping them is
+  // that the call already ran and its effect is on disk, which is exactly what
+  // an unsettled call has not done yet.
+  const settled = new Set<string>();
+  for (const m of messages) if (m.role === 'tool') settled.add(m.toolCallId);
+
+  // Every `read_file` result, with the span it actually returned. A read is
+  // superseded only by a LATER read of the same path whose span CONTAINS it:
+  // `read_file` honours start_line/end_line, so a later 20-line read does not
+  // reproduce an earlier whole-file read, and dropping the earlier one would
+  // delete content the model can still legitimately be relying on. Whole-file
+  // reads are `[1, Infinity]`, so "both are whole-file reads" falls out of the
+  // same containment test rather than needing a case of its own.
+  const readsByPath = new Map<string, { at: number; start: number; end: number }[]>();
   messages.forEach((m, i) => {
     if (m.role !== 'tool') return;
     const call = callById.get(m.toolCallId);
-    if (call?.name !== 'read_file') return;
-    const p = call ? pathOf(call) : null;
-    if (p) lastReadOfPath.set(p, i);
+    if (!call || call.name !== 'read_file') return;
+    const p = pathOf(call);
+    if (!p) return;
+    const { start, end } = rangeOf(call);
+    const list = readsByPath.get(p);
+    if (list) list.push({ at: i, start, end });
+    else readsByPath.set(p, [{ at: i, start, end }]);
   });
+
+  /** True when some later read of `path` fully contains the span read at `at`. */
+  const isSuperseded = (path: string, at: number, start: number, end: number): boolean =>
+    (readsByPath.get(path) ?? []).some((r) => r.at > at && r.start <= start && r.end >= end);
 
   const out = messages.map((m, i) => {
     if (m.role === 'tool') {
       const call = callById.get(m.toolCallId);
       const p = call ? pathOf(call) : null;
-      // Supersession runs at any distance: a newer read of the same path is
+      // Supersession runs at any distance: a later read that covers this span is
       // already in this conversation, so the older copy is redundant, not lost.
-      if (call?.name === 'read_file' && p && (lastReadOfPath.get(p) ?? -1) > i) {
-        const stub = `[superseded: this earlier read of ${p} was replaced by a later read in this conversation. Use the newer one, or call read_file again for the current contents.]`;
+      if (call?.name === 'read_file' && p && isSuperseded(p, i, rangeOf(call).start, rangeOf(call).end)) {
+        const stub = `[superseded: this earlier read of ${p} was replaced by a later read covering the same lines. Use the newer one, or call read_file again for the current contents.]`;
         if (stub.length < m.content.length) {
           stats.charsSaved += m.content.length - stub.length;
           stats.superseded++;
@@ -155,6 +206,9 @@ export function capHistory(
     if (m.role === 'assistant' && m.toolCalls?.length && i < truncateBefore) {
       let changed = false;
       const toolCalls = m.toolCalls.map((c) => {
+        // An unsettled call's arguments are still the instruction the provider
+        // is acting on, so they go over the wire intact.
+        if (!settled.has(c.id)) return c;
         const args: Record<string, unknown> = {};
         let touched = false;
         for (const [k, v] of Object.entries(c.args ?? {})) {

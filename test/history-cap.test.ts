@@ -1,14 +1,27 @@
 import { describe, it, expect } from 'vitest';
+import { writeFile } from 'node:fs/promises';
+import path from 'node:path';
+import { execa } from 'execa';
 import { capHistory, HISTORY_CAP_DEFAULTS, type HistoryCapOptions } from '../src/agent/history.js';
 import { renderConversation, renderDelta } from '../src/agent/providers/tool-protocol.js';
-import type { Msg } from '../src/agent/types.js';
+import { runAgentLoop } from '../src/agent/loop.js';
+import { runInit } from '../src/memory/scaffold.js';
+import { tempFixtureRepo } from './helpers.js';
+import type { Msg, Provider, Turn } from '../src/agent/types.js';
 
-/** Tight options so fixtures stay readable; the defaults are exercised separately. */
-const opts: HistoryCapOptions = { maxToolResultChars: 100, maxToolArgChars: 80, keepRecent: 2 };
+/**
+ * Tight options so fixtures stay readable; the defaults are exercised
+ * separately. Small, but still large enough to hold an elision marker: below
+ * that, `clip` correctly declines to clip at all (covered by its own test).
+ */
+const opts: HistoryCapOptions = { maxToolResultChars: 400, maxToolArgChars: 300, keepRecent: 2 };
 
-function read(id: string, path: string, body: string): Msg[] {
+function read(id: string, path: string, body: string, range?: { start?: number; end?: number }): Msg[] {
+  const args: Record<string, unknown> = { path };
+  if (range?.start !== undefined) args.start_line = range.start;
+  if (range?.end !== undefined) args.end_line = range.end;
   return [
-    { role: 'assistant', content: null, toolCalls: [{ id, name: 'read_file', args: { path } }] },
+    { role: 'assistant', content: null, toolCalls: [{ id, name: 'read_file', args }] },
     { role: 'tool', toolCallId: id, content: body },
   ];
 }
@@ -46,10 +59,13 @@ describe('capHistory — invariants that keep it safe in front of any provider',
     expect(msgs).toEqual(before);
   });
 
-  it('returns short conversations untouched, by identity', () => {
+  it('returns short conversations unchanged, but never as the caller\'s own array', () => {
     const msgs: Msg[] = [{ role: 'user', content: 'hi' }, { role: 'assistant', content: 'hello' }];
     const { messages: out, stats } = capHistory(msgs, opts);
-    expect(out).toBe(msgs); // same reference: nothing was eligible
+    expect(out).toEqual(msgs); // nothing was eligible to trim
+    // A provider that mutates what it is handed must not be able to reach the
+    // run's own history through it, even on the early-return path.
+    expect(out).not.toBe(msgs);
     expect(stats).toEqual({ charsSaved: 0, superseded: 0, truncated: 0 });
   });
 });
@@ -79,6 +95,45 @@ describe('capHistory — what it actually trims', () => {
     const { messages: out } = capHistory(msgs, { ...opts, maxToolResultChars: 100000 });
     const newest = out[3];
     expect(newest.role === 'tool' && newest.content).toBe('NEWEST'.repeat(2000));
+  });
+
+  it('does not supersede a whole-file read with a later partial read', () => {
+    // `read_file` honours start_line/end_line, so a later 20-line read does not
+    // reproduce the whole file. Dropping the earlier read here would delete
+    // content the model can still legitimately be relying on.
+    const whole = 'WHOLE'.repeat(2000);
+    const msgs: Msg[] = [
+      ...read('c1', 'a.kicad_sch', whole),
+      ...read('c2', 'a.kicad_sch', 'lines 100-120 only', { start: 100, end: 120 }),
+      ...filler(2),
+    ];
+    const { messages: out, stats } = capHistory(msgs, { ...opts, maxToolResultChars: 100000 });
+    expect(out[1].role === 'tool' && out[1].content).toBe(whole);
+    expect(stats.superseded).toBe(0);
+  });
+
+  it('does not supersede a ranged read with a later disjoint range', () => {
+    const first = 'FIRST'.repeat(500);
+    const msgs: Msg[] = [
+      ...read('c1', 'a.kicad_sch', first, { start: 1, end: 50 }),
+      ...read('c2', 'a.kicad_sch', 'other lines', { start: 100, end: 120 }),
+      ...filler(2),
+    ];
+    const { messages: out, stats } = capHistory(msgs, { ...opts, maxToolResultChars: 100000 });
+    expect(out[1].role === 'tool' && out[1].content).toBe(first);
+    expect(stats.superseded).toBe(0);
+  });
+
+  it('supersedes a ranged read when a later read covers it', () => {
+    const narrow = 'NARROW'.repeat(500);
+    const msgs: Msg[] = [
+      ...read('c1', 'a.kicad_sch', narrow, { start: 10, end: 20 }),
+      ...read('c2', 'a.kicad_sch', 'wider', { start: 1, end: 100 }),
+      ...filler(2),
+    ];
+    const { messages: out, stats } = capHistory(msgs, { ...opts, maxToolResultChars: 100000 });
+    expect(out[1].role === 'tool' && out[1].content).toContain('superseded');
+    expect(stats.superseded).toBe(1);
   });
 
   it('does not supersede across different paths', () => {
@@ -122,6 +177,55 @@ describe('capHistory — what it actually trims', () => {
     expect(call?.args.path).toBe('a.kicad_sch'); // short args pass through untouched
     expect(call?.name).toBe('edit_file');
     expect(stats.truncated).toBe(1);
+  });
+
+  it('never grows a barely-oversized value, and never reports a negative saving', () => {
+    // The elision marker counts against the cap. Without that, a value one
+    // character over the limit came back longer than it went in and
+    // charsSaved went negative, so capping made the request bigger.
+    const body = 'x'.repeat(opts.maxToolResultChars + 1);
+    const msgs: Msg[] = [
+      { role: 'assistant', content: null, toolCalls: [{ id: 'c1', name: 'run_erc', args: {} }] },
+      { role: 'tool', toolCallId: 'c1', content: body },
+      ...filler(2),
+    ];
+    const { messages: out, stats } = capHistory(msgs, opts);
+    const got = out[1].role === 'tool' ? out[1].content : '';
+    expect(got.length).toBeLessThanOrEqual(opts.maxToolResultChars);
+    expect(got.length).toBeLessThan(body.length);
+    expect(stats.charsSaved).toBeGreaterThan(0);
+  });
+
+  it('leaves a value whole when the cap is too small to hold a marker', () => {
+    // Better to send the value intact than to replace it with a marker and
+    // almost no content, or to grow it past its original size.
+    const body = 'y'.repeat(500);
+    const msgs: Msg[] = [
+      { role: 'assistant', content: null, toolCalls: [{ id: 'c1', name: 'run_erc', args: {} }] },
+      { role: 'tool', toolCallId: 'c1', content: body },
+      ...filler(2),
+    ];
+    const { messages: out, stats } = capHistory(msgs, { ...opts, maxToolResultChars: 10 });
+    expect(out[1].role === 'tool' && out[1].content).toBe(body);
+    expect(stats.charsSaved).toBe(0);
+  });
+
+  it('leaves an unsettled tool call\'s arguments intact', () => {
+    // A call with no result yet has not run, so the "already applied" argument
+    // for clipping its payload does not hold: it is still the live instruction.
+    const payload = '(symbol (lib_id "Device:R"))'.repeat(200);
+    const msgs: Msg[] = [
+      {
+        role: 'assistant',
+        content: null,
+        toolCalls: [{ id: 'pending', name: 'edit_file', args: { path: 'a.kicad_sch', new_string: payload } }],
+      },
+      ...filler(6), // pushes it well outside the recent window, but it stays unsettled
+    ];
+    const { messages: out, stats } = capHistory(msgs, opts);
+    const call = out[0].role === 'assistant' ? out[0].toolCalls?.[0] : undefined;
+    expect(String(call?.args.new_string)).toBe(payload);
+    expect(stats.truncated).toBe(0);
   });
 
   it('leaves everything inside the recent window verbatim', () => {
@@ -172,4 +276,65 @@ describe('capHistory — what it actually trims', () => {
     // The most recent read must survive intact regardless of how much was cut.
     expect(renderConversation(out)).toContain(sch.slice(0, 200));
   });
+});
+
+describe('capHistory in the agent loop', () => {
+  /** Reads a big file twice (so the first read is superseded), then rate-limits
+   *  the third turn once before finishing. */
+  function retryingProvider(): Provider {
+    let turn = 0;
+    let thrown = false;
+    return {
+      name: 'scripted-429',
+      async chat(): Promise<Turn> {
+        turn++;
+        const usage = { inputTokens: 100, outputTokens: 10 };
+        if (turn <= 2) {
+          return {
+            text: null,
+            toolCalls: [{ id: `read-${turn}`, name: 'read_file', args: { path: 'big.txt' } }],
+            usage,
+          };
+        }
+        if (!thrown) {
+          thrown = true;
+          throw Object.assign(new Error('rate limited'), { status: 429 });
+        }
+        return {
+          text: null,
+          toolCalls: [{ id: 'fin', name: 'finish', args: { outcome: 'done', summary: 'done' } }],
+          usage,
+        };
+      },
+    };
+  }
+
+  it('counts the saving once per attempt, so a retried turn is not under-reported', async () => {
+    const { repo, cleanup } = await tempFixtureRepo();
+    try {
+      await runInit({ repoRoot: repo, installHooks: false });
+      // Large enough that superseding the first read is a real saving.
+      await writeFile(path.join(repo, 'big.txt'), 'a big file\n'.repeat(2000), 'utf8');
+      await execa('git', ['add', '-A'], { cwd: repo });
+      await execa('git', ['commit', '-q', '-m', 'fixture'], { cwd: repo });
+
+      const res = await runAgentLoop({
+        repoRoot: repo,
+        request: 'read it twice, then get rate limited',
+        model: 'gpt-5',
+        provider: retryingProvider(),
+        maxTurns: 6,
+        log: () => {},
+        meta: { command: 'do', modelSource: 'flag', version: '0.0.0-test', kicadCliVersion: '0.0.0' },
+      });
+
+      // Turn 3 is capped once, sent, rejected with a 429, then sent again. Both
+      // requests genuinely kept those characters off the wire, so the run-level
+      // total must reflect two attempts, not one.
+      const perAttempt = 'a big file\n'.repeat(2000).length;
+      expect(res.stats.capCharsSaved).toBeGreaterThan(perAttempt * 1.5);
+    } finally {
+      await cleanup();
+    }
+  }, 20000);
 });

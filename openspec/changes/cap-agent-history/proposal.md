@@ -12,7 +12,7 @@ It also gates the compat route in practice. Groq returned `413` on **turn one** 
 
 - New `capHistory(messages, opts)` (`src/agent/history.ts`) builds the view of a conversation that is actually sent, leaving the caller's array untouched.
 - Three trims, in order of how safe they are:
-  - **Supersession** - a `read_file` result is replaced by a short stub when a later read of the same path exists in the same conversation. The replacement is itself in the history, so nothing is lost. Applies at any distance.
+  - **Supersession** - a `read_file` result is replaced by a short stub when a later read of the same path *covering the same lines* exists in the same conversation. The replacement is itself in the history, so nothing is lost. Applies at any distance. Coverage matters because `read_file` honours `start_line`/`end_line`: a later twenty-line read does not reproduce an earlier whole-file read, so path alone is not enough to call one read redundant.
   - **Result truncation** - a settled tool result longer than `maxToolResultChars` is clipped head-and-tail with an explicit marker saying how much was cut and how to recover it.
   - **Argument truncation** - a settled tool-call argument string longer than `maxToolArgChars` (an already-applied anchored edit payload) is clipped the same way.
 - Truncation is lossy, so it never touches the last `keepRecent` messages. Supersession is not lossy and deliberately ignores that window: protecting stale reads by recency would shield exactly the largest items, which is most of the cost.
