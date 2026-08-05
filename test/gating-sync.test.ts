@@ -77,6 +77,7 @@ describe('spec gating: structural edit lock (invariant 1)', () => {
       const ctx = await makeCtx(repo);
       ctx.editsUnlocked = true;
 
+      // touch the schematic via edit_file: opens erc/drift/changelog obligations
       const sch = 'hardware/open-key.kicad_sch';
       const text = await readFile(path.join(repo, sch), 'utf8');
       expect(text).toContain('"Value" "1k"');
@@ -87,6 +88,7 @@ describe('spec gating: structural edit lock (invariant 1)', () => {
       expect(blocked).toContain('ERC');
       expect(ctx.finishRequest).toBeNull();
 
+      // satisfy the gates: ERC + drift (BOM must be updated to match)
       await dispatchTool(ctx, 'run_erc', {});
       const bom = await readFile(path.join(repo, 'docs', 'BOM.md'), 'utf8');
       await writeFile(path.join(repo, 'docs', 'BOM.md'), bom.replace('| R2 | 1k |', '| R2 | 2.2k |'), 'utf8');
@@ -118,6 +120,10 @@ describe('spec gating: structural edit lock (invariant 1)', () => {
   });
 
   it('check_drift clears the drift obligation when no schematic exists yet', async () => {
+    // Regression: the create pipeline's first three stages are docs-only and run
+    // before a schematic exists. check_drift used to early-return without
+    // clearing, and since it is the only tool that clears drift, a doc edit
+    // opened an obligation that could never close and finish refused forever.
     const { repo, cleanup } = await tempFixtureRepo();
     try {
       await runInit({ repoRoot: repo });
@@ -170,6 +176,7 @@ describe('spec gating: structural edit lock (invariant 1)', () => {
         source: 'docs/SPEC.md#budgets',
         affects: ['CC1', 'CC2'],
       });
+      // Both items in one call matches neither obligation.
       const res = await dispatchTool(ctx, 'resolve_affected', {
         constraint_key: 'power.cc_rd_ohms',
         item: 'CC1/CC2',
@@ -178,6 +185,7 @@ describe('spec gating: structural edit lock (invariant 1)', () => {
       expect(res).toMatch(/^error:/);
       expect(res).toContain('power.cc_rd_ohms affects CC1');
       expect(res).toContain('power.cc_rd_ohms affects CC2');
+      // The obligations stay open, and no decision is logged for a failed resolve.
       expect(ctx.ledger.openOfKind('affects-revisit')).toHaveLength(2);
       expect(ctx.decisions.some((d) => d.includes('CC1/CC2'))).toBe(false);
     } finally {
@@ -186,6 +194,10 @@ describe('spec gating: structural edit lock (invariant 1)', () => {
   });
 
   it('record_constraint defers affects items whose artifact does not exist yet', async () => {
+    // Regression: during the docs-only create stages every affects item that
+    // targets the future schematic/board opened an obligation the model could
+    // only close with a ceremonial "no change needed: not yet created" call —
+    // 13 of them burned ~25 turns in a live spec-seed run.
     const { repo, cleanup } = await tempFixtureRepo();
     try {
       await runInit({ repoRoot: repo });
@@ -198,12 +210,14 @@ describe('spec gating: structural edit lock (invariant 1)', () => {
         source: 'brief',
         affects: ['layout', 'stackup', 'R1'],
       });
+      // R1 names a concrete part: opens now. layout/stackup wait for the board.
       const open = ctx.ledger.openOfKind('affects-revisit').map((o) => o.detail);
       expect(open).toEqual(['manufacturing.copper_weight_oz affects R1']);
       expect(res).toContain('deferred until the target artifact exists');
       expect(res).toContain('layout, stackup');
       const registry = await loadConstraints(repo);
       expect(registry['manufacturing.copper_weight_oz']!.deferred).toEqual(['layout', 'stackup']);
+      // the full affects list is preserved for propagation regardless
       expect(registry['manufacturing.copper_weight_oz']!.affects).toEqual(['layout', 'stackup', 'R1']);
     } finally {
       await cleanup();
@@ -225,11 +239,13 @@ describe('spec gating: structural edit lock (invariant 1)', () => {
       });
       expect(ctx.ledger.openOfKind('affects-revisit')).toHaveLength(0);
 
+      // board still absent: nothing re-opens, marker stays
       const none = await reopenDeferredAffects(repo, ctx.config, () => {
         throw new Error('should not open anything');
       });
       expect(none).toEqual([]);
 
+      // a later run has the board configured: the revisit re-opens in its ledger
       const laterConfig = { ...ctx.config, board: 'hardware/x.kicad_pcb' };
       const ledger = new ObligationsLedger();
       const reopened = await reopenDeferredAffects(repo, laterConfig, (key, item) =>
@@ -239,6 +255,7 @@ describe('spec gating: structural edit lock (invariant 1)', () => {
       expect(ledger.openOfKind('affects-revisit').map((o) => o.detail)).toEqual([
         'mechanical.mounting_holes affects layout',
       ]);
+      // the marker is consumed: a third run re-opens nothing
       expect((await loadConstraints(repo))['mechanical.mounting_holes']!.deferred).toBeUndefined();
       expect(await reopenDeferredAffects(repo, laterConfig, () => {})).toEqual([]);
     } finally {
@@ -254,6 +271,7 @@ describe('spec gating: structural edit lock (invariant 1)', () => {
     expect(classifyAffectsTarget('schematic')).toBe('schematic');
     expect(classifyAffectsTarget('pin assignment')).toBe('schematic');
     expect(classifyAffectsTarget('BOM')).toBe('bom');
+    // concrete refdes/nets are never deferrable
     expect(classifyAffectsTarget('R1')).toBeNull();
     expect(classifyAffectsTarget('U2 EN pullup')).toBeNull();
   });
@@ -310,7 +328,7 @@ describe('copperhead sync verify phase (AC-7)', () => {
     try {
       await runInit({ repoRoot: repo });
       expect((await syncVerify(repo)).resolvable).toEqual([]);
-      expect((await syncVerify(repo)).resolvable).toEqual([]);
+      expect((await syncVerify(repo)).resolvable).toEqual([]); // second run: still nothing
     } finally {
       await cleanup();
     }
@@ -353,6 +371,7 @@ describe('copperhead sync verify phase (AC-7)', () => {
     const { repo, cleanup } = await tempFixtureRepo();
     try {
       await runInit({ repoRoot: repo });
+      // GPIO14 carries KEY_DAH in the fixture; forbid it and sync must flag, not fix
       await saveConstraint(repo, 'pins.forbidden_gpio14', {
         forbidden: ['GPIO14'],
         source: 'esp32-s3 datasheet',

@@ -38,6 +38,7 @@ describe('secret redaction (AC-4.1)', () => {
   });
 
   it('redacts registry and forge tokens, not just model keys', () => {
+    // Synthetic tokens: correct shape, never valid.
     const input = [
       'npm_0000000000000000000000000000000000AA',
       'ghp_0000000000000000000000000000000000BB',
@@ -51,14 +52,18 @@ describe('secret redaction (AC-4.1)', () => {
   });
 
   it('redacts a base64 bearer token whole, leaving no tail', () => {
+    // Synthetic token: correct shape, never valid. Standard base64 uses +, /
+    // and =; a charset that stops at the first one writes the rest to disk.
     const input = 'Bearer ABCDEFGHIJKLMNOP+SECRETTAILabcdef/MORESECRET=';
     const out = redactSecrets(input);
+
     expect(out).toBe('[REDACTED]');
     expect(out).not.toContain('SECRETTAIL');
     expect(out).not.toContain('MORESECRET');
   });
 
   it('redacts bearer tokens regardless of scheme casing', () => {
+    // HTTP auth schemes are case-insensitive (RFC 7235 §2.1).
     for (const scheme of ['Bearer', 'bearer', 'BEARER', 'BeArEr']) {
       const out = redactSecrets(`authorization: ${scheme} abcdefghijklmnopqrst`);
       expect(out, scheme).toBe('authorization: [REDACTED]');
@@ -66,11 +71,14 @@ describe('secret redaction (AC-4.1)', () => {
   });
 
   it('redacts npm tokens that contain dashes', () => {
+    // npm also issues UUID-shaped tokens. Synthetic, never valid.
     const out = redactSecrets('npm_0123456789abcdef-0123-4567-89ab-cdef01234567');
     expect(out).toBe('[REDACTED]');
   });
 
   it('leaves ordinary prose alone', () => {
+    // The patterns are deliberately broad, but not so broad that a run summary
+    // loses readable text.
     for (const text of [
       'the bearer of this note',
       'Bearer token missing',
@@ -199,9 +207,9 @@ describe('retry', () => {
 describe('git guard (AC-3.8, AC-3.6)', () => {
   it('hasCommits distinguishes an unborn HEAD from a committed repo', async () => {
     const dir = await mkdtemp(path.join(tmpdir(), 'ch-'));
-    expect(await hasCommits(dir)).toBe(false);
+    expect(await hasCommits(dir)).toBe(false); // not a repo at all
     await execa('git', ['init', '-q'], { cwd: dir });
-    expect(await hasCommits(dir)).toBe(false);
+    expect(await hasCommits(dir)).toBe(false); // repo, but no commits yet
     const { repo, cleanup } = await tempFixtureRepo();
     try {
       expect(await hasCommits(repo)).toBe(true);
@@ -211,6 +219,10 @@ describe('git guard (AC-3.8, AC-3.6)', () => {
   });
 
   it('a rollback gives back untracked work instead of deleting it', async () => {
+    // Regression: `git stash create` only ever captures tracked changes, so
+    // restore()'s `git clean -fd` used to wipe every file the user had not
+    // added yet, with nothing to recover them from. The dirty-tree preflight
+    // promises the opposite ("copperhead preserve them via git stash create").
     const { repo, cleanup } = await tempFixtureRepo();
     try {
       const sch = path.join(repo, 'hardware', 'open-key.kicad_sch');
@@ -220,15 +232,19 @@ describe('git guard (AC-3.8, AC-3.6)', () => {
       await mkdir(path.join(repo, 'docs'), { recursive: true });
       await writeFile(path.join(repo, 'docs', 'new-doc.md'), 'nested and untracked\n', 'utf8');
 
+      // The snapshot is taken with the tree already dirty, exactly as a run
+      // started with --allow-dirty does.
       const snap = await snapshot(repo);
       await writeFile(sch, tracked.replace('KEY_DAH', 'KEY_RUINED_BY_THE_AGENT'), 'utf8');
       await writeFile(path.join(repo, 'agent-scratch.txt'), 'created by the failed run\n', 'utf8');
 
       await restore(repo, snap);
 
+      // The user's uncommitted edit and both untracked files come back...
       expect(await readFile(sch, 'utf8')).toBe(tracked.replace('KEY_DAH', 'KEY_EDITED'));
       expect(await readFile(path.join(repo, 'hand-written-notes.md'), 'utf8')).toBe('do not lose me\n');
       expect(await readFile(path.join(repo, 'docs', 'new-doc.md'), 'utf8')).toBe('nested and untracked\n');
+      // ...and the failed run's own scratch file does not.
       expect(existsSync(path.join(repo, 'agent-scratch.txt'))).toBe(false);
     } finally {
       await cleanup();
@@ -236,6 +252,10 @@ describe('git guard (AC-3.8, AC-3.6)', () => {
   });
 
   it('a failed untracked restore still rolls back the tracked state', async () => {
+    // The untracked replay is best-effort: it runs after `stash apply`, so if
+    // it throws, the tracked rollback is already done and must be kept. A
+    // corrupt snapshot (tree sha that no longer resolves) is the real-world
+    // shape of that failure — an unreachable object pruned before rollback.
     const { repo, cleanup } = await tempFixtureRepo();
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     try {
@@ -248,12 +268,17 @@ describe('git guard (AC-3.8, AC-3.6)', () => {
       expect(snap.untracked).not.toBeNull();
       await writeFile(sch, tracked.replace('KEY_DAH', 'KEY_RUINED_BY_THE_AGENT'), 'utf8');
 
+      // A tree sha that does not resolve: read-tree fails, restoreUntracked throws.
       await expect(restore(repo, { ...snap, untracked: '0'.repeat(40) })).resolves.toBeUndefined();
 
       expect(warn.mock.calls.map((c) => String(c[0]))).toContainEqual(
         expect.stringContaining('could not restore untracked files after rollback'),
       );
+      // The tracked rollback survived the failure, up to and including the
+      // user's uncommitted edit replayed from the stash object.
       expect(await readFile(sch, 'utf8')).toBe(tracked.replace('KEY_DAH', 'KEY_EDITED'));
+      // The untracked file is the part that is genuinely lost: pinned so a
+      // future partial replay cannot pass this test by half-restoring.
       expect(existsSync(path.join(repo, 'hand-written-notes.md'))).toBe(false);
     } finally {
       warn.mockRestore();
@@ -262,6 +287,11 @@ describe('git guard (AC-3.8, AC-3.6)', () => {
   });
 
   it.skipIf(process.platform === 'win32')('refuses the run, naming the file, when an untracked path cannot be read', async () => {
+    // Regression: every untracked path went straight into `git update-index`,
+    // which aborts the whole batch on the first it cannot open. snapshot() runs
+    // before the first turn, so one stray root-owned or mode-000 file refused
+    // the run with a bare "fatal: Unable to process path ..." and no hint that
+    // copperhead was taking a snapshot.
     const { repo, cleanup } = await tempFixtureRepo();
     try {
       await writeFile(path.join(repo, 'tracked-change.txt'), 'x', 'utf8');
@@ -271,8 +301,10 @@ describe('git guard (AC-3.8, AC-3.6)', () => {
 
       await expect(snapshot(repo)).rejects.toThrow(PreflightError);
       await expect(snapshot(repo)).rejects.toThrow(/unreadable\.bin/);
+      // The refusal has to be actionable, not just a git error surfaced raw.
       await expect(snapshot(repo)).rejects.toThrow(/--allow-dirty/);
 
+      // Readable again: the snapshot goes through and captures it.
       await chmod(locked, 0o644);
       const snap = await snapshot(repo);
       const tree = await execa('git', ['ls-tree', '-r', '--name-only', snap.untracked!], { cwd: repo });
@@ -283,11 +315,15 @@ describe('git guard (AC-3.8, AC-3.6)', () => {
   });
 
   it('ignores an untracked file that vanishes between listing and snapshot', async () => {
+    // The benign half of the same race: a watcher or build step deleting its
+    // own temp file must not refuse the run, because a file that no longer
+    // exists cannot be lost to the rollback.
     const { repo, cleanup } = await tempFixtureRepo();
     try {
       await writeFile(path.join(repo, 'keep-me.txt'), 'keep\n', 'utf8');
       const doomed = path.join(repo, 'vanishes.tmp');
       await writeFile(doomed, 'transient\n', 'utf8');
+      // Deleted after git listed it, which is what the race amounts to.
       const listed = await execa('git', ['ls-files', '--others', '--exclude-standard'], { cwd: repo });
       expect(listed.stdout.split('\n')).toContain('vanishes.tmp');
       await rm(doomed, { force: true });
@@ -302,6 +338,9 @@ describe('git guard (AC-3.8, AC-3.6)', () => {
   });
 
   it('does not resurrect gitignored files, which the rollback never deletes', async () => {
+    // Symmetry check: `ls-files --exclude-standard` skips ignored paths and
+    // plain `clean -fd` (no -x) leaves them alone, so neither side touches
+    // them and .env cannot be swept into a snapshot object.
     const { repo, cleanup } = await tempFixtureRepo();
     try {
       await writeFile(path.join(repo, '.env'), 'OPENAI_API_KEY=sk-should-never-be-captured\n', 'utf8');
@@ -311,6 +350,7 @@ describe('git guard (AC-3.8, AC-3.6)', () => {
 
       await restore(repo, snap);
 
+      // Untouched on disk, and absent from the captured tree.
       expect(await readFile(path.join(repo, '.env'), 'utf8')).toContain('sk-should-never-be-captured');
       const tree = await execa('git', ['ls-tree', '-r', '--name-only', snap.untracked!], { cwd: repo });
       expect(tree.stdout.split('\n')).toContain('tracked-change.txt');
