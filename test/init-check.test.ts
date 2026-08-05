@@ -1,5 +1,12 @@
 import { describe, it, expect } from 'vitest';
-import { readFile, writeFile, rm, mkdtemp, mkdir } from 'node:fs/promises';
+import {
+  cp,
+  mkdir,
+  readFile,
+  writeFile,
+  rm,
+  mkdtemp,
+} from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -150,6 +157,59 @@ describe('copperhead check (AC-2)', () => {
       await cleanup();
     }
   }, 60_000);
+
+  it('reports OpenSpec validation failures', async () => {
+    const { repo, cleanup } = await tempFixtureRepo();
+
+    try {
+      await runInit({ repoRoot: repo });
+
+      await cp(
+        path.resolve('openspec'),
+        path.join(repo, 'openspec'),
+        { recursive: true },
+      );
+
+      const res = await runCheck(repo, silent);
+
+      expect(res.openspec).not.toBeNull();
+      expect(res.openspec!.ok).toBe(false);
+      expect(res.ok).toBe(false);
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it('passes when all OpenSpec changes validate', async () => {
+    const { repo, cleanup } = await tempFixtureRepo();
+
+    try {
+      await runInit({ repoRoot: repo });
+
+      await cp(
+        path.resolve('openspec'),
+        path.join(repo, 'openspec'),
+        { recursive: true },
+      );
+
+      await rm(
+        path.join(
+          repo,
+          'openspec',
+          'changes',
+          'add-cursor-cli-provider',
+        ),
+        { recursive: true, force: true },
+      );
+
+      const res = await runCheck(repo, silent);
+
+      expect(res.openspec).not.toBeNull();
+      expect(res.openspec!.ok).toBe(true);
+    } finally {
+      await cleanup();
+    }
+  });
 });
 
 describe('check is LLM-free by construction (AC-2.1)', () => {

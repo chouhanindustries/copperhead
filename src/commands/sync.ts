@@ -117,7 +117,7 @@ export async function syncVerify(repoRoot: string): Promise<SyncReport> {
   }
 
   if (existsSync(path.join(repoRoot, 'openspec', 'config.yaml'))) {
-    const res = await openspecValidate(repoRoot);
+    const res = await openspecValidate(repoRoot, undefined, ['--all']);
     if (!res.ok) {
       resolvable.push({
         kind: 'openspec',

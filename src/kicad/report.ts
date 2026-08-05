@@ -57,12 +57,21 @@ export function normalizeReport(raw: unknown, source: 'erc' | 'drc'): CheckRepor
     schematic_parity?: RawViolation[];
   };
   const violations: Violation[] = [];
+
   for (const sheet of r.sheets ?? []) {
-    for (const v of sheet.violations ?? []) violations.push(normViolation(v, sheet.path));
+    for (const v of sheet.violations ?? [])
+      violations.push(normViolation(v, sheet.path));
   }
-  for (const v of r.violations ?? []) violations.push(normViolation(v));
-  for (const v of r.unconnected_items ?? []) violations.push(normViolation(v));
-  for (const v of r.schematic_parity ?? []) violations.push(normViolation(v));
+
+  for (const v of r.violations ?? [])
+    violations.push(normViolation(v));
+
+  for (const v of r.unconnected_items ?? [])
+    violations.push(normViolation(v));
+
+  for (const v of r.schematic_parity ?? [])
+    violations.push(normViolation(v));
+
   return { ok: violations.length === 0, source, violations };
 }
 

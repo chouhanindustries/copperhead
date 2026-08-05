@@ -22,6 +22,10 @@ The `cursor` provider SHALL run the CLI in plan mode with sandbox enabled and an
 
 When the model reply does not contain a parseable copperhead tool-call JSON object, the provider SHALL return assistant text with empty `toolCalls` rather than throwing.
 
+#### Scenario: Model returns plain text
+- **WHEN** the Cursor CLI returns a response that does not contain a valid copperhead tool-call JSON object
+- **THEN** the provider returns the assistant text with an empty `toolCalls` list instead of throwing an error
+
 ### Requirement: No silent fallback to a paid API
 
 A rate-limited or errored `cursor` run SHALL NOT continue on OpenAI/Anthropic providers.

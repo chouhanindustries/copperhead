@@ -311,7 +311,7 @@ export async function formatOpenSpecInspect(repoRoot: string): Promise<string> {
   if (!existsSync(cfgPath)) {
     return ['', dim('  openspec: no openspec/config.yaml in this repo'), ''].join('\n');
   }
-  const res = await openspecValidate(repoRoot);
+  const res = await openspecValidate(repoRoot, undefined, ['--all']);
   const headline = res.ok ? ok('  openspec: valid') : err('  openspec: validation failed');
   const body = res.output
     .trim()
