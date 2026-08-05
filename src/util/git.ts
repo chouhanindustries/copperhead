@@ -6,17 +6,45 @@ import path from 'node:path';
 import { PreflightError } from './preflight.js';
 
 /**
- * Paths copperhead must keep out of `git add -A`. KiCad ≥9 writes a
- * git-backed local-history directory (`.history/`, complete with its own nested
- * `.git`) into the project the first time kicad-cli touches it. Left untracked,
- * that nested repo has an unborn HEAD, so a plain `git add -A` in the parent
- * aborts with `error: '.history/' does not have a commit checked out` (exit
- * 128) — which fails the commit at the end of every KiCad-touching stage
- * (schematic, layout, outputs). Ignoring it is both correct (local history is
- * never a project artifact) and the fix for that abort. Kept as a list so other
- * KiCad transients can join it if they surface.
+ * Paths copperhead must keep out of `git add -A`. Two kinds live here:
+ *
+ * KiCad ≥9 writes a git-backed local-history directory (`.history/`, complete
+ * with its own nested `.git`) into the project the first time kicad-cli touches
+ * it. Left untracked, that nested repo has an unborn HEAD, so a plain `git add
+ * -A` in the parent aborts with `error: '.history/' does not have a commit
+ * checked out` (exit 128) — which fails the commit at the end of every
+ * KiCad-touching stage (schematic, layout, outputs). Ignoring it is both
+ * correct (local history is never a project artifact) and the fix for that
+ * abort.
+ *
+ * `.copperhead/runs/` is the run audit trail, which AC-4.3 requires every
+ * copperhead repo to ignore. Topping it up here means a repo the user created
+ * by hand (`git init && git commit`, no copperhead .gitignore) gets the entry
+ * on the first commit copperhead makes, instead of having its transcripts
+ * swept into project history.
  */
-const GIT_ADD_EXCLUDES = ['.history/'];
+const GIT_ADD_EXCLUDES = ['.copperhead/runs/', '.history/'];
+
+/**
+ * Paths copperhead writes itself, which the dirty-tree gate must never count as
+ * the user's uncommitted work.
+ *
+ * The gate exists because a rollback hard-resets over uncommitted changes — but
+ * the run audit trail is not the user's work, and restore() deliberately copies
+ * it across a rollback rather than destroying it. Counting it made copperhead
+ * refuse to run over a file copperhead had just written: the REPL opens its
+ * session log under `.copperhead/runs/` before the first turn, so in a repo
+ * whose .gitignore does not yet list it (anyone who ran `git init` themselves)
+ * the very first request hit the dirty gate with `.copperhead/` as the only
+ * dirty path. Filtered by path rather than by .gitignore state, so the gate
+ * behaves the same before and after the ignore entry lands.
+ */
+const OWN_ARTIFACTS = ['.copperhead/runs/'];
+
+/** Whether a `git status` path is copperhead's own bookkeeping, not user work. */
+function isOwnArtifact(p: string): boolean {
+  return OWN_ARTIFACTS.some((prefix) => p === prefix || p.startsWith(prefix));
+}
 
 /**
  * Ensure the repo's root .gitignore lists each entry, appending only the
@@ -53,6 +81,12 @@ export interface GitSnapshot {
 async function git(repo: string, args: string[]): Promise<string> {
   const { stdout } = await execa('git', args, { cwd: repo });
   return stdout.trim();
+}
+
+/** Same as git(), without the trim: for output whose leading whitespace matters. */
+async function gitRaw(repo: string, args: string[]): Promise<string> {
+  const { stdout } = await execa('git', args, { cwd: repo });
+  return stdout;
 }
 
 /** Same as git(), with a scratch index so the repo's real index is untouched. */
@@ -190,8 +224,44 @@ export async function hasCommits(repo: string): Promise<boolean> {
 }
 
 export async function isDirty(repo: string): Promise<boolean> {
-  const status = await git(repo, ['status', '--porcelain']);
-  return status.length > 0;
+  return (await dirtyFiles(repo)).length > 0;
+}
+
+/**
+ * The user's uncommitted paths: staged, unstaged, and untracked, minus
+ * copperhead's own artifacts (see OWN_ARTIFACTS). The single source of truth
+ * for "is this tree dirty" — isDirty() is this list being non-empty, so the
+ * gate and the file list it prints can never disagree.
+ *
+ * `-uall` lists untracked files individually instead of collapsing them into
+ * the containing directory: `git status` reports a wholly-untracked
+ * `.copperhead/` as one entry, which no per-file filter can see inside.
+ */
+export async function dirtyFiles(repo: string): Promise<string[]> {
+  // Trailing-only trim, not git()'s .trim(): porcelain encodes the index and
+  // worktree states in two leading columns, and an unstaged modification is
+  // " M path" — a leading space. Trimming the whole payload ate that column on
+  // the first line, so the prompt offered to commit "EADME.md" and any path
+  // matched against it (the OWN_ARTIFACTS filter below) was off by a character.
+  const status = (await gitRaw(repo, ['status', '--porcelain', '-uall'])).replace(/\n+$/, '');
+  if (!status) return [];
+  return status
+    .split('\n')
+    .map((line) => line.slice(3).trim())
+    // Renames report "old -> new"; the new path is the one that exists.
+    .map((p) => (p.includes(' -> ') ? p.split(' -> ')[1]!.trim() : p))
+    .filter(Boolean)
+    .filter((p) => !isOwnArtifact(p));
+}
+
+/**
+ * Set the working tree aside as a stash entry, untracked files included, so
+ * the tree is clean enough to run on and the work is one `git stash pop` away.
+ */
+export async function stashDirty(repo: string, message: string): Promise<boolean> {
+  await ensureIgnored(repo, GIT_ADD_EXCLUDES);
+  await git(repo, ['stash', 'push', '-u', '-m', message]);
+  return !(await isDirty(repo));
 }
 
 /**
@@ -225,6 +295,88 @@ export async function gitPreflight(repo: string, opts: { allowDirty?: boolean } 
       ],
     );
   }
+}
+
+/**
+ * What every copperhead repo must ignore from its first commit: secrets
+ * (AC-4.3), the run audit trail, and KiCad's local-history directory.
+ */
+const BASELINE_IGNORES = [...new Set(['.env', ...GIT_ADD_EXCLUDES])];
+
+export interface GitBootstrap {
+  /** `git init` ran here. */
+  initialized: boolean;
+  /** A local user.name/user.email fallback was written (none was configured). */
+  identityConfigured: boolean;
+  /** An initial commit was created (the repo had an unborn HEAD). */
+  committed: boolean;
+}
+
+/** Read a git config value, or null when unset. */
+async function configValue(repo: string, key: string): Promise<string | null> {
+  const res = await execa('git', ['config', '--get', key], { cwd: repo, reject: false });
+  const value = res.exitCode === 0 ? res.stdout.trim() : '';
+  return value.length ? value : null;
+}
+
+/**
+ * Make a directory satisfy the git gates instead of refusing over them: init
+ * the repo if there is none, write the baseline .gitignore, and create the
+ * initial commit that snapshots/rollback need. Used by the pipeline commands,
+ * where "you must set up git first" is pure friction for a new user — `do` and
+ * `sync` keep the stricter gitPreflight, since those edit a repo the user
+ * already owns and an implicit commit there would be a surprise.
+ *
+ * Never touches a repo that already has commits: on that path the only work is
+ * the idempotent .gitignore top-up.
+ */
+export async function ensureGitReady(repo: string): Promise<GitBootstrap> {
+  const result: GitBootstrap = { initialized: false, identityConfigured: false, committed: false };
+
+  if (!(await isGitRepo(repo))) {
+    await mkdir(repo, { recursive: true });
+    // -b needs git >= 2.28; fall back so an older git still works.
+    const named = await execa('git', ['init', '-q', '-b', 'main'], { cwd: repo, reject: false });
+    if (named.exitCode !== 0) await git(repo, ['init', '-q']);
+    result.initialized = true;
+  }
+
+  await ensureIgnored(repo, BASELINE_IGNORES);
+
+  if (await hasCommits(repo)) return result;
+
+  // `git commit` hard-fails without an identity, which on a fresh machine is
+  // exactly the state a first-time user is in. A repo-local fallback keeps the
+  // run moving without touching their global config.
+  if (!(await configValue(repo, 'user.name'))) {
+    await git(repo, ['config', 'user.name', 'copperhead']);
+    result.identityConfigured = true;
+  }
+  if (!(await configValue(repo, 'user.email'))) {
+    await git(repo, ['config', 'user.email', 'copperhead@localhost']);
+    result.identityConfigured = true;
+  }
+
+  await git(repo, ['add', '-A']);
+  // --allow-empty: an empty directory has nothing to stage, and the point of
+  // the commit is the rollback anchor, not its contents.
+  await git(repo, ['commit', '-q', '--allow-empty', '-m', 'chore: initialize repository for copperhead']);
+  result.committed = true;
+  return result;
+}
+
+/**
+ * Commit exactly these paths, leaving anything else in the tree (and anything
+ * already staged) alone: `git commit -- <path>` commits from the working tree
+ * for those paths only. No-op when they hold nothing new.
+ */
+export async function commitPaths(repo: string, paths: string[], message: string): Promise<string | null> {
+  if (!paths.length) return null;
+  await git(repo, ['add', '--', ...paths]);
+  const staged = await execa('git', ['diff', '--cached', '--quiet', '--', ...paths], { cwd: repo, reject: false });
+  if (staged.exitCode === 0) return null; // nothing to commit for these paths
+  await git(repo, ['commit', '-q', '-m', message, '--', ...paths]);
+  return git(repo, ['rev-parse', 'HEAD']);
 }
 
 /**
@@ -345,10 +497,9 @@ export async function headCommit(repo: string): Promise<string> {
   return git(repo, ['rev-parse', 'HEAD']);
 }
 
-/** Count of uncommitted paths (staged, unstaged, and untracked). */
+/** Count of the user's uncommitted paths, matching what the dirty gate counts. */
 export async function uncommittedCount(repo: string): Promise<number> {
-  const status = await git(repo, ['status', '--porcelain']);
-  return status ? status.split('\n').length : 0;
+  return (await dirtyFiles(repo)).length;
 }
 
 export async function commitAll(repo: string, message: string): Promise<string> {

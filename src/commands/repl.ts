@@ -16,7 +16,13 @@ import { loadConfig } from '../config.js';
 import { branchName, headCommit, isDirty, isGitRepo, uncommittedCount } from '../util/git.js';
 import { shortPath } from '../util/paths.js';
 import { redactSecrets } from '../util/redact.js';
-import { pickModel, type SelectItem } from '../util/select.js';
+import { pickModel, selectMenu, type SelectItem } from '../util/select.js';
+import {
+  DIRTY_CHOICES,
+  describeDirtyFiles,
+  resolveDirtyTree,
+  type DirtyChoice,
+} from '../util/dirty.js';
 import { KeyReader, PASTE_OFF, PASTE_ON, promptWithSlashHints } from '../util/live-prompt.js';
 import { TerminalDock } from '../util/dock.js';
 import { DockRenderer } from '../agent/dock-renderer.js';
@@ -68,6 +74,7 @@ export interface ReplOptions {
     request: string,
     log?: (line: string) => void,
     renderer?: ProgressRenderer,
+    overrides?: { allowDirty?: boolean },
   ) => Promise<Pick<RunResult, 'outcome'>>;
   /** Injected /check (tests). */
   runCheckCmd?: (log?: (line: string) => void) => Promise<void>;
@@ -281,13 +288,18 @@ async function statusText(opts: ReplOptions): Promise<string> {
 }
 
 function defaultRunner(opts: ReplOptions, log: (l: string) => void) {
-  return (request: string) =>
+  return (
+    request: string,
+    _log?: (line: string) => void,
+    _renderer?: ProgressRenderer,
+    overrides?: { allowDirty?: boolean },
+  ) =>
     runAgentLoop({
       repoRoot: opts.repoRoot,
       request,
       model: opts.model,
       ...(opts.maxTurns !== undefined ? { maxTurns: opts.maxTurns } : {}),
-      allowDirty: opts.allowDirty ?? false,
+      allowDirty: overrides?.allowDirty ?? opts.allowDirty ?? false,
       interactive: opts.interactive ?? false,
       confirm: opts.confirm,
       ...(opts.onBudgetExhausted ? { onBudgetExhausted: opts.onBudgetExhausted } : {}),
@@ -398,9 +410,13 @@ export async function runRepl(opts: ReplOptions): Promise<{ ok: boolean; turns: 
   for (const line of banner(opts)) log(line);
 
   let turns = 0;
-  const handleRequest = async (request: string): Promise<void> => {
+  const handleRequest = async (request: string, overrides?: { allowDirty?: boolean }): Promise<void> => {
     try {
-      const res = await runOne(request, log, opts.renderer);
+      // Only widen the call when there is something to override: the runner
+      // contract (and the tests that pin it) is the three-argument form.
+      const res = overrides
+        ? await runOne(request, log, opts.renderer, overrides)
+        : await runOne(request, log, opts.renderer);
       turns++;
       if (res.outcome === 'failure') {
         log(dim('(session continues — fix the issue or try another request)'));
@@ -428,6 +444,32 @@ export async function runRepl(opts: ReplOptions): Promise<{ ok: boolean; turns: 
       yield k;
     }
   }
+
+  /**
+   * Offer the way through the dirty-tree gate before a turn starts, while the
+   * session key reader is still live (it is paused for the duration of a turn,
+   * so a menu raised from inside the run would never see a keypress). Returns
+   * the per-turn override for that run.
+   */
+  const resolveDirtyBeforeTurn = async (): Promise<{ allowDirty?: boolean } | undefined> => {
+    if (opts.allowDirty) return undefined;
+    const { allowDirty } = await resolveDirtyTree(
+      opts.repoRoot,
+      async ({ files }) => {
+        log(warn(`  working tree has ${files.length} uncommitted file(s); a rollback would hard-reset over them:`));
+        for (const line of describeDirtyFiles(files)) log(line);
+        const choice = await selectMenu({
+          title: 'How should copperhead handle them?',
+          items: DIRTY_CHOICES,
+          output: output as NodeJS.WriteStream,
+          keys: sessionKeys(),
+        });
+        return (choice as DirtyChoice | null) ?? 'cancel';
+      },
+      log,
+    );
+    return allowDirty ? { allowDirty } : undefined;
+  };
 
   const runSlash = async (cmd: string): Promise<'quit' | 'continue'> => {
     if (QUIT.has(cmd)) return 'quit';
@@ -655,11 +697,12 @@ export async function runRepl(opts: ReplOptions): Promise<{ ok: boolean; turns: 
         continue;
       }
 
+      const dirtyOverride = await resolveDirtyBeforeTurn();
       // Pause raw-mode so Ctrl+C is a real SIGINT during the agent turn.
       log('');
       keys.pause();
       try {
-        await handleRequest(line);
+        await handleRequest(line, dirtyOverride);
       } finally {
         keys.resume();
       }

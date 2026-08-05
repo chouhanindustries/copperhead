@@ -468,11 +468,30 @@ describe('promptWithSlashHints', () => {
 });
 
 describe('session log file', () => {
+  /**
+   * Poll until `cond` holds, rather than sleeping a fixed span. A request turn
+   * now resolves the dirty-tree gate before it starts, which shells out to git,
+   * so the window between writing a request and writing `/quit` is no longer
+   * reliably shorter than a 30ms sleep: under load `/quit` could win the race
+   * and the turn never ran. Waiting on the effect keeps these deterministic.
+   */
+  const waitUntil = async (cond: () => boolean, timeoutMs = 5000): Promise<void> => {
+    const deadline = Date.now() + timeoutMs;
+    while (!cond()) {
+      if (Date.now() > deadline) throw new Error('timed out waiting for the turn to start');
+      await new Promise((r) => setTimeout(r, 5));
+    }
+  };
+
   it('mirrors session lines to .copperhead/runs/repl-*.log with keys redacted', async () => {
     setColorEnabled(false);
     const repo = await mkdtemp(path.join(tmpdir(), 'copperhead-repl-log-'));
     try {
       const { input, output } = fakeTty();
+      const runRequest = vi.fn(async (_req: string, log?: (l: string) => void) => {
+        log?.('leaked sk-SECRET_KEY_123 in output');
+        return { outcome: 'success' as const };
+      });
       const done = runRepl({
         repoRoot: repo,
         model: 'gpt-5',
@@ -482,14 +501,11 @@ describe('session log file', () => {
         renderer: plainRenderer(() => {}),
         input,
         output,
-        runRequest: vi.fn(async (_req: string, log?: (l: string) => void) => {
-          log?.('leaked sk-SECRET_KEY_123 in output');
-          return { outcome: 'success' as const };
-        }),
+        runRequest,
       });
       await new Promise((r) => setTimeout(r, 30));
       input.write('do the thing\n');
-      await new Promise((r) => setTimeout(r, 30));
+      await waitUntil(() => runRequest.mock.calls.length > 0);
       input.write('/quit\n');
       await done;
 
@@ -523,6 +539,10 @@ describe('session log file', () => {
     ];
     try {
       const { input, output } = fakeTty();
+      const runRequest = vi.fn(async (_req: string, log?: (l: string) => void) => {
+        for (const s of secrets) log?.(`tool output: ${s} trailing`);
+        return { outcome: 'success' as const };
+      });
       const done = runRepl({
         repoRoot: repo,
         model: 'gpt-5',
@@ -532,14 +552,11 @@ describe('session log file', () => {
         renderer: plainRenderer(() => {}),
         input,
         output,
-        runRequest: vi.fn(async (_req: string, log?: (l: string) => void) => {
-          for (const s of secrets) log?.(`tool output: ${s} trailing`);
-          return { outcome: 'success' as const };
-        }),
+        runRequest,
       });
       await new Promise((r) => setTimeout(r, 30));
       input.write('publish it\n');
-      await new Promise((r) => setTimeout(r, 30));
+      await waitUntil(() => runRequest.mock.calls.length > 0);
       input.write('/quit\n');
       await done;
 

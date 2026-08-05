@@ -9,6 +9,7 @@ import { openspecValidate } from '../openspec/cli.js';
 import { runAgentLoop } from '../agent/loop.js';
 import type { RunMetaInput } from '../agent/runmeta.js';
 import type { ProgressRenderer } from '../agent/render.js';
+import type { DirtyChooser } from '../util/dirty.js';
 
 /**
  * `copperhead sync` (design D14): deterministic verify phase, then an optional
@@ -171,7 +172,7 @@ export async function syncResolve(
   report: SyncReport,
   model: string,
   log: (s: string) => void,
-  extras?: { renderer?: ProgressRenderer; meta?: RunMetaInput },
+  extras?: { renderer?: ProgressRenderer; meta?: RunMetaInput; onDirtyTree?: DirtyChooser },
 ): Promise<{ ok: boolean }> {
   const reportText = formatSyncReport(report);
   const res = await runAgentLoop({
@@ -181,6 +182,7 @@ export async function syncResolve(
     stagePrompt: `You are resolving drift found by the deterministic sync verifier. The inconsistency report is below. Truth precedence: the KiCad files are ground truth for as-built facts (fix the docs to match); openspec specs and SPEC.md budgets are ground truth for requirements. Do NOT touch anything listed as a requirement violation; those are for the human. Apply each proposed resolution, verify, and finish.\n\n${reportText}`,
     log,
     ...(extras?.renderer ? { renderer: extras.renderer } : {}),
+    ...(extras?.onDirtyTree ? { onDirtyTree: extras.onDirtyTree } : {}),
     ...(extras?.meta ? { meta: extras.meta } : {}),
   });
   return { ok: res.outcome === 'success' };

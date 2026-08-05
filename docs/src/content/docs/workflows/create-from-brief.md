@@ -7,6 +7,17 @@ sidebar:
 
 Flow A starts from nothing but a product brief and an empty git repo, and ends with a full design package. Underneath, it is [the same loop](/concepts/agent-loop/) as editing an existing board, run once per pipeline stage with a stage-specific prompt and gate.
 
+## 0. The one-liner version
+
+If you just want to see the pipeline run, hand it a sentence:
+
+```bash
+mkdir usb-c-breakout && cd usb-c-breakout
+copperhead create "a USB-C 5V power breakout, 3A, screw terminal and 0.1in header, power LED"
+```
+
+The text is saved as `brief.md` in the directory, and git is set up for you (init, baseline `.gitignore`, initial commit) so the run has a snapshot to roll back to. Everything below is the same flow with a brief you wrote yourself, which is what you want for anything you intend to build.
+
 ## 1. Write the brief
 
 The brief is a plain markdown file. This is the entire input to the pipeline, so it is worth ten minutes. Save it as `brief.md`:
@@ -63,11 +74,10 @@ Six ready-made briefs ship in [`examples/`](https://github.com/chouhanindustries
 
 ```bash
 mkdir usb-c-breakout && cd usb-c-breakout
-git init && git commit --allow-empty -m "baseline"
 copperhead create --brief ../brief.md
 ```
 
-The empty baseline commit matters: rollback snapshots need somewhere to roll back to.
+No git setup needed first: `create` initializes the repository, writes a baseline `.gitignore` (`.env`, `.copperhead/runs/`, `.history/`), and makes the initial commit, because rollback snapshots need somewhere to roll back to. In a repository that already has commits it changes none of that and only commits the brief, so a stage rollback cannot delete it.
 
 ## 3. What runs
 

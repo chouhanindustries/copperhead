@@ -3,7 +3,9 @@ import { Command } from 'commander';
 import { createRequire } from 'node:module';
 import { createInterface } from 'node:readline/promises';
 import { loadConfig, resolveModel, type ModelSource } from './config.js';
-import { pickModel } from './util/select.js';
+import { pickModel, selectMenu } from './util/select.js';
+import { DIRTY_CHOICES, describeDirtyFiles, type DirtyChoice, type DirtyChooser } from './util/dirty.js';
+import { warn } from './agent/theme.js';
 import { runInit, InitError } from './memory/scaffold.js';
 import { runCheck } from './commands/check.js';
 import { runDoctor, formatDoctor } from './commands/doctor.js';
@@ -54,6 +56,23 @@ function budgetContinuePrompt(): ((stats: BudgetExhaustedStats) => Promise<numbe
   if (!process.stdin.isTTY || !process.stdout.isTTY) return undefined;
   return async (stats) =>
     (await confirmTty(budgetPromptText(stats))) ? budgetExtraTurns(stats) : 0;
+}
+
+/**
+ * Attended runs get to choose a way through the dirty-tree gate instead of
+ * being told to go do it by hand. Non-TTY keeps the refusal (AC-3.8): there is
+ * nobody to ask, and guessing on someone's uncommitted work is not an option.
+ */
+function dirtyTreePrompt(): DirtyChooser | undefined {
+  if (!process.stdin.isTTY || !process.stdout.isTTY) return undefined;
+  return async ({ files }) => {
+    console.log(
+      warn(`working tree has ${files.length} uncommitted file(s); a rollback would hard-reset over them:`),
+    );
+    for (const line of describeDirtyFiles(files)) console.log(line);
+    const choice = await selectMenu({ title: 'How should copperhead handle them?', items: DIRTY_CHOICES });
+    return (choice as DirtyChoice | null) ?? 'cancel';
+  };
 }
 
 program
@@ -218,6 +237,8 @@ program
         const config = await loadConfig(repo);
         const { model, source } = resolveModel(opts.model, config);
         const continuePrompt = budgetContinuePrompt();
+        // --json is a machine contract: never raise an interactive menu under it.
+        const dirtyPrompt = program.opts().json ? undefined : dirtyTreePrompt();
         const res = await runAgentLoop({
           repoRoot: repo,
           request,
@@ -228,6 +249,7 @@ program
           interactive: opts.interactive ?? false,
           confirm: confirmTty,
           ...(continuePrompt ? { onBudgetExhausted: continuePrompt } : {}),
+          ...(dirtyPrompt ? { onDirtyTree: dirtyPrompt } : {}),
           renderer: rendererOf(),
           meta: { command: 'do', modelSource: source, version, kicadCliVersion: kicadVer },
         });
@@ -265,8 +287,10 @@ program
       }
       const config = await loadConfig(repo);
       const { model, source } = resolveModel(opts.model, config);
+      const syncDirtyPrompt = json ? undefined : dirtyTreePrompt();
       const res = await syncResolve(repo, report, model, json ? () => {} : (s) => console.log(s), {
         renderer: rendererOf(),
+        ...(syncDirtyPrompt ? { onDirtyTree: syncDirtyPrompt } : {}),
         meta: { command: 'sync', modelSource: source, version, kicadCliVersion: kicadVer },
       });
       process.exit(res.ok ? 0 : 1);
@@ -326,11 +350,18 @@ program
 program
   .command('create')
   .description('Mode A: full pipeline from a product brief to the output package')
-  .requiredOption('--brief <file>', 'product brief (markdown)')
+  .argument('[brief]', 'the product brief as text, or the path to a brief markdown file')
+  .option('--brief <file>', 'product brief (markdown)')
   .option('--model <model>', 'codex | cursor | gpt-5 | claude | claude-code | compat:<id> (or a provider-specific model id)')
   .option('--interactive', 're-enable the human gates (spec approval, pre-export)')
-  .action(async (opts: { brief: string; model?: string; interactive?: boolean }) => {
+  .action(async (briefArg: string | undefined, opts: { brief?: string; model?: string; interactive?: boolean }) => {
     const repo = repoOf(program.opts());
+    if (!opts.brief && !briefArg) {
+      console.error(
+        'no brief given. Pass it as text: copperhead create "a USB-C powered ESP32 sensor board", or point at a file: copperhead create --brief brief.md',
+      );
+      process.exit(1);
+    }
     try {
       const kicadVer = await kicadCliVersion();
       const config = await loadConfig(repo);
@@ -338,7 +369,7 @@ program
       const continuePrompt = budgetContinuePrompt();
       const res = await runCreate({
         repoRoot: repo,
-        briefPath: opts.brief,
+        ...(opts.brief ? { briefPath: opts.brief } : { briefText: briefArg as string }),
         model,
         interactive: opts.interactive ?? false,
         ...(continuePrompt ? { onBudgetExhausted: continuePrompt } : {}),

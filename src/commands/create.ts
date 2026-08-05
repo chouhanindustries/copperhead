@@ -6,7 +6,7 @@ import { loadConfig, resolveCompatSettings } from '../config.js';
 import { bootstrapKicadProject } from '../kicad/bootstrap.js';
 import { exportSvg, runErc } from '../kicad/cli.js';
 import { listSymbols } from '../kicad/sexp.js';
-import { isDirty, commitAll, changedFiles } from '../util/git.js';
+import { isDirty, commitAll, changedFiles, commitPaths, ensureGitReady } from '../util/git.js';
 import type { CompatSettings, CopperheadConfig } from '../config.js';
 import { checkDrift } from '../memory/drift.js';
 import { runAgentLoop, makeProvider, type BudgetExhaustedStats } from '../agent/loop.js';
@@ -236,7 +236,14 @@ export const STAGES: Stage[] = [
 
 export interface CreateOptions {
   repoRoot: string;
-  briefPath: string;
+  /** Path to the brief markdown. Optional when `briefText` is given. */
+  briefPath?: string;
+  /**
+   * The brief as literal text (`copperhead create "<text>"`). Materialized into
+   * a real file in the repo before the pipeline starts, so text and file mode
+   * share one resumable, hashable artifact. Ignored when `briefPath` is set.
+   */
+  briefText?: string;
   model: string;
   interactive?: boolean;
   /** Forwarded to each stage's run (attended continue-on-exhaustion prompt). */
@@ -245,6 +252,62 @@ export interface CreateOptions {
   renderer?: ProgressRenderer;
   /** Command-level metadata; stage and brief identity are filled in per stage. */
   meta?: Omit<RunMetaInput, 'stage' | 'brief'>;
+}
+
+/** CreateOptions after the brief has been resolved to a file on disk. */
+type ResolvedCreateOptions = CreateOptions & { briefPath: string };
+
+/** Brief filenames written by text mode: brief.md, then brief-2.md, brief-3.md… */
+function briefCandidates(repoRoot: string): string[] {
+  return ['brief.md', ...Array.from({ length: 98 }, (_, i) => `brief-${i + 2}.md`)].map((n) =>
+    path.join(repoRoot, n),
+  );
+}
+
+/**
+ * Turn `copperhead create "<text>"` into the same artifact `--brief <file>`
+ * gives the pipeline: a real markdown file in the repo. The file is what makes
+ * a run resumable (the printed resume command points at it) and hashable (the
+ * per-stage brief sha256), so text mode materializes one rather than carrying
+ * the string in memory.
+ *
+ * Never overwrites: an existing brief with identical content is reused (so
+ * re-running the same one-liner resumes instead of littering), otherwise the
+ * next free numbered name is used.
+ */
+async function materializeBriefText(repoRoot: string, text: string): Promise<string> {
+  const body = text.trim();
+  if (!body) throw new Error('the brief is empty; pass some text or use --brief <file>');
+  const content = `${body}\n`;
+  for (const candidate of briefCandidates(repoRoot)) {
+    if (!existsSync(candidate)) {
+      await mkdir(path.dirname(candidate), { recursive: true });
+      await writeFile(candidate, content, 'utf8');
+      return candidate;
+    }
+    if ((await readFile(candidate, 'utf8')) === content) return candidate;
+  }
+  throw new Error('too many brief files in this directory; pass --brief <file> to name one explicitly');
+}
+
+/**
+ * Resolve the run's brief to a path on disk. `--brief <file>` wins; a positional
+ * argument that names an existing file is treated as that file (so both
+ * `create brief.md` and `create --brief brief.md` work), and anything else is
+ * the brief text itself.
+ */
+export async function resolveBriefPath(opts: CreateOptions): Promise<string> {
+  if (opts.briefPath) {
+    const p = path.resolve(opts.repoRoot, opts.briefPath);
+    if (!existsSync(p)) throw new Error(`brief not found: ${opts.briefPath}`);
+    return p;
+  }
+  if (opts.briefText === undefined) {
+    throw new Error('no brief given; pass the brief as text (copperhead create "…") or --brief <file>');
+  }
+  const asPath = path.resolve(opts.repoRoot, opts.briefText.trim());
+  if (/\.(md|markdown|txt)$/i.test(opts.briefText.trim()) && existsSync(asPath)) return asPath;
+  return materializeBriefText(opts.repoRoot, opts.briefText);
 }
 
 /**
@@ -425,7 +488,7 @@ function shellQuote(s: string): string {
 
 /** The single command that resumes this pipeline, reconstructed from the run's
  *  own options so the operator never has to remember the flags (5.3). */
-function resumeCommand(opts: CreateOptions): string {
+function resumeCommand(opts: ResolvedCreateOptions): string {
   const parts = ['copperhead'];
   const repo = path.resolve(opts.repoRoot);
   if (repo !== process.cwd()) parts.push('--repo', shellQuote(repo));
@@ -442,7 +505,7 @@ function resumeCommand(opts: CreateOptions): string {
  * completion is inferred from repo state, so resuming is just re-running the
  * same command — the earlier completed stages are skipped automatically.
  */
-function logResumePoint(opts: CreateOptions, stage: Stage, index: number): void {
+function logResumePoint(opts: ResolvedCreateOptions, stage: Stage, index: number): void {
   opts.log('');
   opts.log(
     warn(`⏸  stopped at stage ${index + 1}/${STAGES.length} (${stage.name}). To resume from here, run:`),
@@ -639,19 +702,59 @@ async function writeRunReport(opts: CreateOptions, stageCosts: StageCost[]): Pro
   }
 }
 
-export async function runCreate(opts: CreateOptions): Promise<{ ok: boolean; completed: string[] }> {
-  const brief = await readFile(path.resolve(opts.briefPath), 'utf8');
-  // Hashed from the content already in hand: a brief edited mid-pipeline shows
-  // up as a different sha256 in the next stage's metadata (AC-8.1).
-  const briefMeta = { path: opts.briefPath, sha256: createHash('sha256').update(brief).digest('hex') };
-  const config = await loadConfig(opts.repoRoot);
+/**
+ * Put the repo into the state the pipeline needs instead of refusing over it.
+ * `create` is typically a new user's first command, run in a fresh directory:
+ * making them run git init + commit by hand after a rejected run is friction
+ * with no upside, since the pipeline's own commits give them the history
+ * anyway. `do` and `sync` keep the strict gitPreflight — those edit a repo the
+ * user already owns, where an implicit initial commit would be a surprise.
+ *
+ * The brief itself is committed too: a stage rollback is `git reset --hard` +
+ * `git clean -fd`, which would otherwise delete the untracked file the printed
+ * resume command points at.
+ */
+async function prepareGit(opts: ResolvedCreateOptions, briefPath: string): Promise<void> {
+  const setup = await ensureGitReady(opts.repoRoot);
+  if (setup.initialized) {
+    opts.log(stageLine('setup', 'initialized a git repository (each stage snapshots HEAD so a failure can roll back)', 'ok'));
+  }
+  if (setup.identityConfigured) {
+    opts.log(
+      stageLine('setup', 'set a repo-local git identity: copperhead <copperhead@localhost> (change it with git config user.name)', 'ok'),
+    );
+  }
+  if (setup.committed) {
+    opts.log(stageLine('setup', 'created the initial commit, the rollback anchor for stage 1', 'ok'));
+    return; // the initial commit already contains the brief
+  }
+  const rel = path.relative(opts.repoRoot, briefPath);
+  if (!rel || rel.startsWith('..') || path.isAbsolute(rel)) return; // brief lives outside the repo
+  try {
+    const sha = await commitPaths(opts.repoRoot, [rel], 'chore: add product brief');
+    if (sha) opts.log(stageLine('setup', `committed ${rel} so a stage rollback cannot delete it`, 'ok'));
+  } catch (err) {
+    // e.g. the brief is gitignored. Not worth failing a run over.
+    opts.log(stageLine('setup', `could not commit ${rel} (${(err as Error).message})`, 'warn'));
+  }
+}
+
+export async function runCreate(input: CreateOptions): Promise<{ ok: boolean; completed: string[] }> {
   // Fail fast on a nearly-full disk (4.1): a create run writes fab outputs and
   // KiCad local history and can otherwise fill the disk mid-stage, failing with
   // an opaque ENOSPC only after doing expensive work. Threshold overridable via
   // COPPERHEAD_MIN_FREE_MB; an unknown reading (unsupported platform) skips it.
   const minFreeMb = Number(process.env.COPPERHEAD_MIN_FREE_MB);
   const minFree = Number.isFinite(minFreeMb) && minFreeMb >= 0 ? minFreeMb * 1024 * 1024 : DEFAULT_MIN_FREE_BYTES;
-  await assertDiskSpace(opts.repoRoot, minFree);
+  await assertDiskSpace(input.repoRoot, minFree);
+  const briefPath = await resolveBriefPath(input);
+  const opts: ResolvedCreateOptions = { ...input, briefPath };
+  const brief = await readFile(briefPath, 'utf8');
+  // Hashed from the content already in hand: a brief edited mid-pipeline shows
+  // up as a different sha256 in the next stage's metadata (AC-8.1).
+  const briefMeta = { path: briefPath, sha256: createHash('sha256').update(brief).digest('hex') };
+  await prepareGit(opts, briefPath);
+  const config = await loadConfig(opts.repoRoot);
   // Reclaim scratch dirs leaked by earlier runs whose cleanup was skipped (a
   // watchdog SIGKILL or hard abort bypasses the per-call `finally`). Age-gated,
   // so a concurrent run's fresh dirs are never touched; best-effort, so it never
