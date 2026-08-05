@@ -100,11 +100,11 @@ export const STAGES: Stage[] = [
       const nextSection = afterHeadingLine.search(/^#{1,2}\s/m);
       const section = nextSection >= 0 ? afterHeadingLine.slice(0, nextSection) : afterHeadingLine;
       const cleanSection = section;
-     const budgetLine = /^\s*(?:(?:[-*]|\d+\.)\s*)?[A-Za-z][A-Za-z0-9_-]*\s*:\s*\S+/m;
+      const budgetLine = /^\s*(?:(?:[-*]|\d+\.)\s*)?[A-Za-z][A-Za-z0-9_-]*\s*:\s*\S+/m;
       return budgetLine.test(cleanSection);
     },
        prompt: (brief) =>
-         `Stage 1 of the create pipeline: seed the requirements. From the product brief below, populate docs/SPEC.md (what the device is, top-level constraints and budgets). List each budget under the ## Budgets heading as a plain "- name: value" line. If docs/SPEC.md already exists (for example after copperhead init created the scaffold), update it with edit_file instead of write_file. Use write_file only if docs/SPEC.md does not yet exist. Every budget you state must also be recorded with record_constraint. Anything the brief does not state: propose a sensible default and flag it ASSUMED. If an openspec/ workspace exists, also seed openspec/specs/ with per-capability requirements using Given/When/Then scenarios.\n\nBrief:\n${brief}`,
+        `Stage 1 of the create pipeline: seed the requirements. From the product brief below, populate docs/SPEC.md (what the device is, top-level constraints and budgets). List each budget under the ## Budgets heading as a plain "- name: value" line. If docs/SPEC.md already exists (for example after copperhead init created the scaffold), update it with edit_file instead of write_file. Use write_file only if docs/SPEC.md does not yet exist. Every budget you state must also be recorded with record_constraint. Anything the brief does not state: propose a sensible default and flag it ASSUMED. If an openspec/ workspace exists, also seed openspec/specs/ with per-capability requirements using Given/When/Then scenarios.\n\nBrief:\n${brief}`,
   },
   {
     name: 'architecture',

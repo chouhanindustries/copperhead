@@ -110,8 +110,8 @@ describe('spec-seed isComplete', () => {
       await mkdir(path.join(root, DOCS), { recursive: true });
 
       await writeFile(
-    path.join(root, DOCS, 'SPEC.md'),
-    `# My Project
+        path.join(root, DOCS, 'SPEC.md'),
+        `# My Project
 
 ## Budgets
 
