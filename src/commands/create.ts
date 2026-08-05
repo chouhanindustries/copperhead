@@ -55,6 +55,32 @@ async function docHasHeading(repoRoot: string, rel: string, word: string): Promi
   return re.test(await readFile(p, 'utf8'));
 }
 
+export async function writeBriefHash(
+  repoRoot: string,
+  docsDir: string,
+  briefMeta: { path: string; sha256: string },
+): Promise<void> {
+  const file = path.join(repoRoot, docsDir, 'BRIEF.sha256');
+
+  await mkdir(path.dirname(file), { recursive: true });
+
+  try {
+    await writeFile(
+      file,
+      `brief: ${briefMeta.path}
+sha256: ${briefMeta.sha256}
+`,
+      {
+        encoding: 'utf8',
+        flag: 'wx',
+      },
+    );
+  } catch (err) {
+    const e = err as NodeJS.ErrnoException;
+    if (e.code !== 'EEXIST') throw err;
+  }
+}
+
 /**
  * Returns true when a directory exists and contains at least one file
  * matching the optional glob-style extension list (case-insensitive).
@@ -643,7 +669,16 @@ export async function runCreate(opts: CreateOptions): Promise<{ ok: boolean; com
   const brief = await readFile(path.resolve(opts.briefPath), 'utf8');
   // Hashed from the content already in hand: a brief edited mid-pipeline shows
   // up as a different sha256 in the next stage's metadata (AC-8.1).
-  const briefMeta = { path: opts.briefPath, sha256: createHash('sha256').update(brief).digest('hex') };
+  const resolvedBrief = path.resolve(opts.briefPath);
+  const relativeBrief = path.relative(opts.repoRoot, resolvedBrief);
+  const briefPath =
+    relativeBrief.startsWith('..') || path.isAbsolute(relativeBrief)
+      ? `external:${path.basename(resolvedBrief)}`
+      : relativeBrief;
+  const briefMeta = {
+    path: briefPath,
+    sha256: createHash('sha256').update(brief).digest('hex'),
+  };
   const config = await loadConfig(opts.repoRoot);
   // Fail fast on a nearly-full disk (4.1): a create run writes fab outputs and
   // KiCad local history and can otherwise fill the disk mid-stage, failing with
@@ -682,6 +717,15 @@ export async function runCreate(opts: CreateOptions): Promise<{ ok: boolean; com
       opts.log(stageLine(stage.name, 'already complete (resuming past it)', 'ok'));
       await commitResumedStage(opts, config, stage.name);
       completed.push(stage.name);
+      if (stage.name === 'spec-seed') {
+        try {
+          await writeBriefHash(opts.repoRoot, config.docs, briefMeta);
+        } catch (err) {
+          opts.log(
+            `warning: could not record brief provenance (${(err as Error).message})`,
+          );
+        }
+      }
       stageCosts.push({ name: stage.name, resumed: true, wallMs: 0, turns: 0, tokensIn: 0, tokensOut: 0, cacheHits: 0 });
       await emitJlcpcbAfterOutputs(stage.name, opts);
       continue;
@@ -818,6 +862,15 @@ export async function runCreate(opts: CreateOptions): Promise<{ ok: boolean; com
       return { ok: false, completed };
     }
     completed.push(stage.name);
+    if (stage.name === 'spec-seed') {
+      try {
+        await writeBriefHash(opts.repoRoot, config.docs, briefMeta);
+      } catch (err) {
+        opts.log(
+          `warning: could not record brief provenance (${(err as Error).message})`,
+        );
+      }
+    }
     await renderStageArtifacts(opts, stage.name, stageTranscriptDir);
     await emitJlcpcbAfterOutputs(stage.name, opts);
     logCumulative(opts, stageCosts);
