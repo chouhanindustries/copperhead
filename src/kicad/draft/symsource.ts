@@ -2,7 +2,7 @@ import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { parseSexp, children, child, isList, type SexpNode, type Bounds } from '../sexp.js';
-import { symbolSearchDirs, findLibraryFile } from '../symlib.js';
+import { symbolSearchDirs, findLibraryFile, findSymbolAcrossLibraries } from '../symlib.js';
 import { EMIT_VERSION, renameSymbolBlock } from '../emit.js';
 
 /**
@@ -186,7 +186,7 @@ function appendToVendorLib(libText: string, block: string): string {
 export class SymbolResolutionError extends Error {
   constructor(
     public readonly libId: string,
-    public readonly reason: 'no-library' | 'no-symbol' | 'derived-unsupported',
+    public readonly reason: 'no-library' | 'no-symbol' | 'derived-unsupported' | 'found-elsewhere',
     public readonly candidates: string[] = [],
   ) {
     super(
@@ -194,9 +194,26 @@ export class SymbolResolutionError extends Error {
         ? `library for "${libId}" is not installed and not vendored`
         : reason === 'derived-unsupported'
           ? `"${libId}" extends a symbol that cannot be followed (missing base name, or a cycle deeper than ${MAX_EXTENDS_DEPTH} hops); use the base symbol directly`
-          : `"${libId}" does not exist in the library${candidates.length ? ` — closest: ${candidates.join(', ')}` : ''}`,
+          : reason === 'found-elsewhere'
+            ? `"${libId}" is wrong about the library, not the part: use ${candidates.join(' or ')} instead`
+            : `"${libId}" does not exist in the library${candidates.length ? ` — closest: ${candidates.join(', ')}` : ''}`,
     );
   }
+}
+
+/**
+ * A part's library file is guessed wrong more often than the part itself is
+ * misspelled (a chip's stock library nickname is not derivable from its part
+ * number). Before failing outright, check every other stock/vendored library
+ * for this exact part name; an exact hit elsewhere is a stronger signal than
+ * a same-file substring guess, so it takes priority over `candidates`.
+ * Returns corrected `lib_id`s (exact matches first) or an empty array.
+ */
+async function crossLibrarySuggestions(name: string, lib: string, dirs: string[]): Promise<string[]> {
+  const matches = await findSymbolAcrossLibraries(name, dirs, lib);
+  const exact = matches.filter((m) => m.exact).map((m) => `${m.lib}:${name}`);
+  if (exact.length) return exact;
+  return matches.map((m) => `${m.lib}:${name}`);
 }
 
 export class SymbolSource {
@@ -296,13 +313,26 @@ export class SymbolSource {
     if (!block) {
       const dirs = this.searchDirs ?? (await symbolSearchDirs());
       const file = await findLibraryFile(lib, dirs);
-      if (!file) throw new SymbolResolutionError(libId, 'no-library');
+      if (!file) {
+        const elsewhere = await crossLibrarySuggestions(name, lib, dirs);
+        if (elsewhere.length) throw new SymbolResolutionError(libId, 'found-elsewhere', elsewhere);
+        throw new SymbolResolutionError(libId, 'no-library');
+      }
       const libText = await readFile(file, 'utf8');
       block = extractSymbolBlock(libText, name);
       if (!block) {
+        // The guessed library exists and simply lacks this name, so its own
+        // near-matches are the most useful answer and come first: the caller
+        // named the right file and mistyped the part. Only when that file
+        // offers nothing is a different library worth suggesting — and only
+        // an exact hit there, since a cross-library *fuzzy* guess is weaker
+        // evidence than "you were close, in the right file".
         const names = [...libText.matchAll(/^\s*\(symbol\s+"([^"]+)"/gm)].map((m) => m[1]!);
         const q = name.toLowerCase();
         const candidates = names.filter((k) => k.toLowerCase().includes(q) || q.includes(k.toLowerCase())).slice(0, 8);
+        if (candidates.length) throw new SymbolResolutionError(libId, 'no-symbol', candidates);
+        const elsewhere = await crossLibrarySuggestions(name, lib, dirs);
+        if (elsewhere.length) throw new SymbolResolutionError(libId, 'found-elsewhere', elsewhere);
         throw new SymbolResolutionError(libId, 'no-symbol', candidates);
       }
       fromInstalled = true;
