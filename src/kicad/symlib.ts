@@ -56,7 +56,9 @@ export async function symbolSearchDirs(env = process.env): Promise<string[]> {
     '/usr/share/kicad/symbols',
     '/usr/local/share/kicad/symbols',
     '/Applications/KiCad/KiCad.app/Contents/SharedSupport/symbols',
-    'C:/Program Files/KiCad/share/kicad/symbols',
+    // Windows installs under a version-numbered directory
+    // (C:\Program Files\KiCad\10.0\...), unlike Linux/macOS, so there is no
+    // single fixed path here. Discovered below instead.
   ];
   const out: string[] = [];
   for (const dir of [...fromEnv, ...defaults]) {
@@ -66,6 +68,34 @@ export async function symbolSearchDirs(env = process.env): Promise<string[]> {
     } catch {
       // not present on this machine; skip
     }
+  }
+  // Windows: KiCad's own installer picks the version directory
+  // (`10.0`, `9.0`, `8.0`, ...), so no fixed path is ever correct. List
+  // `C:\Program Files\KiCad` and check each version folder instead. Sorted
+  // descending so a machine with more than one version prefers the newest.
+  // Skipped entirely when an env override is set: "env overrides win" means
+  // exactly that, not "env overrides win, plus whatever else this discovers"
+  // — a caller pointing KICAD_SYMBOL_DIR at an isolated directory (tests, a
+  // pinned library set) must get only that directory back.
+  const kicadRoot = 'C:/Program Files/KiCad';
+  try {
+    if (fromEnv.length > 0) throw new Error('env override present; skip Windows auto-discovery');
+    const entries = await readdir(kicadRoot, { withFileTypes: true });
+    const versions = entries
+      .filter((e) => e.isDirectory())
+      .map((e) => e.name)
+      .sort((a, b) => b.localeCompare(a, undefined, { numeric: true }));
+    for (const version of versions) {
+      const dir = `${kicadRoot}/${version}/share/kicad/symbols`;
+      try {
+        await access(dir);
+        if (!out.includes(dir)) out.push(dir);
+      } catch {
+        // this version folder has no symbols dir; skip
+      }
+    }
+  } catch {
+    // C:\Program Files\KiCad doesn't exist on this machine (not Windows, or KiCad not installed here); skip
   }
   return out;
 }
@@ -82,6 +112,127 @@ export async function findLibraryFile(lib: string, dirs: string[]): Promise<stri
     }
   }
   return null;
+}
+
+/** Every `<name>.kicad_sym` file across the search dirs, first occurrence wins per name. */
+async function allLibraryFiles(dirs: string[]): Promise<{ lib: string; file: string }[]> {
+  const seen = new Set<string>();
+  const out: { lib: string; file: string }[] = [];
+  for (const dir of dirs) {
+    let entries: string[];
+    try {
+      entries = await readdir(dir);
+    } catch {
+      continue;
+    }
+    for (const entry of entries) {
+      if (!entry.endsWith('.kicad_sym')) continue;
+      const lib = entry.slice(0, -'.kicad_sym'.length);
+      if (seen.has(lib)) continue;
+      seen.add(lib);
+      out.push({ lib, file: path.join(dir, entry) });
+    }
+  }
+  return out;
+}
+
+export interface CrossLibraryMatch {
+  lib: string;
+  /** true when the part name matched exactly; false for a fuzzy hit. */
+  exact: boolean;
+}
+
+/** Levenshtein edit distance, capped: returns `cap + 1` once the true distance
+ * would exceed `cap`, so a caller doing a cheap "is this close enough" check
+ * never pays for the full O(n·m) table on two names that are obviously
+ * unrelated. */
+function editDistanceWithin(a: string, b: string, cap: number): number {
+  if (Math.abs(a.length - b.length) > cap) return cap + 1;
+  let prev = Array.from({ length: b.length + 1 }, (_, j) => j);
+  for (let i = 1; i <= a.length; i++) {
+    const cur = [i];
+    let rowMin = i;
+    for (let j = 1; j <= b.length; j++) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      const v = Math.min(prev[j]! + 1, cur[j - 1]! + 1, prev[j - 1]! + cost);
+      cur.push(v);
+      if (v < rowMin) rowMin = v;
+    }
+    if (rowMin > cap) return cap + 1; // whole row exceeded cap: no cell can recover
+    prev = cur;
+  }
+  return prev[b.length]!;
+}
+
+/**
+ * A part is unresolvable at its guessed `lib_id`, but the guess itself is often
+ * right about the *part*, just wrong about which stock file it lives in (a
+ * chip's library nickname is not derivable from its part number). Rather than
+ * fail outright, check every other discovered `.kicad_sym` for a symbol with
+ * this exact name; when none matches exactly, fall back to the same
+ * closest-candidate substring heuristic `resolveLibrarySymbol` already uses
+ * within one file, just applied across all of them.
+ *
+ * Returns matches sorted exact-first; the caller decides what "found" means
+ * (one exact hit resolves unambiguously, several means the agent must pick).
+ */
+export async function findSymbolAcrossLibraries(
+  name: string,
+  dirs: string[],
+  excludeLib?: string,
+): Promise<CrossLibraryMatch[]> {
+  const files = await allLibraryFiles(dirs);
+  const q = name.toLowerCase();
+  const exact: CrossLibraryMatch[] = [];
+  const fuzzy: CrossLibraryMatch[] = [];
+  for (const { lib, file } of files) {
+    // `excludeLib` is only known not to hold this *exact* name; it can still
+    // hold the near-miss the caller actually wants (SHT40 guessed in
+    // Sensor_Humidity, where the real symbol is SHT4x). Skip its exact check,
+    // never its fuzzy one.
+    const skipExact = lib === excludeLib;
+    let text: string;
+    try {
+      text = await readFile(file, 'utf8');
+    } catch {
+      continue;
+    }
+    const names = [...text.matchAll(/^\s*\(symbol\s+"([^"]+)"/gm)].map((m) => m[1]!);
+    if (!skipExact && names.includes(name)) {
+      exact.push({ lib, exact: true });
+      continue;
+    }
+    // The "does the query contain the library name" direction is only
+    // meaningful for a reasonably specific name (>= 3 chars): a stock library
+    // is full of single-letter generics ("R", "C", "L", "D", "U", "Q"), and
+    // "does <any part number> contain the letter R" is true for nearly
+    // everything, which would fuzzy-match almost any query against them.
+    const MIN_SHORT_NAME_LEN = 3;
+    // Substring alone misses the most common real near-miss: a datasheet part
+    // number against a library's family name, differing mid-string rather than
+    // at either end (SHT40 vs SHT4x, where `x` stands for "any variant").
+    // Neither contains the other, so only edit distance catches it. Kept tight
+    // (1 edit, and only for names long enough that one edit is still
+    // distinctive) so TPS22860 does not silently match TPS22810 — a different
+    // real part, which is exactly the wrong-part failure this tool must not
+    // introduce.
+    const MIN_EDIT_MATCH_LEN = 5;
+    if (
+      names.some((n) => {
+        const lower = n.toLowerCase();
+        if (lower.includes(q)) return true;
+        if (lower.length >= MIN_SHORT_NAME_LEN && q.includes(lower)) return true;
+        return (
+          q.length >= MIN_EDIT_MATCH_LEN &&
+          lower.length >= MIN_EDIT_MATCH_LEN &&
+          editDistanceWithin(q, lower, 1) <= 1
+        );
+      })
+    ) {
+      fuzzy.push({ lib, exact: false });
+    }
+  }
+  return [...exact, ...fuzzy];
 }
 
 /** Collect pins (number, name, electrical type) from a `(symbol …)` node,
@@ -130,10 +281,15 @@ export async function resolveLibrarySymbol(
   | { status: 'ok'; pins: LibPin[] }
   | { status: 'no-symbol'; candidates: string[] }
   | { status: 'no-library' }
+  | { status: 'found-elsewhere'; libIds: string[] }
 > {
   const [lib, name] = libId.includes(':') ? [libId.slice(0, libId.indexOf(':')), libId.slice(libId.indexOf(':') + 1)] : ['', libId];
   const file = await findLibraryFile(lib, dirs);
-  if (!file) return { status: 'no-library' };
+  if (!file) {
+    const elsewhere = await findSymbolAcrossLibraries(name, dirs, lib);
+    if (elsewhere.length) return { status: 'found-elsewhere', libIds: elsewhere.map((m) => `${m.lib}:${name}`) };
+    return { status: 'no-library' };
+  }
   const root = parseSexp(await readFile(file, 'utf8'))[0];
   if (root === undefined || !isList(root)) return { status: 'no-library' };
   const symbols = librarySymbols(root);
@@ -152,7 +308,14 @@ export async function resolveLibrarySymbol(
     current = base;
   }
 
-  // exact name not found: offer near matches (case-insensitive substring both ways)
+  // Not in the guessed file: a genuine exact match elsewhere is a stronger
+  // signal than a same-file substring guess (the file name, not the part
+  // name, was the mistake), so it takes priority.
+  const elsewhere = await findSymbolAcrossLibraries(name, dirs, lib);
+  if (elsewhere.length) return { status: 'found-elsewhere', libIds: elsewhere.map((m) => `${m.lib}:${name}`) };
+
+  // exact name not found anywhere: offer near matches within the guessed file
+  // (case-insensitive substring both ways)
   const q = name.toLowerCase();
   const candidates = [...symbols.keys()]
     .filter((k) => {
@@ -216,6 +379,14 @@ export async function verifySchematicSymbols(
         detail: resolved.candidates.length
           ? `"${entry.libId}" does not exist in the installed library — closest real symbols: ${resolved.candidates.join(', ')}. Use one of these lib_ids (KiCad renames symbols across versions).`
           : `"${entry.libId}" does not exist in the installed library and no close match was found; confirm the lib_id.`,
+      });
+      continue;
+    }
+    if (resolved.status === 'found-elsewhere') {
+      findings.push({
+        libId: entry.libId,
+        kind: 'no-library',
+        detail: `"${entry.libId}" names the wrong library, not the wrong part: use ${resolved.libIds.join(' or ')} instead.`,
       });
       continue;
     }
