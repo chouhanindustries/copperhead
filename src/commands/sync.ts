@@ -35,6 +35,33 @@ export interface SyncReport {
   violations: SyncViolationItem[];
 }
 
+function parseSpecBudgets(spec: string): Map<string, string> {
+  const budgets = new Map<string, string>();
+
+  const heading = spec.match(/^## Budgets\s*$/m);
+  if (!heading || heading.index === undefined) return budgets;
+
+  const afterHeading = spec.slice(heading.index + heading[0].length);
+  const nextHeading = afterHeading.search(/^#{1,2}\s/m);
+  const section = nextHeading >= 0 ? afterHeading.slice(0, nextHeading) : afterHeading;
+
+  const budgetLine =
+    /^\s*-\s*([A-Za-z][A-Za-z0-9_-]*)\s*:\s*(.+?)\s*$/gm;
+
+  let match: RegExpExecArray | null;
+
+  while ((match = budgetLine.exec(section)) !== null) {
+    const key = match[1];
+    const value = match[2];
+
+    if (!key || value === undefined) continue;
+
+    budgets.set(key, value.trim());
+  }
+
+  return budgets;
+}
+
 export async function syncVerify(repoRoot: string): Promise<SyncReport> {
   const config = await loadConfig(repoRoot);
   const resolvable: SyncItem[] = [];
@@ -56,20 +83,77 @@ export async function syncVerify(repoRoot: string): Promise<SyncReport> {
   // every budget in config should exist in the registry
   const registry = await loadConstraints(repoRoot);
   const docsDir = path.join(repoRoot, config.docs);
+  const specPath = path.join(docsDir, 'SPEC.md');
+  const specBudgets = existsSync(specPath)
+    ? parseSpecBudgets(await readFile(specPath, 'utf8'))
+    : new Map<string, string>();
   let docsText = '';
   for (const name of ['SPEC.md', 'BOM.md', 'PINOUT.md', 'SUBSYSTEMS.md', 'LAYOUT.md']) {
     const p = path.join(docsDir, name);
     if (existsSync(p)) docsText += `\n<<<${name}>>>\n` + (await readFile(p, 'utf8'));
   }
-  for (const key of Object.keys(registry)) {
+  for (const [key, constraint] of Object.entries(registry)) {
     const shortKey = key.split('.').pop()!;
+
+    // Constraints documented in SPEC.md are checked deterministically.
+    if (constraint.source.startsWith('docs/SPEC.md')) {
+      if (!specBudgets.has(shortKey)) {
+        resolvable.push({
+          kind: 'dual-write',
+          doc: 'constraints.json',
+          claim: `constraint ${key} exists in registry`,
+          actual: 'missing from SPEC.md budgets',
+          resolution: `add the constraint to the doc named by its source (${constraint.source})`,
+        });
+        continue;
+      }
+
+      const documented = specBudgets.get(shortKey)!;
+      const recorded =
+        constraint.value ??
+        (constraint.max !== undefined ? String(constraint.max) : undefined) ??
+        (constraint.min !== undefined ? String(constraint.min) : undefined);
+
+      if (recorded !== undefined && documented !== recorded) {
+        resolvable.push({
+          kind: 'dual-write',
+          doc: 'constraints.json',
+          claim: `${shortKey}: ${recorded}`,
+          actual: `SPEC.md documents ${documented}`,
+          resolution: `update either SPEC.md or constraints.json so both agree`,
+        });
+      }
+
+      continue;
+    }
+
+    // Existing heuristic for non-SPEC documentation.
     if (docsText && !docsText.includes(shortKey)) {
       resolvable.push({
         kind: 'dual-write',
         doc: 'constraints.json',
         claim: `constraint ${key} exists in registry`,
         actual: 'no doc mentions it',
-        resolution: `add the constraint to the doc named by its source (${registry[key]!.source})`,
+        resolution: `add the constraint to the doc named by its source (${constraint.source})`,
+      });
+    }
+  }
+  const registryByShortKey = new Map(
+    Object.entries(registry).map(([key, constraint]) => [
+      key.split('.').pop()!,
+      { key, constraint },
+    ]),
+  );
+  for (const [budget, documented] of specBudgets) {
+    const entry = registryByShortKey.get(budget);
+
+    if (!entry) {
+      resolvable.push({
+        kind: 'dual-write',
+        doc: 'SPEC.md',
+        claim: `budget ${budget}: ${documented}`,
+        actual: 'missing from constraints.json',
+        resolution: 'record_constraint with the documented value and source',
       });
     }
   }

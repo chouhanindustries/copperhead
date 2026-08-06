@@ -385,4 +385,157 @@ describe('copperhead sync verify phase (AC-7)', () => {
       await cleanup();
     }
   });
+
+  it('reports SPEC-backed registry constraints missing from SPEC budgets', async () => {
+    const { repo, cleanup } = await tempFixtureRepo();
+
+    try {
+      await runInit({ repoRoot: repo });
+
+      await saveConstraint(repo, 'power.sleep_current_uA', {
+        max: 25,
+        source: 'docs/SPEC.md#budgets',
+        affects: [],
+      });
+
+      const specPath = path.join(repo, 'docs', 'SPEC.md');
+
+      await writeFile(
+        specPath,
+        `# Test
+
+## Budgets
+
+- peak_current_mA: 500
+ `,
+        'utf8',
+      );
+
+      const report = await syncVerify(repo);
+
+      expect(
+        report.resolvable.some(
+          (i) =>
+            i.kind === 'dual-write' &&
+            i.doc === 'constraints.json' &&
+            i.actual === 'missing from SPEC.md budgets',
+        ),
+      ).toBe(true);
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it('reports SPEC budgets missing from the constraint registry', async () => {
+    const { repo, cleanup } = await tempFixtureRepo();
+
+    try {
+      await runInit({ repoRoot: repo });
+
+      const specPath = path.join(repo, 'docs', 'SPEC.md');
+
+      await writeFile(
+        specPath,
+        `# Test
+
+## Budgets
+
+- sleep_current_uA: 25
+`,
+        'utf8',
+      );
+
+      const report = await syncVerify(repo);
+
+      expect(
+        report.resolvable.some(
+          (i) =>
+            i.kind === 'dual-write' &&
+            i.doc === 'SPEC.md' &&
+            i.actual === 'missing from constraints.json',
+        ),
+      ).toBe(true);
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it('does not report dual-write drift when SPEC budgets match the constraint registry', async () => {
+    const { repo, cleanup } = await tempFixtureRepo();
+
+    try {
+      await runInit({ repoRoot: repo });
+
+      await saveConstraint(repo, 'power.sleep_current_uA', {
+        max: 25,
+        source: 'docs/SPEC.md#budgets',
+        affects: [],
+      });
+
+      const specPath = path.join(repo, 'docs', 'SPEC.md');
+
+      await writeFile(
+        specPath,
+        `# Test
+
+## Budgets
+
+- sleep_current_uA: 25
+`,
+        'utf8',
+      );
+
+      const report = await syncVerify(repo);
+
+      expect(
+        report.resolvable.some(
+          (i) =>
+            i.kind === 'dual-write' &&
+            i.claim.includes('sleep_current_uA'),
+        ),
+      ).toBe(false);
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it('reports value mismatches between SPEC budgets and the constraint registry', async () => {
+    const { repo, cleanup } = await tempFixtureRepo();
+
+    try {
+      await runInit({ repoRoot: repo });
+
+      await saveConstraint(repo, 'power.sleep_current_uA', {
+        max: 25,
+        source: 'docs/SPEC.md#budgets',
+        affects: [],
+      });
+
+      const specPath = path.join(repo, 'docs', 'SPEC.md');
+
+      await writeFile(
+        specPath,
+        `# Test
+
+## Budgets
+
+- sleep_current_uA: 30
+`,
+        'utf8',
+      );
+
+      const report = await syncVerify(repo);
+
+      expect(
+        report.resolvable.some(
+          (i) =>
+            i.kind === 'dual-write' &&
+            i.claim === 'sleep_current_uA: 25' &&
+            i.actual === 'SPEC.md documents 30',
+        ),
+      ).toBe(true);
+    } finally {
+      await cleanup();
+    }
+  });
 });
