@@ -538,4 +538,82 @@ describe('copperhead sync verify phase (AC-7)', () => {
       await cleanup();
     }
   });
+
+  it('ignores explanatory text after SPEC budget values', async () => {
+    const { repo, cleanup } = await tempFixtureRepo();
+
+    try {
+      await runInit({ repoRoot: repo });
+
+      await saveConstraint(repo, 'power.sleep_current_uA', {
+        max: 25,
+        source: 'docs/SPEC.md#budgets',
+        affects: [],
+      });
+
+      const specPath = path.join(repo, 'docs', 'SPEC.md');
+
+      await writeFile(
+        specPath,
+        `# Test
+
+## Budgets
+
+- sleep_current_uA: 25 (hard budget; 3.3 V rail; every leakage path counts)
+`,
+        'utf8',
+      );
+
+      const report = await syncVerify(repo);
+
+      expect(
+        report.resolvable.some(
+          (i) =>
+            i.kind === 'dual-write' &&
+            i.claim.includes('sleep_current_uA'),
+        ),
+      ).toBe(false);
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it('treats numeric constraint values the same as documented budget values', async () => {
+    const { repo, cleanup } = await tempFixtureRepo();
+
+    try {
+      await runInit({ repoRoot: repo });
+
+      await saveConstraint(repo, 'power.sleep_current_uA', {
+        value: 25,
+        source: 'docs/SPEC.md#budgets',
+        affects: [],
+      });
+
+      const specPath = path.join(repo, 'docs', 'SPEC.md');
+
+      await writeFile(
+        specPath,
+        `# Test
+
+## Budgets
+
+- sleep_current_uA: 25
+`,
+        'utf8',
+      );
+
+      const report = await syncVerify(repo);
+
+      expect(
+        report.resolvable.some(
+          (i) =>
+            i.kind === 'dual-write' &&
+            i.claim.includes('sleep_current_uA'),
+        ),
+      ).toBe(false);
+    } finally {
+      await cleanup();
+    }
+  });
 });

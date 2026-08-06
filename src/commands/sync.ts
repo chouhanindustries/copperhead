@@ -56,7 +56,10 @@ function parseSpecBudgets(spec: string): Map<string, string> {
 
     if (!key || value === undefined) continue;
 
-    budgets.set(key, value.trim());
+    // Keep only the canonical value before any explanatory prose.
+    const canonical = value.replace(/\s*\(.*$/, '').trim();
+
+    budgets.set(key, canonical);
   }
 
   return budgets;
@@ -110,9 +113,13 @@ export async function syncVerify(repoRoot: string): Promise<SyncReport> {
 
       const documented = specBudgets.get(shortKey)!;
       const recorded =
-        constraint.value ??
-        (constraint.max !== undefined ? String(constraint.max) : undefined) ??
-        (constraint.min !== undefined ? String(constraint.min) : undefined);
+        constraint.value !== undefined
+          ? String(constraint.value)
+          : constraint.max !== undefined
+            ? String(constraint.max)
+            : constraint.min !== undefined
+              ? String(constraint.min)
+              : undefined;
 
       if (recorded !== undefined && documented !== recorded) {
         resolvable.push({
