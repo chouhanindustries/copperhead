@@ -252,4 +252,29 @@ describe('sexp parser', () => {
 
     await fs.rm(tmpDir, { recursive: true, force: true });
   });
+
+  it('falls back to legacy fp_text value independently when only the modern Reference property is present', async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'copperhead-test-'));
+    const mixedPcbPath = path.join(tmpDir, 'mixed.kicad_pcb');
+
+    const mixedContent = `
+      (kicad_pcb (version 20240101)
+        (footprint "Regulator:SOT-23" (at 30 40 0) (layer "F.Cu")
+          (property "Reference" "U5")
+          (fp_text value "5V_REG")
+        )
+      )
+    `;
+
+    await fs.writeFile(mixedPcbPath, mixedContent, 'utf8');
+
+    const footprints = await listBoardFootprints(mixedPcbPath);
+    expect(footprints.length).toBe(1);
+
+    const fp = footprints[0]!;
+    expect(fp.ref).toBe('U5');
+    expect(fp.value).toBe('5V_REG');
+
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  });
 });
