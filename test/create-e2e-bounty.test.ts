@@ -362,7 +362,7 @@ describe('create pipeline bounty coverage', () => {
     }
   });
 
-  it('rejects a false-green schematic and keeps only the verified earlier commits', async () => {
+  it('rejects an ERC-failing schematic even when symbols and docs look complete', async () => {
     const { repo, cleanup } = await tempCreateRepo();
     try {
       const startHead = await gitHead(repo);
@@ -373,6 +373,11 @@ describe('create pipeline bounty coverage', () => {
         if (['spec-seed', 'architecture', 'part-selection'].includes(stageName)) {
           await writeStageArtifacts(opts.repoRoot, stageName);
           await commitRepo(opts.repoRoot, `copperhead: create stage ${stageName}`);
+        } else if (stageName === 'schematic') {
+          await writeStageArtifacts(opts.repoRoot, stageName);
+          const config = await loadConfig(opts.repoRoot);
+          if (!config.schematic) throw new Error('schematic path missing after bootstrap');
+          await appendUnique(path.join(opts.repoRoot, config.schematic), 'FORCE_ERC_FAIL');
         }
         return okResult(await stageRunDir(opts.repoRoot, stageName, 1));
       });
@@ -392,6 +397,7 @@ describe('create pipeline bounty coverage', () => {
       expect(commits).toHaveLength(3);
       const status = await gitStatus(repo);
       expect(status).toContain('usb-c-power-breakout.kicad_sch');
+      expect(status).toContain('docs/PINOUT.md');
       expect(status).not.toContain('docs/SPEC.md');
       expect(status).not.toContain('docs/SUBSYSTEMS.md');
       expect(status).not.toContain('docs/BOM.md');
@@ -400,11 +406,46 @@ describe('create pipeline bounty coverage', () => {
     }
   });
 
-  it('stops before the final stage, reports the resume command, and leaves the last good stage committed', async () => {
+  it('returns a failed overall result when final DRC-style verification fails', async () => {
     const { repo, cleanup } = await tempCreateRepo();
     try {
       const startHead = await gitHead(repo);
-      const logs: string[] = [];
+
+      mockRunAgentLoop.mockImplementation(async (opts) => {
+        const stageName = stageNameFromRequest(opts.request);
+        await writeStageArtifacts(opts.repoRoot, stageName);
+        await commitRepo(opts.repoRoot, `copperhead: create stage ${stageName}`);
+        return okResult(await stageRunDir(opts.repoRoot, stageName, 1));
+      });
+      mockRunCheck.mockResolvedValueOnce({
+        ok: false,
+        errors: [{ source: 'drc', message: 'mock DRC failure' }],
+      });
+
+      const res = await runCreate({
+        repoRoot: repo,
+        briefPath: path.join(repo, 'brief.md'),
+        model: 'gpt-5',
+        log: () => {},
+      });
+
+      expect(res.ok).toBe(false);
+      expect(res.completed).toEqual(STAGE_NAMES);
+      expect(await gitStatus(repo)).toBe('');
+
+      const commits = await gitNewCommitSubjects(repo, startHead);
+      expect(commits).toHaveLength(STAGE_NAMES.length);
+      expect(commits.some((subject) => subject.includes('devplan'))).toBe(true);
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it('stops before the final stage, reports the resume command, and resumes by running only devplan', async () => {
+    const { repo, cleanup } = await tempCreateRepo();
+    try {
+      const startHead = await gitHead(repo);
+      const firstLogs: string[] = [];
 
       mockRunAgentLoop.mockImplementation(async (opts) => {
         const stageName = stageNameFromRequest(opts.request);
@@ -415,22 +456,50 @@ describe('create pipeline bounty coverage', () => {
         return okResult(await stageRunDir(opts.repoRoot, stageName, 1));
       });
 
-      const res = await runCreate({
+      const first = await runCreate({
         repoRoot: repo,
         briefPath: path.join(repo, 'brief.md'),
         model: 'gpt-5',
-        log: (line) => logs.push(line),
+        log: (line) => firstLogs.push(line),
       });
 
-      expect(res.ok).toBe(false);
-      expect(res.completed).toEqual(STAGE_NAMES.slice(0, -1));
-      const output = logs.join('\n');
+      expect(first.ok).toBe(false);
+      expect(first.completed).toEqual(STAGE_NAMES.slice(0, -1));
+      const output = firstLogs.join('\n');
       expect(output).toContain('To resume from here, run:');
       expect(output).toContain('create --brief');
       expect(output).toContain('devplan');
 
+      const preResumeCommits = await gitNewCommitSubjects(repo, startHead);
+      expect(preResumeCommits).toHaveLength(7);
+      expect(await gitStatus(repo)).toBe('');
+
+      mockRunAgentLoop.mockReset();
+      const resumeStages: string[] = [];
+      mockRunAgentLoop.mockImplementation(async (opts) => {
+        const stageName = stageNameFromRequest(opts.request);
+        resumeStages.push(stageName);
+        await writeStageArtifacts(opts.repoRoot, stageName);
+        await commitRepo(opts.repoRoot, `copperhead: create stage ${stageName}`);
+        return okResult(await stageRunDir(opts.repoRoot, stageName, 1));
+      });
+
+      const resumeLogs: string[] = [];
+      const resumed = await runCreate({
+        repoRoot: repo,
+        briefPath: path.join(repo, 'brief.md'),
+        model: 'gpt-5',
+        log: (line) => resumeLogs.push(line),
+      });
+
+      expect(resumed.ok).toBe(true);
+      expect(resumed.completed).toEqual(STAGE_NAMES);
+      expect(resumeStages).toEqual(['devplan']);
+      expect(resumeLogs.join('\n')).toContain('already complete (resuming past it)');
+
       const commits = await gitNewCommitSubjects(repo, startHead);
-      expect(commits).toHaveLength(7);
+      expect(commits).toHaveLength(STAGE_NAMES.length);
+      expect(commits[0]).toContain('devplan');
       expect(await gitStatus(repo)).toBe('');
     } finally {
       await cleanup();
