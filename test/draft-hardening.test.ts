@@ -637,4 +637,53 @@ describe('draft orchestration error paths', () => {
       await rm(repo, { recursive: true, force: true });
     }
   });
+
+  // Regression for a review finding on #186: a fuzzy cross-library suggestion
+  // was built from the caller's original (wrong) query name, not the symbol
+  // that actually matched, so re-resolving the "fix" it offered failed again
+  // with the identical error (SHT40 guessed in the wrong library; the real
+  // symbol two directories over is spelled SHT4x, not SHT40).
+  it('a fuzzy cross-library suggestion names the real symbol, and resolves', async () => {
+    const repo = await mkdtemp(path.join(tmpdir(), 'copperhead-fuzzy-elsewhere-'));
+    const libDir = await mkdtemp(path.join(tmpdir(), 'copperhead-fuzzy-libs-'));
+    try {
+      await writeFile(
+        path.join(libDir, 'Sensor_Wrong.kicad_sym'),
+        `(kicad_symbol_lib (version 20251024) (generator test)\n  (symbol "Unrelated" (pin_numbers hide) (pin_names (offset 0))))`,
+        'utf8',
+      );
+      await writeFile(
+        path.join(libDir, 'Sensor_Humidity.kicad_sym'),
+        `(kicad_symbol_lib (version 20251024) (generator test)
+  (symbol "SHT4x" (pin_numbers hide) (pin_names (offset 0))
+    (symbol "SHT4x_1_1"
+      (pin passive line (at 0 3.81 270) (length 1.27) (name "~") (number "1"))
+      (pin passive line (at 0 -3.81 90) (length 1.27) (name "~") (number "2"))
+    )
+  )
+)`,
+        'utf8',
+      );
+      const src = new SymbolSource(repo, [libDir]);
+      let suggested: string | null = null;
+      try {
+        await src.resolve('Sensor_Wrong:SHT40');
+        expect.unreachable('expected resolve to throw');
+      } catch (e) {
+        expect(e).toBeInstanceOf(SymbolResolutionError);
+        const err = e as SymbolResolutionError;
+        expect(err.reason).toBe('found-elsewhere');
+        suggested = err.candidates[0]!;
+        // The bug this guards: reconstructing from the query would produce
+        // "Sensor_Humidity:SHT40", which does not exist anywhere.
+        expect(suggested).toBe('Sensor_Humidity:SHT4x');
+      }
+      const resolved = await src.resolve(suggested!);
+      expect(resolved.libId).toBe('Sensor_Humidity:SHT4x');
+      expect(resolved.pins).toHaveLength(2);
+    } finally {
+      await rm(repo, { recursive: true, force: true });
+      await rm(libDir, { recursive: true, force: true });
+    }
+  });
 });
