@@ -19,6 +19,13 @@ export interface CheckResult {
   drift: { ok: boolean; mismatches: DriftMismatch[]; warning?: string };
   openspec: { ok: boolean; detail: string } | null;
   constraints: { ok: boolean; violations: ConstraintViolation[] };
+  /**
+   * The configured schematic path, when it is configured but absent from disk.
+   * A repo with no schematic configured has genuinely nothing to verify and
+   * stays green; a repo that was configured to be checked and quietly stopped
+   * being checked is a different thing, and must not read as a pass.
+   */
+  schematicMissing: string | null;
 }
 
 export async function runCheck(repoRoot: string, log: (s: string) => void): Promise<CheckResult> {
@@ -26,9 +33,19 @@ export async function runCheck(repoRoot: string, log: (s: string) => void): Prom
   let erc: CheckReport | null = null;
   let drc: CheckReport | null = null;
 
-  if (config.schematic && existsSync(path.join(repoRoot, config.schematic))) {
-    erc = await runErc(path.join(repoRoot, config.schematic));
+  // ERC, drift and the constraint check all gate on this one condition, so it
+  // is resolved once rather than re-tested three times with the same bug.
+  const schematicPath = config.schematic ? path.join(repoRoot, config.schematic) : null;
+  const schematicUsable = schematicPath !== null && existsSync(schematicPath);
+  const schematicMissing = config.schematic && !schematicUsable ? config.schematic : null;
+
+  if (schematicUsable) {
+    erc = await runErc(schematicPath);
     log(erc.ok ? 'ERC ✓' : formatViolations(erc));
+  } else if (schematicMissing) {
+    // `copperhead init` is the wrong remedy here: the config is fine, the file
+    // it points at is not. Say which path, so a typo or a rename is obvious.
+    log(`ERC skipped: schematic configured at ${schematicMissing} but the file is missing`);
   } else {
     log('ERC skipped (no schematic configured; run copperhead init)');
   }
@@ -42,7 +59,7 @@ export async function runCheck(repoRoot: string, log: (s: string) => void): Prom
 
   let drift: DriftMismatch[] = [];
   let driftWarning: string | null = null;
-  if (config.schematic && existsSync(path.join(repoRoot, config.schematic))) {
+  if (schematicUsable && config.schematic) {
     drift = await checkDrift(repoRoot, config.docs, config.schematic);
     log(drift.length === 0 ? 'drift ✓' : drift.map((m) => `drift: ${m.doc} claims "${m.claim}" but actual is "${m.actual}"`).join('\n'));
     // Informational, never a failure: the zero-symbol drift exemption is for
@@ -60,9 +77,9 @@ export async function runCheck(repoRoot: string, log: (s: string) => void): Prom
   }
 
   let constraintViolations: ConstraintViolation[] = [];
-  if (config.schematic && existsSync(path.join(repoRoot, config.schematic))) {
+  if (schematicUsable) {
     const registry = await loadConstraints(repoRoot);
-    const pins = await pinNets(path.join(repoRoot, config.schematic));
+    const pins = await pinNets(schematicPath);
     constraintViolations = checkForbiddenPins(registry, pins);
     if (Object.keys(registry).length) {
       log(
@@ -73,7 +90,11 @@ export async function runCheck(repoRoot: string, log: (s: string) => void): Prom
     }
   }
 
+  // `?? true` is right for a check that had nothing to run, but it cannot tell
+  // "nothing to verify" from "everything to verify, silently skipped", so the
+  // missing-schematic case is failed explicitly rather than defaulted to true.
   const ok =
+    schematicMissing === null &&
     (erc?.ok ?? true) &&
     (drc?.ok ?? true) &&
     drift.length === 0 &&
@@ -87,5 +108,6 @@ export async function runCheck(repoRoot: string, log: (s: string) => void): Prom
     drift: { ok: drift.length === 0, mismatches: drift, ...(driftWarning ? { warning: driftWarning } : {}) },
     openspec,
     constraints: { ok: constraintViolations.length === 0, violations: constraintViolations },
+    schematicMissing,
   };
 }
