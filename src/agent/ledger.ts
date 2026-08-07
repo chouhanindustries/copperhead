@@ -9,7 +9,6 @@ export type ObligationKind =
   | 'drift'
   | 'changelog'
   | 'decision-log'
-  | 'constraint-dual-write'
   | 'affects-revisit';
 
 export interface Obligation {
@@ -54,7 +53,6 @@ export class ObligationsLedger {
   }
 
   onConstraintChange(constraintKey: string, affects: string[]): void {
-    this.add('constraint-dual-write', constraintKey, constraintKey);
     for (const item of affects) {
       this.add('affects-revisit', `${constraintKey} affects ${item}`, constraintKey);
     }
