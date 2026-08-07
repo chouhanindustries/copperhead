@@ -36,12 +36,13 @@ export interface SyncReport {
 }
 
 function parseSpecBudgets(spec: string): Map<string, string> {
+  const withoutComments = spec.replace(/<!--[\s\S]*?-->/g, '');
   const budgets = new Map<string, string>();
 
-  const heading = spec.match(/^## Budgets\s*$/m);
+  const heading = withoutComments.match(/^## Budgets\s*$/m);
   if (!heading || heading.index === undefined) return budgets;
 
-  const afterHeading = spec.slice(heading.index + heading[0].length);
+  const afterHeading = withoutComments.slice(heading.index + heading[0].length);
   const nextHeading = afterHeading.search(/^#{1,2}\s/m);
   const section = nextHeading >= 0 ? afterHeading.slice(0, nextHeading) : afterHeading;
   const withoutCodeBlocks = section.split(/```/).filter((_, i) => i % 2 === 0).join('');
@@ -67,10 +68,19 @@ function isBudgetValue(value: string): boolean {
   return /^\d+(?:\.\d+)?(?:\s*[A-Za-zµμ%/0-9]+)?$/.test(value);
 }
 
-function parseLeadingNumber(value: string): number | null {
-  const match = value.match(/^\d+(?:\.\d+)?/);
+function parseLeadingNumber(
+  value: string,
+): { value: number; unit: string } | null {
+  const match = value.match(
+    /^\s*(\d+(?:\.\d+)?)\s*([A-Za-zµμ%][A-Za-z0-9_\/-]*)?/,
+  );
 
-  return match ? Number(match[0]) : null;
+  if (!match) return null;
+
+  return {
+    value: Number(match[1]),
+    unit: (match[2] ?? '').toLowerCase(),
+  };
 }
 
 export async function syncVerify(repoRoot: string): Promise<SyncReport> {
@@ -98,6 +108,7 @@ export async function syncVerify(repoRoot: string): Promise<SyncReport> {
   const specBudgets = existsSync(specPath)
     ? parseSpecBudgets(await readFile(specPath, 'utf8'))
     : new Map<string, string>();
+  const budgetSource = `${config.docs.replace(/\/?$/, '/')}SPEC.md#budgets`;
   let docsText = '';
   for (const name of ['SPEC.md', 'BOM.md', 'PINOUT.md', 'SUBSYSTEMS.md', 'LAYOUT.md']) {
     const p = path.join(docsDir, name);
@@ -107,7 +118,6 @@ export async function syncVerify(repoRoot: string): Promise<SyncReport> {
     const shortKey = key.split('.').pop()!;
 
     // Constraints documented in SPEC.md are checked deterministically.
-    const budgetSource = `${config.docs.replace(/\/?$/, '/')}SPEC.md#budgets`;
     if (constraint.source.startsWith(budgetSource)) {
       if (!specBudgets.has(shortKey)) {
         resolvable.push({
@@ -136,7 +146,8 @@ export async function syncVerify(repoRoot: string): Promise<SyncReport> {
 
         const matches =
           documentedNumber !== null && recordedNumber !== null
-            ? documentedNumber === recordedNumber
+            ? documentedNumber.value === recordedNumber.value &&
+              documentedNumber.unit === recordedNumber.unit
             : documented === recorded;
 
         if (!matches) {
@@ -165,10 +176,12 @@ export async function syncVerify(repoRoot: string): Promise<SyncReport> {
     }
   }
   const registryByShortKey = new Map(
-    Object.entries(registry).map(([key, constraint]) => [
-      key.split('.').pop()!,
-      { key, constraint },
-    ]),
+    Object.entries(registry)
+      .filter(([, constraint]) => constraint.source.startsWith(budgetSource))
+      .map(([key, constraint]) => [
+        key.split('.').pop()!,
+        { key, constraint },
+      ]),
   );
   for (const [budget, documented] of specBudgets) {
     const entry = registryByShortKey.get(budget);
