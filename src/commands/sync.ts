@@ -147,7 +147,11 @@ export async function syncVerify(repoRoot: string): Promise<SyncReport> {
         const matches =
           documentedNumber !== null && recordedNumber !== null
             ? documentedNumber.value === recordedNumber.value &&
-              documentedNumber.unit === recordedNumber.unit
+              (
+                documentedNumber.unit === '' ||
+                recordedNumber.unit === '' ||
+                documentedNumber.unit === recordedNumber.unit
+              )
             : documented === recorded;
 
         if (!matches) {
