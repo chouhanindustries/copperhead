@@ -196,13 +196,13 @@ describe('pin dossier (R14: stage-4 entry pin facts)', () => {
 
     it('redirects a wrong-library guess to where the symbol lives', async () => {
       const out = await dispatchTool(ctx(), 'symbol_pins', { lib_id: 'Device:SN74LVC1G17' });
-      expect(out).toContain('does not exist in that library');
+      expect(out).toContain('does not resolve');
       expect(out).toContain('installed as: Logic:SN74LVC1G17');
     });
 
     it('handles an uninstalled library nickname', async () => {
       const out = await dispatchTool(ctx(), 'symbol_pins', { lib_id: 'Nowhere:TLV320AIC3100' });
-      expect(out).toContain('no library named "Nowhere" is installed');
+      expect(out).toContain('does not resolve');
       expect(out).toContain('installed as: Audio:TLV320AIC3100');
     });
   });

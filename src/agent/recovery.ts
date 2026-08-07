@@ -165,6 +165,11 @@ export async function symbolAvailabilityFacts(text: string, dirs?: string[], cap
       const r = await resolveLibrarySymbol(libId, searchDirs);
       if (r.status === 'ok') {
         lines.push(`- ${libId}: RESOLVES on this machine (${r.pins.length} pins)`);
+      } else if (r.status === 'found-elsewhere') {
+        // The resolver already located the part under another lib_id; saying
+        // "not installed" here would be the exact false absence claim this
+        // block exists to prevent.
+        lines.push(`- ${libId}: not at that lib_id, but installed as: ${r.libIds.slice(0, 4).join(', ')}`);
       } else {
         const elsewhere = await searchInstalledSymbols(name, searchDirs, 4);
         const inThat =

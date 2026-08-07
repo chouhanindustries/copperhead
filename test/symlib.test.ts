@@ -236,9 +236,16 @@ describe('symbolSearchDirs: Windows version-directory discovery', () => {
     await rm(root, { recursive: true, force: true });
   });
 
+  // These assertions filter to paths under the fixture root: on a machine with
+  // a real KiCad install, symbolSearchDirs legitimately includes the standard
+  // locations (/usr/share/kicad/symbols, …) too, and asserting deep equality
+  // against only the fixture made the suite fail on exactly the machines the
+  // harness runs on.
+  const underRoot = (dirs: string[]): string[] => dirs.filter((d) => d.startsWith(root));
+
   it('discovers a version-numbered directory when no env override is set', async () => {
     const dirs = await symbolSearchDirs({}, root);
-    expect(dirs).toEqual([versionDir]);
+    expect(underRoot(dirs)).toEqual([versionDir]);
   });
 
   it('prefers the newest version when more than one is installed', async () => {
@@ -246,8 +253,7 @@ describe('symbolSearchDirs: Windows version-directory discovery', () => {
     await mkdir(older, { recursive: true });
     try {
       const dirs = await symbolSearchDirs({}, root);
-      expect(dirs[0]).toBe(versionDir); // 10.0 sorts before 8.0
-      expect(dirs).toContain(older);
+      expect(underRoot(dirs)).toEqual([versionDir, older]); // 10.0 sorts before 8.0
     } finally {
       await rm(`${root}/8.0`, { recursive: true, force: true });
     }
@@ -259,7 +265,7 @@ describe('symbolSearchDirs: Windows version-directory discovery', () => {
     // isolated directory (this repo's own tests, or a pinned library set)
     // could silently get the real machine's KiCad install appended too.
     const dirs = await symbolSearchDirs({ KICAD_SYMBOL_DIR: versionDir }, root);
-    expect(dirs).toEqual([versionDir]);
+    expect(underRoot(dirs)).toEqual([versionDir]);
   });
 });
 

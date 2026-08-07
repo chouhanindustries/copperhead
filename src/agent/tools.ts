@@ -396,6 +396,9 @@ export const TOOLS: ToolDef[] = [
             : '';
         return `${libId} — ${r.pins.length} pin(s), ${r.units} unit(s):\n${pins.join('\n')}${multi}`;
       }
+      if (r.status === 'found-elsewhere') {
+        return `"${libId}" does not resolve, but the symbol is installed as: ${r.libIds.join(', ')} — use one of these lib_ids (and call symbol_pins on it for the pin table).`;
+      }
       const elsewhere = await searchInstalledSymbols(name, dirs, 6);
       const where = elsewhere.length
         ? `\ninstalled as: ${elsewhere.join(', ')}`
