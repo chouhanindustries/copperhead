@@ -284,6 +284,9 @@ describe('cross-library discovery and refusal fact-checking (#195, #196, #197)',
     await writeFile(path.join(dir, 'Driver_LED.kicad_sym'), lib('TPS61165DBV'), 'utf8');
     await writeFile(path.join(dir, 'Connector_Audio.kicad_sym'), lib('AudioJack3', 'AudioJack3_Ground'), 'utf8');
     await writeFile(path.join(dir, 'Device.kicad_sym'), lib('C', 'D', 'R', 'RotaryEncoder_Switch'), 'utf8');
+    // A user-added library whose nickname carries the other separators a
+    // .kicad_sym filename stem allows.
+    await writeFile(path.join(dir, 'Custom-Parts.RF.kicad_sym'), lib('LNA_Frontend'), 'utf8');
   });
 
   afterAll(async () => {
@@ -301,6 +304,24 @@ describe('cross-library discovery and refusal fact-checking (#195, #196, #197)',
     expect(await searchInstalledSymbols('TLP2361', [dir])).toEqual([]);
   });
 
+  it('ranks a later library\'s stronger match above an earlier library\'s weaker one', async () => {
+    // Search dirs are scanned in order, so the weak match is guaranteed to be
+    // collected first: ranking per library and capping in scan order would put
+    // it on top and, at a small cap, evict the better hit entirely.
+    const early = await mkdtemp(path.join(tmpdir(), 'copperhead-symrank-a-'));
+    const late = await mkdtemp(path.join(tmpdir(), 'copperhead-symrank-b-'));
+    try {
+      await writeFile(path.join(early, 'Early_Misc.kicad_sym'), lib('Legacy_Widget_Shim'), 'utf8');
+      await writeFile(path.join(late, 'Late_Parts.kicad_sym'), lib('Widget_Driver'), 'utf8');
+      const dirs = [early, late];
+      expect((await searchInstalledSymbols('Widget', dirs))[0]).toBe('Late_Parts:Widget_Driver');
+      expect(await searchInstalledSymbols('Widget', dirs, 1)).toEqual(['Late_Parts:Widget_Driver']);
+    } finally {
+      await rm(early, { recursive: true, force: true }).catch(() => {});
+      await rm(late, { recursive: true, force: true }).catch(() => {});
+    }
+  });
+
   it('fact-checks lib_ids named in a refusal against the installed libraries', async () => {
     // Condensed from the recorded constraint that drove the real abort: the
     // first claim is false (the symbol resolves), the second names a part
@@ -313,6 +334,21 @@ describe('cross-library discovery and refusal fact-checking (#195, #196, #197)',
     expect(facts).toContain('Driver_LED:TPS61165DBV');
     // file:line refs are not lib_ids
     expect(facts).not.toContain('create.ts');
+  });
+
+  it('probes a library nickname that carries "-" or "." separators', async () => {
+    const refusal = 'VERIFIED ABSENT: Custom-Parts.RF:LNA_Frontend has no symbol on this machine.';
+    const facts = await symbolAvailabilityFacts(refusal, [dir]);
+    expect(facts).toMatch(/Custom-Parts\.RF:LNA_Frontend: RESOLVES/);
+  });
+
+  it('names the lib_ids it did not probe rather than implying full coverage', async () => {
+    const refusal = 'absent: Audio:TLV320AIC23BPW, Driver_LED:TPS61165DBV, Device:R, Device:C';
+    const facts = await symbolAvailabilityFacts(refusal, [dir], 2);
+    expect(facts).toMatch(/Audio:TLV320AIC23BPW: RESOLVES/);
+    expect(facts).toContain('NOT RE-PROBED (probe limit 2)');
+    expect(facts).toContain('Device:R');
+    expect(facts).toContain('Device:C');
   });
 
   it('produces no facts block when the text names no lib_ids', async () => {

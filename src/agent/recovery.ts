@@ -129,18 +129,28 @@ export async function transcriptExcerpt(transcriptDir: string, maxChars = 4000):
  */
 export async function symbolAvailabilityFacts(text: string, dirs?: string[], cap = 8): Promise<string> {
   const ids: string[] = [];
-  for (const m of text.matchAll(/\b([A-Za-z0-9_]{2,}):([A-Za-z0-9][A-Za-z0-9_.+-]*)/g)) {
+  // A library nickname is its `.kicad_sym` filename stem, so it can carry `-`
+  // and `.` as well as `_` (`Custom-Parts`, `MyCorp.RF`) — a nickname the regex
+  // truncates is probed as the wrong lib_id and reported absent, which is the
+  // false negative this whole fact block exists to prevent. Separators are
+  // interior only, so a trailing sentence period is not swallowed.
+  for (const m of text.matchAll(/\b([A-Za-z0-9_][A-Za-z0-9_.-]*[A-Za-z0-9_]):([A-Za-z0-9][A-Za-z0-9_.+-]*)/g)) {
     const lib = m[1]!;
     const name = m[2]!;
     // Require letters on both sides: drops file:line refs ("create.ts:311"),
     // times and bare numbers. Engine-generated power symbols are not library
-    // facts. Dedupe, and cap so a probe-heavy transcript stays cheap.
+    // facts.
     if (!/[A-Za-z]/.test(lib) || !/[A-Za-z]/.test(name) || lib === 'copperhead_power') continue;
     const libId = `${lib}:${name}`;
     if (!ids.includes(libId)) ids.push(libId);
-    if (ids.length >= cap) break;
   }
   if (!ids.length) return '';
+  // Collection is unbounded but probing is capped, so a probe-heavy transcript
+  // stays cheap. The overflow is named rather than dropped: the supervisor is
+  // told these facts are ground truth, and silently probing 8 of 30 lib_ids
+  // would let it read "unprobed" as "absent".
+  const probed = ids.slice(0, cap);
+  const unprobed = ids.slice(cap);
   let searchDirs: string[];
   try {
     searchDirs = dirs ?? (await symbolSearchDirs());
@@ -149,7 +159,7 @@ export async function symbolAvailabilityFacts(text: string, dirs?: string[], cap
   }
   if (!searchDirs.length) return '';
   const lines: string[] = [];
-  for (const libId of ids) {
+  for (const libId of probed) {
     const name = libId.slice(libId.indexOf(':') + 1);
     try {
       const r = await resolveLibrarySymbol(libId, searchDirs);
@@ -173,6 +183,12 @@ export async function symbolAvailabilityFacts(text: string, dirs?: string[], cap
     } catch {
       // a single unreadable library must not sink the fact block
     }
+  }
+  if (!lines.length) return '';
+  if (unprobed.length) {
+    lines.push(
+      `- NOT RE-PROBED (probe limit ${cap}): ${unprobed.join(', ')} — these were named in the text but not checked, so nothing above says whether they exist.`,
+    );
   }
   return lines.join('\n');
 }
@@ -210,7 +226,7 @@ export async function diagnoseStageFailure(
     `This was attempt ${input.attempt} of ${input.maxAttempts}.\n\n` +
     `Recent transcript (most recent last):\n${input.excerpt}\n\n` +
     (input.symbolFacts
-      ? `Machine-verified symbol facts — a deterministic re-probe of every lib_id named above, run just now against this machine's installed KiCad libraries. These are ground truth and override anything the transcript claims about symbol or library availability:\n${input.symbolFacts}\n\n`
+      ? `Machine-verified symbol facts — a deterministic re-probe of the lib_ids named above, run just now against this machine's installed KiCad libraries. Each line reported below is ground truth and overrides anything the transcript claims about that symbol's availability. Coverage may be partial: a lib_id listed as NOT RE-PROBED, or absent from this block entirely, is unknown, never confirmed absent.\n${input.symbolFacts}\n\n`
       : '') +
     'Reply with ONLY a JSON object, no prose:\n' +
     '{"verdict":"retry"|"abort","reason":"<one sentence>","guidance":"<if retry: concrete, specific instructions to prepend to the next attempt so it avoids this failure; otherwise empty>"}\n' +

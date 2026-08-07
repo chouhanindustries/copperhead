@@ -132,11 +132,24 @@ export async function findLibraryFile(lib: string, dirs: string[]): Promise<stri
  */
 const canonSymName = (s: string): string => s.toLowerCase().replace(/[_\-.]/g, '');
 
-export function closestSymbolNames(names: Iterable<string>, query: string, cap = 8): string[] {
+export interface RankedSymbolName {
+  name: string;
+  /** 0 = exact (separator-insensitive), 1 = prefix, 2 = substring, 3 = name-inside-query. */
+  rank: number;
+}
+
+/** `closestSymbolNames` with the match rank retained, so a caller merging
+ * candidates from several libraries can order them by how well they match
+ * rather than by which library happened to be scanned first. */
+export function rankSymbolNames(
+  names: Iterable<string>,
+  query: string,
+  cap = 8,
+): RankedSymbolName[] {
   const canon = canonSymName;
   const q = canon(query);
   if (q.length < 2) return [];
-  const ranked: { name: string; rank: number }[] = [];
+  const ranked: RankedSymbolName[] = [];
   const seen = new Set<string>();
   for (const name of names) {
     if (seen.has(name) || /_\d+_\d+$/.test(name)) continue;
@@ -151,7 +164,11 @@ export function closestSymbolNames(names: Iterable<string>, query: string, cap =
     ranked.push({ name, rank });
   }
   ranked.sort((a, b) => a.rank - b.rank || a.name.length - b.name.length || (a.name < b.name ? -1 : 1));
-  return ranked.slice(0, cap).map((r) => r.name);
+  return ranked.slice(0, cap);
+}
+
+export function closestSymbolNames(names: Iterable<string>, query: string, cap = 8): string[] {
+  return rankSymbolNames(names, query, cap).map((r) => r.name);
 }
 
 /** Every installed `<lib>.kicad_sym`, keyed by library nickname; the first
@@ -294,10 +311,12 @@ export async function searchInstalledSymbols(
   dirs: string[],
   cap = 24,
 ): Promise<string[]> {
-  const q = canonSymName(query);
-  if (q.length < 2) return [];
-  const exact: string[] = [];
-  const near: string[] = [];
+  if (canonSymName(query).length < 2) return [];
+  // Rank globally, not per library: a library scanned early contributes only
+  // weak matches, and capping in scan order would drop a later library's
+  // stronger candidate — the exact case this tool exists to surface, since a
+  // caller reaching for it has already guessed the nickname wrong.
+  const hits: { libId: string; rank: number; name: string }[] = [];
   for (const [lib, file] of await listInstalledLibraries(dirs)) {
     let text: string;
     try {
@@ -306,11 +325,17 @@ export async function searchInstalledSymbols(
       continue;
     }
     const names = [...text.matchAll(/^\s*\(symbol\s+"([^"]+)"/gm)].map((m) => m[1]!);
-    for (const name of closestSymbolNames(names, query, 4)) {
-      (canonSymName(name) === q ? exact : near).push(`${lib}:${name}`);
+    for (const { name, rank } of rankSymbolNames(names, query, 4)) {
+      hits.push({ libId: `${lib}:${name}`, rank, name });
     }
   }
-  return [...exact, ...near].slice(0, cap);
+  hits.sort(
+    (a, b) =>
+      a.rank - b.rank ||
+      a.name.length - b.name.length ||
+      (a.libId < b.libId ? -1 : a.libId > b.libId ? 1 : 0),
+  );
+  return hits.slice(0, cap).map((h) => h.libId);
 }
 
 /** Collect pins (number, name, electrical type) from a `(symbol …)` node,
