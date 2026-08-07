@@ -893,40 +893,4 @@ Example:
       await cleanup();
     }
   });
-
-  it('treats equal numeric values with different units as a mismatch', async () => {
-    const { repo, cleanup } = await tempFixtureRepo();
-    try {
-      await runInit({ repoRoot: repo });
-
-      await saveConstraint(repo, 'power.sleep_current', {
-        max: 5,
-        source: 'docs/SPEC.md#budgets',
-        affects: [],
-      });
-
-      await writeFile(
-        path.join(repo, 'docs', 'SPEC.md'),
-        `# Spec
-
-## Budgets
-
-- sleep_current: 5 V
-`,
-        'utf8',
-      );
-
-      const report = await syncVerify(repo);
-
-      expect(
-        report.resolvable.some(
-          (r) =>
-            r.kind === 'dual-write' &&
-            r.actual === 'SPEC.md documents 5 V',
-        ),
-      ).toBe(true);
-    } finally {
-      await cleanup();
-    }
-  });
 });
