@@ -195,7 +195,9 @@ export class SymbolResolutionError extends Error {
         : reason === 'derived-unsupported'
           ? `"${libId}" extends a symbol that cannot be followed (missing base name, or a cycle deeper than ${MAX_EXTENDS_DEPTH} hops); use the base symbol directly`
           : reason === 'found-elsewhere'
-            ? `"${libId}" is wrong about the library, not the part: use ${candidates.join(' or ')} instead`
+            ? candidates.length && candidates.every((c) => c.startsWith(`${libId.includes(':') ? libId.slice(0, libId.indexOf(':')) : ''}:`))
+              ? `"${libId}" does not exist in that library, closest real name: ${candidates.join(' or ')} — the library was right, use the real symbol name`
+              : `"${libId}" is wrong about the library, not the part: use ${candidates.join(' or ')} instead`
             : `"${libId}" does not exist in the library${candidates.length ? ` — closest: ${candidates.join(', ')}` : ''}`,
     );
   }

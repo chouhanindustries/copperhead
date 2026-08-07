@@ -4,7 +4,7 @@
 
 ### Requirement: Stage-4 entry pin dossier
 
-Before each attempt of the schematic stage runs, the pipeline SHALL resolve every BOM part against the installed symbol libraries and inject the result into the stage prompt as a machine-verified dossier, so the agent starts with the pin facts it would otherwise spend turns reconstructing. Resolution SHALL search the part's MPN first and, only when that search returns no match, SHALL search its Value as a separate fallback query — a bogus MPN over a resolvable Value must not read as absence. Resolution SHALL be recomputed per attempt, since a rolled-back retry can run against a different BOM than its predecessor.
+Before each attempt of the schematic stage runs, the pipeline SHALL resolve every BOM part against the installed symbol libraries and inject the result into the stage prompt as a machine-verified dossier, so the agent starts with the pin facts it would otherwise spend turns reconstructing. Resolution SHALL search the part's MPN first and, only when that search returns no match, SHALL search its Value as a separate fallback query — a bogus MPN over a resolvable Value must not read as absence. Matching SHALL include single-edit family variants (an MPN of `STM32F103C8T6` finds the stock `STM32F103C8Tx`; a digit-for-digit substitution is never a match), so a family-suffix spelling is not reported absent. A part whose only name is too short to search reliably SHALL be disclosed as not searched rather than silently dropped. Resolution SHALL be recomputed per attempt, since a rolled-back retry can run against a different BOM than its predecessor.
 
 For each covered part the dossier SHALL name the part's refdes and query, the top-ranked installed lib_id, and that symbol's real pins (number, name, electrical type), following `extends` links. A symbol defining more than one unit SHALL be flagged as one the drafting engine refuses. Alternative candidate lib_ids SHALL be listed so a wrong top match is recoverable without a search turn. A part no installed symbol matches SHALL be named as such, with the instruction to substitute, rather than omitted.
 
@@ -45,6 +45,16 @@ A NO-INSTALLED-SYMBOL line is an absence claim, and the dossier SHALL make one o
 
 - **WHEN** no symbol library is readable in any search directory
 - **THEN** no dossier is injected at all — the block never claims NO INSTALLED SYMBOL for parts the machine could not actually check
+
+#### Scenario: A family-variant MPN is not reported absent
+
+- **WHEN** a BOM row names `STM32F103C8T6` and the installed library holds only the family symbol `STM32F103C8Tx`
+- **THEN** the dossier resolves the row to the family symbol's lib_id and pins instead of claiming NO INSTALLED SYMBOL
+
+#### Scenario: A name too short to search is disclosed
+
+- **WHEN** a BOM row's only name is shorter than the search minimum (a crystal valued `8M` with no MPN)
+- **THEN** the row is listed as not searched, so its absence from the dossier is never read as checked-and-absent
 
 ## MODIFIED Requirements
 

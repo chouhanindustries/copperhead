@@ -93,7 +93,10 @@ export async function symbolSearchDirs(env = process.env, winRoot = 'C:/Program 
     // single fixed path here. Discovered below instead.
   ];
   const out: string[] = [];
-  for (const dir of [...fromEnv, ...defaults]) {
+  // An env override is exclusive: a caller pinning KICAD_SYMBOL_DIR at an
+  // isolated directory (tests, a pinned library set) must get only that
+  // directory back, not the machine's stock install appended after it.
+  for (const dir of fromEnv.length ? fromEnv : defaults) {
     try {
       await access(dir);
       if (!out.includes(dir)) out.push(dir);
@@ -126,6 +129,15 @@ export async function symbolSearchDirs(env = process.env, winRoot = 'C:/Program 
           // this version folder has no symbols dir; skip
         }
       }
+      // Some installs put share/ directly under the KiCad root with no
+      // version directory; probe that layout after the versioned ones.
+      const flat = `${kicadRoot}/share/kicad/symbols`;
+      try {
+        await access(flat);
+        if (!out.includes(flat)) out.push(flat);
+      } catch {
+        // no non-versioned layout either; skip
+      }
     } catch {
       // C:\Program Files\KiCad doesn't exist on this machine (not Windows, or KiCad not installed here); skip
     }
@@ -133,8 +145,11 @@ export async function symbolSearchDirs(env = process.env, winRoot = 'C:/Program 
   return out;
 }
 
-/** Path to `<lib>.kicad_sym` in the first search dir that has it, or null. */
+/** Path to `<lib>.kicad_sym` in the first search dir that has it, or null.
+ * The nickname is model-supplied text: a separator or `..` in it would escape
+ * the search directories, so such a nickname resolves to nothing. */
 export async function findLibraryFile(lib: string, dirs: string[]): Promise<string | null> {
+  if (lib.includes('/') || lib.includes('\\') || lib.includes('..')) return null;
   for (const dir of dirs) {
     const p = path.join(dir, `${lib}.kicad_sym`);
     try {
@@ -162,8 +177,33 @@ const canonSymName = (s: string): string => s.toLowerCase().replace(/[_\-.]/g, '
 
 export interface RankedSymbolName {
   name: string;
-  /** 0 = exact (separator-insensitive), 1 = prefix, 2 = substring, 3 = name-inside-query. */
+  /** 0 = exact (separator-insensitive), 1 = prefix, 2 = substring,
+   * 3 = name-inside-query, 4 = one-edit family variant. */
   rank: number;
+}
+
+/** Names must be this long before a single edit is distinctive enough to match. */
+const MIN_EDIT_MATCH_LEN = 5;
+
+/**
+ * The shared one-edit rule for "same part family, variant spelling": within one
+ * edit (SHT40 vs SHT4x, STM32F103C8T6 vs STM32F103C8Tx), except a
+ * digit-for-digit substitution, which names a *different real part*
+ * (TPS22860 vs TPS22810) rather than a family wildcard. Used by both resolvers
+ * so search and cross-library discovery can never disagree about what counts
+ * as a near-miss.
+ */
+function oneEditFamilyVariant(a: string, b: string): boolean {
+  if (a.length < MIN_EDIT_MATCH_LEN || b.length < MIN_EDIT_MATCH_LEN) return false;
+  if (editDistanceWithin(a, b, 1) > 1) return false;
+  if (a.length === b.length) {
+    for (let i = 0; i < a.length; i++) {
+      if (a[i] !== b[i]) {
+        return !(/[0-9]/.test(a[i]!) && /[0-9]/.test(b[i]!));
+      }
+    }
+  }
+  return true;
 }
 
 /** `closestSymbolNames` with the match rank retained, so a caller merging
@@ -188,6 +228,11 @@ export function rankSymbolNames(
     else if (c.startsWith(q)) rank = 1;
     else if (c.includes(q)) rank = 2;
     else if (c.length >= 3 && q.includes(c)) rank = 3;
+    // Without this tier, search declared family-variant stock symbols absent
+    // (STM32F103C8T6 vs the installed STM32F103C8Tx) while
+    // findSymbolAcrossLibraries found them, and the "machine-verified" dossier
+    // rendered a search miss as a false absence claim.
+    else if (oneEditFamilyVariant(q, c)) rank = 4;
     else continue;
     ranked.push({ name, rank });
   }
@@ -292,13 +337,9 @@ export async function findSymbolAcrossLibraries(
     const MIN_SHORT_NAME_LEN = 3;
     // Substring alone misses the most common real near-miss: a datasheet part
     // number against a library's family name, differing mid-string rather than
-    // at either end (SHT40 vs SHT4x, where `x` stands for "any variant").
-    // Neither contains the other, so only edit distance catches it. Kept tight
-    // (1 edit, and only for names long enough that one edit is still
-    // distinctive) so TPS22860 does not silently match TPS22810 — a different
-    // real part, which is exactly the wrong-part failure this tool must not
-    // introduce.
-    const MIN_EDIT_MATCH_LEN = 5;
+    // at either end (SHT40 vs SHT4x). Neither contains the other; the shared
+    // one-edit family-variant rule catches it while refusing digit-for-digit
+    // swaps (TPS22860 vs TPS22810 are different real parts).
     // The matched candidate string, not just whether one exists: a fuzzy hit
     // must report the real symbol name (`n`) so the caller can build a lib_id
     // that actually resolves. Suggesting `${lib}:${query}` back would name a
@@ -308,25 +349,7 @@ export async function findSymbolAcrossLibraries(
       const lower = n.toLowerCase();
       if (lower.includes(q)) return true;
       if (lower.length >= MIN_SHORT_NAME_LEN && q.includes(lower)) return true;
-      if (
-        q.length < MIN_EDIT_MATCH_LEN ||
-        lower.length < MIN_EDIT_MATCH_LEN ||
-        editDistanceWithin(q, lower, 1) > 1
-      ) {
-        return false;
-      }
-      // One edit is still too loose when it swaps a digit for a digit: that
-      // names a *different real part* (TPS22860 vs TPS22810), while a letter
-      // on either side of the edit marks a family wildcard or variant suffix
-      // (SHT40 vs SHT4x). Insertions/deletions (length differs) stay allowed.
-      if (q.length === lower.length) {
-        for (let i = 0; i < q.length; i++) {
-          if (q[i] !== lower[i]) {
-            return !(/[0-9]/.test(q[i]!) && /[0-9]/.test(lower[i]!));
-          }
-        }
-      }
-      return true;
+      return oneEditFamilyVariant(q, lower);
     });
     if (fuzzyHit) {
       fuzzy.push({ lib, name: fuzzyHit, exact: false });
@@ -527,12 +550,18 @@ export async function verifySchematicSymbols(
     }
     if (resolved.status === 'found-elsewhere') {
       // A distinct kind from 'no-library': the part IS verifiable, just filed
-      // under another nickname — callers counting real issues must include it,
-      // while 'no-library' stays "could not check".
+      // under another name — callers counting real issues must include it,
+      // while 'no-library' stays "could not check". When every suggestion
+      // shares the queried nickname the library was right and only the symbol
+      // name is a variant; saying "wrong library" there contradicts the fix.
+      const nick = entry.libId.includes(':') ? entry.libId.slice(0, entry.libId.indexOf(':')) : '';
+      const sameLib = nick !== '' && resolved.libIds.every((id) => id.startsWith(`${nick}:`));
       findings.push({
         libId: entry.libId,
         kind: 'wrong-library',
-        detail: `"${entry.libId}" names the wrong library, not the wrong part: use ${resolved.libIds.join(' or ')} instead.`,
+        detail: sameLib
+          ? `"${entry.libId}" does not exist in that library — closest real name: ${resolved.libIds.join(' or ')}. The library was right; use the real symbol name.`
+          : `"${entry.libId}" names the wrong library, not the wrong part: use ${resolved.libIds.join(' or ')} instead.`,
       });
       continue;
     }

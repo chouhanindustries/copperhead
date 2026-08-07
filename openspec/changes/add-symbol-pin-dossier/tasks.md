@@ -11,7 +11,7 @@
 - [x] 2.2 Per part: search the MPN first, and only on an MPN miss run the Value as a separate fallback search; resolve the top hit's pins, render refdes + query + lib_id + pin table (number=name/type, shared numeric-aware pin order), MULTI-UNIT flag, alternative candidates, or the NO-INSTALLED-SYMBOL line
 - [x] 2.3 Size cap over the complete rendered block: named overflow ("NOT INCLUDED … use symbol_pins") and errored parts ("UNRESOLVED (probe error)") disclosed separately, both trailers bounded with an explicit "…and N more" truncation — never silent, never over the cap; test the final rendered size with overflow disclosure
 - [x] 2.4 Never throws: bad BOM, unreadable library, or empty search dirs degrade to `''`; a single part's probe error is disclosed, not converted into `''` or a size-cap entry
-- [x] 2.5 Tests: MPN resolution, Value fallback after an MPN miss, passive omission, no-symbol line, multi-unit flag, cap disclosure within bound, empty on no BOM table
+- [x] 2.5 Tests: MPN resolution, Value fallback after an MPN miss, family-variant matching (no false absence for `STM32F103C8T6` vs `STM32F103C8Tx`), short-name NOT SEARCHED disclosure, passive omission, no-symbol line, multi-unit flag, cap disclosure within bound, empty on no BOM table
 
 ## 3. `symbol_pins` agent tool
 

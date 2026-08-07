@@ -9,6 +9,7 @@ import {
   findSymbolAcrossLibraries,
   closestSymbolNames,
   searchInstalledSymbols,
+  findLibraryFile,
 } from '../src/kicad/symlib.js';
 import { symbolAvailabilityFacts } from '../src/agent/recovery.js';
 
@@ -212,6 +213,14 @@ describe('cross-library resolution (review findings on #186)', () => {
     expect(matches.some((m) => m.name === 'TPS22810')).toBe(false);
   });
 
+  it('search applies the same family-variant rule as cross-library discovery', async () => {
+    // The two resolvers must never disagree about what counts as a near-miss
+    // (finding 1, #202 review): the family variant matches, the digit swap
+    // does not, in both directions of the machinery.
+    expect(await searchInstalledSymbols('SHT40', [libDir])).toContain('Sensor_Humidity:SHT4x');
+    expect(await searchInstalledSymbols('TPS22860', [libDir])).toEqual([]);
+  });
+
   it('a same-file typo wins over a cross-library fuzzy match, and never suggests itself', async () => {
     // Device:R_Sma is a typo of Device:R_Small, which lives in the same file.
     // The fix on #186 ordered same-file candidates before cross-library
@@ -288,10 +297,25 @@ describe('symbolSearchDirs: Windows version-directory discovery', () => {
     await mkdir(other, { recursive: true });
     try {
       const dirs = await symbolSearchDirs({ KICAD_SYMBOL_DIR: versionDir }, root);
-      expect(underRoot(dirs)).toEqual([versionDir]);
+      // Exclusive, not merely filtered: the override must suppress the stock
+      // defaults too, or tests pinning a fixture dir still scan the host's
+      // real libraries (finding 11, #202 review).
+      expect(dirs).toEqual([versionDir]);
       expect(dirs).not.toContain(other);
     } finally {
       await rm(`${root}/11.0`, { recursive: true, force: true });
+    }
+  });
+
+  it('discovers a non-versioned share/ layout under the KiCad root', async () => {
+    const flatRoot = (await mkdtemp(path.join(tmpdir(), 'copperhead-kicadflat-'))).split(path.sep).join('/');
+    const flat = `${flatRoot}/share/kicad/symbols`;
+    await mkdir(flat, { recursive: true });
+    try {
+      const dirs = await symbolSearchDirs({}, flatRoot);
+      expect(dirs).toContain(flat);
+    } finally {
+      await rm(flatRoot, { recursive: true, force: true });
     }
   });
 });
@@ -320,6 +344,9 @@ describe('cross-library discovery and refusal fact-checking (#195, #196, #197)',
     // A user-added library whose nickname carries the other separators a
     // .kicad_sym filename stem allows.
     await writeFile(path.join(dir, 'Custom-Parts.RF.kicad_sym'), lib('LNA_Frontend'), 'utf8');
+    // Family symbol under the stock spelling: the datasheet MPN differs by one
+    // trailing character (T6 vs Tx), the shape finding 1 (#202 review) is about.
+    await writeFile(path.join(dir, 'MCU_ST_STM32F1.kicad_sym'), lib('STM32F103C8Tx'), 'utf8');
   });
 
   afterAll(async () => {
@@ -335,6 +362,42 @@ describe('cross-library discovery and refusal fact-checking (#195, #196, #197)',
 
   it('returns nothing for a part that is genuinely absent everywhere', async () => {
     expect(await searchInstalledSymbols('TLP2361', [dir])).toEqual([]);
+  });
+
+  it('finds a family-variant spelling instead of declaring it absent', async () => {
+    // Before the edit-distance tier, search returned [] here while
+    // findSymbolAcrossLibraries found the part, and the dossier rendered the
+    // disagreement as a false NO INSTALLED SYMBOL under a machine-verified label.
+    expect(await searchInstalledSymbols('STM32F103C8T6', [dir])).toEqual(['MCU_ST_STM32F1:STM32F103C8Tx']);
+  });
+
+  it('renders a genuinely absent lib_id with the not-found line, never a fabricated location', async () => {
+    const facts = await symbolAvailabilityFacts('Optoisolator:TLP9999QQ was refused', [dir]);
+    expect(facts).toContain('no installed symbol matches "TLP9999QQ"');
+  });
+
+  it('produces no facts block when the search dirs hold no readable library', async () => {
+    // An existing-but-empty directory means nothing was checked; emitting
+    // "not installed" lines as ground truth from that state is the false
+    // absence the block exists to prevent (finding 2, #202 review).
+    const empty = await mkdtemp(path.join(tmpdir(), 'copperhead-emptylibs-'));
+    try {
+      expect(await symbolAvailabilityFacts('"Device:R" is not installed', [empty])).toBe('');
+    } finally {
+      await rm(empty, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects a library nickname that escapes the search directories', async () => {
+    const outside = await mkdtemp(path.join(tmpdir(), 'copperhead-outside-'));
+    try {
+      await writeFile(path.join(outside, 'Private.kicad_sym'), lib('SECRET_PART'), 'utf8');
+      expect(await findLibraryFile(`../${path.basename(outside)}/Private`, [dir])).toBeNull();
+      const r = await resolveLibrarySymbol(`../${path.basename(outside)}/Private:SECRET_PART`, [dir]);
+      expect(r.status).not.toBe('ok');
+    } finally {
+      await rm(outside, { recursive: true, force: true });
+    }
   });
 
   it('ranks a later library\'s stronger match above an earlier library\'s weaker one', async () => {

@@ -2,7 +2,7 @@ import { existsSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import type { Msg, Provider } from './types.js';
-import { resolveLibrarySymbol, searchInstalledSymbols, symbolSearchDirs } from '../kicad/symlib.js';
+import { resolveLibrarySymbol, searchInstalledSymbols, symbolSearchDirs, listInstalledLibraries } from '../kicad/symlib.js';
 
 /** Thrown when a single provider turn blows past its watchdog deadline. */
 export class TurnTimeoutError extends Error {
@@ -158,6 +158,10 @@ export async function symbolAvailabilityFacts(text: string, dirs?: string[], cap
     return '';
   }
   if (!searchDirs.length) return '';
+  // A directory with no readable library means nothing was checked: emitting
+  // "not installed" lines as ground truth from that state is the exact false
+  // absence this block exists to prevent (same guard as bomSymbolDossier).
+  if (!(await listInstalledLibraries(searchDirs)).size) return '';
   const lines: string[] = [];
   for (const libId of probed) {
     const name = libId.slice(libId.indexOf(':') + 1);
