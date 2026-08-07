@@ -134,7 +134,7 @@ export async function symbolAvailabilityFacts(text: string, dirs?: string[], cap
   // truncates is probed as the wrong lib_id and reported absent, which is the
   // false negative this whole fact block exists to prevent. Separators are
   // interior only, so a trailing sentence period is not swallowed.
-  for (const m of text.matchAll(/\b([A-Za-z0-9_][A-Za-z0-9_.-]*[A-Za-z0-9_]):([A-Za-z0-9][A-Za-z0-9_.+-]*)/g)) {
+  for (const m of text.matchAll(/\b([A-Za-z0-9_](?:[A-Za-z0-9_.-]*[A-Za-z0-9_])?):([A-Za-z0-9][A-Za-z0-9_.+-]*)/g)) {
     const lib = m[1]!;
     const name = m[2]!;
     // Require letters on both sides: drops file:line refs ("create.ts:311"),

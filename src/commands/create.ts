@@ -481,13 +481,14 @@ async function diagnose(input: {
     provider = await makeProvider(input.model, false, input.compat);
     const p = provider;
     const excerpt = await transcriptExcerpt(input.transcriptDir);
-    // Fact-check symbol-availability claims before the model judges them: a
-    // refusal narrating "library not installed" is adjudicated from the
-    // machine's actual libraries, not from the narration (I15/#197).
-    const symbolFacts = await symbolAvailabilityFacts(`${input.failure}\n${excerpt}`).catch(() => '');
     return await withTimeout(
-      () =>
-        diagnoseStageFailure(p, {
+      async () => {
+        // Fact-check symbol-availability claims before the model judges them: a
+        // refusal narrating "library not installed" is adjudicated from the
+        // machine's actual libraries, not from the narration (I15/#197). Inside
+        // the watchdog, so a wedged filesystem scan cannot outlive timeoutMs.
+        const symbolFacts = await symbolAvailabilityFacts(`${input.failure}\n${excerpt}`).catch(() => '');
+        return diagnoseStageFailure(p, {
           stageName: input.stageName,
           stageGoal: input.stageGoal,
           failure: input.failure,
@@ -495,7 +496,8 @@ async function diagnose(input: {
           attempt: input.attempt,
           maxAttempts: input.maxAttempts,
           ...(symbolFacts ? { symbolFacts } : {}),
-        }),
+        });
+      },
       input.timeoutMs,
       () => p.close?.(),
     );
@@ -853,7 +855,12 @@ export async function runCreate(opts: CreateOptions): Promise<{ ok: boolean; com
         try {
           const bomPath = path.join(opts.repoRoot, config.docs, 'BOM.md');
           if (existsSync(bomPath)) {
-            const dossier = await bomSymbolDossier(await readFile(bomPath, 'utf8'), await symbolSearchDirs());
+            // Bounded: a slow or wedged library scan must delay the stage by a
+            // fixed cost at most — on timeout the stage simply runs dossier-less.
+            const dossier = await withTimeout(
+              async () => bomSymbolDossier(await readFile(bomPath, 'utf8'), await symbolSearchDirs()),
+              60_000,
+            );
             if (dossier) {
               dossierBlock =
                 '\n\n## Installed-symbol pin dossier (machine-verified)\nEach BOM part resolved against the KiCad libraries installed on THIS machine: the top name-match lib_id and its REAL pins (number=name/electrical-type). Confirm the match fits the BOM part; alternatives are listed. Passives (R/C/L) draw from their canonical Device symbols and are omitted. Use these pins for REF.PIN endpoints instead of reading .kicad_sym files; for any part not listed, call symbol_pins.\n' +

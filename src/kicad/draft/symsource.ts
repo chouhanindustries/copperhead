@@ -204,10 +204,11 @@ export class SymbolResolutionError extends Error {
 /**
  * A part's library file is guessed wrong more often than the part itself is
  * misspelled (a chip's stock library nickname is not derivable from its part
- * number). Before failing outright, check every other stock/vendored library
- * for this exact part name; an exact hit elsewhere is a stronger signal than
- * a same-file substring guess, so it takes priority over `candidates`.
- * Returns corrected `lib_id`s (exact matches first) or an empty array.
+ * number). The caller consults this only after the guessed file offered no
+ * candidates of its own — same-library near-misses are stronger evidence and
+ * come first. Across the other libraries, exact name hits are returned alone
+ * when any exist; fuzzy matches are the fallback, reported under the symbol
+ * name that actually matched. Returns corrected `lib_id`s or an empty array.
  */
 async function crossLibrarySuggestions(name: string, lib: string, dirs: string[]): Promise<string[]> {
   const matches = await findSymbolAcrossLibraries(name, dirs, lib);

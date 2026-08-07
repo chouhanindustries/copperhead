@@ -8,7 +8,7 @@ The tool list SHALL include `symbol_pins`, available in the same phase as `searc
 
 When the lib_id resolves, the result SHALL list the real pins — number, name, and electrical type — read from the installed `.kicad_sym`, following `extends` links so derived symbols report their base's pins. The result SHALL state the symbol's unit count, and when the symbol defines more than one unit it SHALL warn that the drafting engine refuses multi-unit symbols, so the caller substitutes before the choice hardens into the BOM or the IR.
 
-When the exact symbol is absent from the named library, the result SHALL offer the closest names within that library and the cross-library matches for the symbol name, so a wrong-nickname guess is answered with the correct lib_id rather than a dead end. When the library nickname itself is not installed, the result SHALL say so and offer cross-library matches. No outcome is an error: every miss names what was searched and what to do next.
+When the exact symbol is absent from the named library, the result SHALL offer the closest names within that library and the cross-library matches for the symbol name, so a wrong-nickname guess is answered with the correct lib_id rather than a dead end. When the library nickname itself is not installed, the result SHALL say so and offer cross-library matches. When no symbol-library directory exists on the machine at all, the result SHALL state that the lib_id cannot be verified — nothing was resolved and nothing was ruled out — and direct the caller to install the KiCad symbol libraries or choose a part verifiable another way. No outcome is an error: every miss names what was searched and what to do next.
 
 #### Scenario: Resolved symbol reports its pins
 
@@ -28,4 +28,4 @@ When the exact symbol is absent from the named library, the result SHALL offer t
 #### Scenario: Wrong library nickname is redirected
 
 - **WHEN** the lib_id's library is installed but the symbol name is not in it, and the symbol exists in another installed library
-- **THEN** the result offers the closest names in the guessed library and the cross-library lib_ids where the symbol actually lives
+- **THEN** the result offers the cross-library lib_ids where the symbol actually lives, plus the guessed library's closest names whenever it has any (a resolver that already ruled the guessed library out has none to offer)

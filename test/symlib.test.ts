@@ -165,6 +165,21 @@ describe('cross-library resolution (review findings on #186)', () => {
 )`,
       'utf8',
     );
+    // TPS22810 really installed, so the one-edit guard against TPS22860 is
+    // exercised for real — without this fixture the "does not match" test
+    // passes vacuously against an empty library set.
+    await writeFile(
+      path.join(libDir, 'Power_Switch.kicad_sym'),
+      `(kicad_symbol_lib (version 20251024) (generator test)
+  (symbol "TPS22810" (pin_numbers hide) (pin_names (offset 0))
+    (symbol "TPS22810_1_1"
+      (pin passive line (at 0 3.81 270) (length 1.27) (name "~") (number "1"))
+      (pin passive line (at 0 -3.81 90) (length 1.27) (name "~") (number "2"))
+    )
+  )
+)`,
+      'utf8',
+    );
   });
 
   afterAll(async () => {
@@ -188,8 +203,11 @@ describe('cross-library resolution (review findings on #186)', () => {
   });
 
   it('does not match a genuinely different part number one edit away', async () => {
-    // TPS22860 vs TPS22810: same length, one character differs. Real parts,
-    // not the same chip. The 1-edit cap must not blur them together.
+    // TPS22860 vs TPS22810: same length, one digit differs. Real parts, not
+    // the same chip — TPS22810 IS installed in the fixture set, so this
+    // exercises the digit-for-digit guard rather than passing vacuously.
+    // excludeLib only skips the exact check; the fuzzy path still runs
+    // against Power_Switch and must reject the digit swap.
     const matches = await findSymbolAcrossLibraries('TPS22860', [libDir], 'Power_Switch');
     expect(matches.some((m) => m.name === 'TPS22810')).toBe(false);
   });
@@ -264,8 +282,17 @@ describe('symbolSearchDirs: Windows version-directory discovery', () => {
     // scan unconditionally, so a caller pinning KICAD_SYMBOL_DIR at an
     // isolated directory (this repo's own tests, or a pinned library set)
     // could silently get the real machine's KiCad install appended too.
-    const dirs = await symbolSearchDirs({ KICAD_SYMBOL_DIR: versionDir }, root);
-    expect(underRoot(dirs)).toEqual([versionDir]);
+    // A second version directory the override does NOT name would be exactly
+    // what leaky auto-discovery appends — its absence is the real assertion.
+    const other = `${root}/11.0/share/kicad/symbols`;
+    await mkdir(other, { recursive: true });
+    try {
+      const dirs = await symbolSearchDirs({ KICAD_SYMBOL_DIR: versionDir }, root);
+      expect(underRoot(dirs)).toEqual([versionDir]);
+      expect(dirs).not.toContain(other);
+    } finally {
+      await rm(`${root}/11.0`, { recursive: true, force: true });
+    }
   });
 });
 

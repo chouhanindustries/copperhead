@@ -6,9 +6,9 @@
  * The BOM is frozen when stage 4 starts, which makes this computable before the
  * first agent turn — the same insight `symbolAvailabilityFacts` applies at
  * recovery time, moved to entry. Like that block, coverage is stated rather
- * than implied: parts past the size cap are named as NOT INCLUDED, never
- * silently dropped, because absence from the dossier must never read as
- * absence from the libraries.
+ * than implied: parts past the size cap are named as NOT INCLUDED and parts a
+ * probe error skipped are named as UNRESOLVED, never silently dropped, because
+ * absence from the dossier must never read as absence from the libraries.
  *
  * Advisory only. It changes prompt content, not gates: a missing BOM, an
  * unreadable library, or any error degrades to an empty string and the stage
@@ -16,19 +16,23 @@
  */
 
 import { parseBomTable } from '../memory/bom-table.js';
-import { resolveLibrarySymbol, searchInstalledSymbols, listInstalledLibraries, type LibPin } from './symlib.js';
+import {
+  resolveLibrarySymbol,
+  searchInstalledSymbols,
+  listInstalledLibraries,
+  comparePinNumbers,
+  type LibPin,
+} from './symlib.js';
 
 /** R/C/L refdes (with optional multi-part suffix like R12A) draw from their
  * canonical `Device:*` symbols; a two-pin table per resistor is noise. */
 const PASSIVE_REFDES = /^[RCL]\d+[A-Za-z]?$/i;
 
-const numericAware = new Intl.Collator('en', { numeric: true, sensitivity: 'base' });
-
 /** `1=PE2/bidirectional 2(passive) …` — name omitted when the library leaves
  * the pin unnamed (`~` or empty), since `1=~/passive` reads as line noise. */
 function pinTable(pins: LibPin[]): string {
   return [...pins]
-    .sort((a, b) => numericAware.compare(a.number, b.number))
+    .sort((a, b) => comparePinNumbers(a.number, b.number))
     .map((p) => {
       const name = p.name === '~' ? '' : p.name;
       return name ? `${p.number}=${name}/${p.type}` : `${p.number}(${p.type})`;
@@ -36,10 +40,29 @@ function pinTable(pins: LibPin[]): string {
     .join(' ');
 }
 
+/** Render `prefix + as many names as fit + suffix` within `budget` chars; the
+ * tail that does not fit becomes "…and N more", so the trailer itself can
+ * never blow the size cap it exists to disclose. */
+function boundedList(prefix: string, names: string[], suffix: string, budget: number): string {
+  let line = '';
+  for (let i = 0; i < names.length; i++) {
+    const remaining = names.length - i;
+    const sep = i === 0 ? '' : '; ';
+    const tail = `…and ${remaining} more`;
+    const candidate = `${line}${sep}${names[i]}`;
+    // Reserve room for the worst-case continuation marker after this name.
+    if (prefix.length + candidate.length + tail.length + 2 + suffix.length > budget) {
+      return `${prefix}${line ? `${line}; ` : ''}…and ${remaining} more${suffix}`;
+    }
+    line = candidate;
+  }
+  return `${prefix}${line}${suffix}`;
+}
+
 export interface DossierOptions {
   /** candidate lib_ids fetched per part */
   searchCap?: number;
-  /** rendered-size bound; overflow parts are named, not dropped */
+  /** bound on the complete rendered block, disclosure lines included */
   maxChars?: number;
 }
 
@@ -61,33 +84,47 @@ export async function bomSymbolDossier(
     // NO-INSTALLED-SYMBOL lines: a false absence claim in a machine-verified
     // block is the exact failure mode this file exists to prevent (I15).
     if (!(await listInstalledLibraries(dirs)).size) return '';
-    // Group refdes by query so a part used five times renders once. The MPN is
-    // the stronger name when present; the stage-3 scaffold's UNVERIFIED flag
-    // word is not part of it.
-    const byQuery = new Map<string, string[]>();
+    // Group refdes by primary query so a part used five times renders once.
+    // The MPN is the stronger name when present; the stage-3 scaffold's
+    // UNVERIFIED flag word is not part of it. The Value is kept as a fallback
+    // query, searched only when the MPN finds nothing — a bogus MPN over a
+    // resolvable Value must not read as NO INSTALLED SYMBOL.
+    const byQuery = new Map<string, { refs: string[]; fallback?: string }>();
     for (const row of parseBomTable(bomMd)) {
       if (PASSIVE_REFDES.test(row.refdes)) continue;
       const mpn = (row.mpn ?? '').replace(/^UNVERIFIED[:\s]*/i, '').trim();
-      const query = mpn || (row.value ?? '').trim();
+      const value = (row.value ?? '').trim();
+      const query = mpn || value;
       if (query.length < 3) continue;
-      const refs = byQuery.get(query) ?? [];
-      refs.push(row.refdes);
-      byQuery.set(query, refs);
+      const entry = byQuery.get(query) ?? { refs: [] };
+      entry.refs.push(row.refdes);
+      if (mpn && value.length >= 3 && value !== mpn) entry.fallback = value;
+      byQuery.set(query, entry);
     }
     if (!byQuery.size) return '';
 
     const lines: string[] = [];
     const overflow: string[] = [];
+    const errored: string[] = [];
+    // Reserve room for the two disclosure trailers up front, so the complete
+    // rendered block — disclosures included — stays within maxChars.
+    const TRAILER_BUDGET = Math.min(1200, Math.floor(maxChars / 4));
+    const bodyBudget = maxChars - TRAILER_BUDGET;
     let spent = 0;
-    for (const [query, refs] of byQuery) {
+    for (const [query, { refs, fallback }] of byQuery) {
       const who = `${refs.join(', ')} (${query})`;
-      if (spent >= maxChars) {
+      if (spent >= bodyBudget) {
         overflow.push(who);
         continue;
       }
       let line: string;
       try {
-        const hits = await searchInstalledSymbols(query, dirs, searchCap);
+        let hits = await searchInstalledSymbols(query, dirs, searchCap);
+        let matchedBy = '';
+        if (!hits.length && fallback) {
+          hits = await searchInstalledSymbols(fallback, dirs, searchCap);
+          if (hits.length) matchedBy = ` (matched by Value "${fallback}")`;
+        }
         const top = hits[0];
         if (!top) {
           line = `- ${who}: NO INSTALLED SYMBOL matches — not capturable as named; substitute a part whose symbol exists (search_symbols to find one)`;
@@ -100,24 +137,41 @@ export async function bomSymbolDossier(
           } else {
             const multi = r.units >= 2 ? ` — MULTI-UNIT (${r.units} units): the drafting engine refuses this symbol; choose a single-unit variant` : '';
             const also = hits.length > 1 ? `\n  also installed: ${hits.slice(1).join(', ')}` : '';
-            line = `- ${who}: ${top} — ${r.pins.length} pin(s): ${pinTable(r.pins)}${multi}${also}`;
+            line = `- ${who}: ${top}${matchedBy} — ${r.pins.length} pin(s): ${pinTable(r.pins)}${multi}${also}`;
           }
         }
       } catch {
-        overflow.push(who); // one unreadable part must not sink the block
+        errored.push(who); // one failed probe must not sink the block
         continue;
       }
-      if (spent + line.length > maxChars) {
+      if (spent + line.length > bodyBudget) {
         overflow.push(who);
         continue;
       }
       spent += line.length;
       lines.push(line);
     }
-    if (!lines.length && !overflow.length) return '';
+    if (!lines.length && !overflow.length && !errored.length) return '';
+    // Two distinct disclosures: a probe error is not a size decision, and
+    // labeling it "size cap" would misreport why coverage is missing.
+    if (errored.length) {
+      lines.push(
+        boundedList(
+          '- UNRESOLVED (probe error): ',
+          errored,
+          ' — the probe failed for these; an error says nothing about availability, call symbol_pins for each.',
+          Math.floor(TRAILER_BUDGET / (overflow.length ? 2 : 1)),
+        ),
+      );
+    }
     if (overflow.length) {
       lines.push(
-        `- NOT INCLUDED (size cap ${maxChars} chars): ${overflow.join('; ')} — call symbol_pins for each; nothing above says whether these resolve.`,
+        boundedList(
+          `- NOT INCLUDED (size cap ${maxChars} chars): `,
+          overflow,
+          ' — call symbol_pins for each; nothing above says whether these resolve.',
+          Math.floor(TRAILER_BUDGET / (errored.length ? 2 : 1)),
+        ),
       );
     }
     return lines.join('\n');

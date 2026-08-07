@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import { mkdtemp, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -57,6 +57,7 @@ const BOM = `| Refdes | Value | Footprint | MPN | Rationale |
 | U1 | codec | Package_DFN_QFN:X | TLV320AIC3100 | audio codec |
 | U2 | buffer | Package_TO_SOT_SMD:X | SN74LVC2G17 | dual schmitt buffer |
 | U3 | ghost | Package_QFP:X | XYZQ9999ZZ | not installed anywhere |
+| U4 | SN74LVC1G17 | Package_TO_SOT_SMD:X | BOGUSMPN9999 | bogus MPN over a resolvable Value |
 | SW2 | R_Small | Button:X | | value fallback row |
 | R1 | 10k | Resistor_SMD:X | UNVERIFIED | passive, omitted |
 | C3 | 100n | Capacitor_SMD:X | UNVERIFIED | passive, omitted |
@@ -118,6 +119,13 @@ describe('pin dossier (R14: stage-4 entry pin facts)', () => {
       expect(d).toContain('SW2 (R_Small): Device:R_Small — 2 pin(s)');
     });
 
+    it('searches the Value as a separate fallback when the MPN finds nothing', async () => {
+      const d = await bomSymbolDossier(BOM, [libDir]);
+      // A bogus MPN over a resolvable Value must not read as NO INSTALLED SYMBOL.
+      expect(d).toContain('U4 (BOGUSMPN9999): Logic:SN74LVC1G17 (matched by Value "SN74LVC1G17")');
+      expect(d).not.toMatch(/U4 .*NO INSTALLED SYMBOL/);
+    });
+
     it('names parts nothing matches instead of omitting them', async () => {
       const d = await bomSymbolDossier(BOM, [libDir]);
       expect(d).toMatch(/U3 \(XYZQ9999ZZ\): NO INSTALLED SYMBOL/);
@@ -131,12 +139,17 @@ describe('pin dossier (R14: stage-4 entry pin facts)', () => {
       expect(d).not.toContain('(100n)');
     });
 
-    it('discloses size-cap overflow by name, never silently', async () => {
-      const d = await bomSymbolDossier(BOM, [libDir], { maxChars: 120 });
-      expect(d).toContain('NOT INCLUDED (size cap 120 chars)');
+    it('discloses size-cap overflow within the cap, never silently', async () => {
+      const d = await bomSymbolDossier(BOM, [libDir], { maxChars: 700 });
+      expect(d).toContain('NOT INCLUDED (size cap 700 chars)');
       expect(d).toContain('symbol_pins');
-      // every non-passive part appears exactly once: rendered or disclosed
-      for (const who of ['U1', 'U2', 'U3', 'SW2']) expect(d).toContain(who);
+      // The bound covers the COMPLETE rendered block, disclosure included.
+      expect(d.length).toBeLessThanOrEqual(700);
+      // every non-passive part appears — rendered, disclosed by name, or
+      // covered by the explicit "…and N more" truncation count
+      for (const who of ['U1', 'U2', 'U3', 'U4', 'SW2']) {
+        if (!d.includes(who)) expect(d).toMatch(/…and \d+ more/);
+      }
     });
 
     it('degrades to empty on no dirs, no rows, and garbage input', async () => {
@@ -147,37 +160,35 @@ describe('pin dossier (R14: stage-4 entry pin facts)', () => {
   });
 
   describe('symbol_pins tool', () => {
-    let savedEnv: string | undefined;
-    const ctx = (): RunContext =>
-      ({
-        repoRoot: '/nonexistent',
-        config: {},
-        transcript: { event: async () => {} },
-        ledger: new ObligationsLedger(),
-        runId: 'test',
-        interactive: false,
-        confirm: async () => true,
-        editsUnlocked: false,
-        changeId: null,
-        proposalValidated: false,
-        filesTouched: new Set(),
-        decisions: [],
-        lastErc: null,
-        lastDrc: null,
-        lastLegibility: null,
-        lastScore: null,
-        repairCycles: 0,
-        finishRequest: null,
-      }) as never;
+    // Typed literal (only the two stub collaborators are cast), so a new
+    // required RunContext field fails typecheck here instead of at runtime.
+    const ctx = (): RunContext => ({
+      repoRoot: '/nonexistent',
+      config: {} as RunContext['config'],
+      transcript: { event: async () => {} } as unknown as RunContext['transcript'],
+      ledger: new ObligationsLedger(),
+      runId: 'test',
+      interactive: false,
+      confirm: async () => true,
+      editsUnlocked: false,
+      changeId: null,
+      proposalValidated: false,
+      filesTouched: new Set(),
+      decisions: [],
+      lastErc: null,
+      lastDrc: null,
+      lastLegibility: null,
+      lastScore: null,
+      repairCycles: 0,
+      finishRequest: null,
+    });
 
     beforeAll(() => {
-      savedEnv = process.env.KICAD_SYMBOL_DIR;
-      process.env.KICAD_SYMBOL_DIR = libDir;
+      vi.stubEnv('KICAD_SYMBOL_DIR', libDir);
     });
 
     afterAll(() => {
-      if (savedEnv === undefined) delete process.env.KICAD_SYMBOL_DIR;
-      else process.env.KICAD_SYMBOL_DIR = savedEnv;
+      vi.unstubAllEnvs();
     });
 
     it('reports pins and unit count for a resolved lib_id', async () => {

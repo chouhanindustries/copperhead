@@ -18,9 +18,36 @@
  * instead of guessing.
  */
 
-import { readFile, readdir, access } from 'node:fs/promises';
+import { readFile, readdir, access, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { parseSexp, children, child, isList, type SexpNode } from './sexp.js';
+
+/** Numeric-aware, case-insensitive pin-number ordering ("2" < "10", "a1" ~ "A1")
+ * shared by every pin-table renderer so orderings never diverge. */
+const pinNumberCollator = new Intl.Collator('en', { numeric: true, sensitivity: 'base' });
+export const comparePinNumbers = (a: string, b: string): number => pinNumberCollator.compare(a, b);
+
+/**
+ * Symbol-name index of a `.kicad_sym`, cached by mtime. The stock set is ~220
+ * files that never change within a run, but discovery-heavy callers (the
+ * dossier's per-part search, the recovery probe loop) would otherwise re-read
+ * and re-scrape all of them per query. Returns null when the file is
+ * unreadable, so callers skip it the same way a failed readFile did.
+ */
+const symbolNameCache = new Map<string, { mtimeMs: number; names: string[] }>();
+async function libSymbolNames(file: string): Promise<string[] | null> {
+  try {
+    const { mtimeMs } = await stat(file);
+    const hit = symbolNameCache.get(file);
+    if (hit && hit.mtimeMs === mtimeMs) return hit.names;
+    const text = await readFile(file, 'utf8');
+    const names = [...text.matchAll(/^\s*\(symbol\s+"([^"]+)"/gm)].map((m) => m[1]!);
+    symbolNameCache.set(file, { mtimeMs, names });
+    return names;
+  } catch {
+    return null;
+  }
+}
 
 const tag = (n: SexpNode): string | null => (isList(n) && typeof n[0] === 'string' ? n[0] : null);
 const atomAt = (node: SexpNode[] | undefined, idx: number): string | undefined => {
@@ -83,24 +110,25 @@ export async function symbolSearchDirs(env = process.env, winRoot = 'C:/Program 
   // — a caller pointing KICAD_SYMBOL_DIR at an isolated directory (tests, a
   // pinned library set) must get only that directory back.
   const kicadRoot = winRoot;
-  try {
-    if (fromEnv.length > 0) throw new Error('env override present; skip Windows auto-discovery');
-    const entries = await readdir(kicadRoot, { withFileTypes: true });
-    const versions = entries
-      .filter((e) => e.isDirectory())
-      .map((e) => e.name)
-      .sort((a, b) => b.localeCompare(a, undefined, { numeric: true }));
-    for (const version of versions) {
-      const dir = `${kicadRoot}/${version}/share/kicad/symbols`;
-      try {
-        await access(dir);
-        if (!out.includes(dir)) out.push(dir);
-      } catch {
-        // this version folder has no symbols dir; skip
+  if (fromEnv.length === 0) {
+    try {
+      const entries = await readdir(kicadRoot, { withFileTypes: true });
+      const versions = entries
+        .filter((e) => e.isDirectory())
+        .map((e) => e.name)
+        .sort((a, b) => b.localeCompare(a, undefined, { numeric: true }));
+      for (const version of versions) {
+        const dir = `${kicadRoot}/${version}/share/kicad/symbols`;
+        try {
+          await access(dir);
+          if (!out.includes(dir)) out.push(dir);
+        } catch {
+          // this version folder has no symbols dir; skip
+        }
       }
+    } catch {
+      // C:\Program Files\KiCad doesn't exist on this machine (not Windows, or KiCad not installed here); skip
     }
-  } catch {
-    // C:\Program Files\KiCad doesn't exist on this machine (not Windows, or KiCad not installed here); skip
   }
   return out;
 }
@@ -250,13 +278,8 @@ export async function findSymbolAcrossLibraries(
     // Sensor_Humidity, where the real symbol is SHT4x). Skip its exact check,
     // never its fuzzy one.
     const skipExact = lib === excludeLib;
-    let text: string;
-    try {
-      text = await readFile(file, 'utf8');
-    } catch {
-      continue;
-    }
-    const names = [...text.matchAll(/^\s*\(symbol\s+"([^"]+)"/gm)].map((m) => m[1]!);
+    const names = await libSymbolNames(file);
+    if (!names) continue;
     if (!skipExact && names.includes(name)) {
       exact.push({ lib, name, exact: true });
       continue;
@@ -285,11 +308,25 @@ export async function findSymbolAcrossLibraries(
       const lower = n.toLowerCase();
       if (lower.includes(q)) return true;
       if (lower.length >= MIN_SHORT_NAME_LEN && q.includes(lower)) return true;
-      return (
-        q.length >= MIN_EDIT_MATCH_LEN &&
-        lower.length >= MIN_EDIT_MATCH_LEN &&
-        editDistanceWithin(q, lower, 1) <= 1
-      );
+      if (
+        q.length < MIN_EDIT_MATCH_LEN ||
+        lower.length < MIN_EDIT_MATCH_LEN ||
+        editDistanceWithin(q, lower, 1) > 1
+      ) {
+        return false;
+      }
+      // One edit is still too loose when it swaps a digit for a digit: that
+      // names a *different real part* (TPS22860 vs TPS22810), while a letter
+      // on either side of the edit marks a family wildcard or variant suffix
+      // (SHT40 vs SHT4x). Insertions/deletions (length differs) stay allowed.
+      if (q.length === lower.length) {
+        for (let i = 0; i < q.length; i++) {
+          if (q[i] !== lower[i]) {
+            return !(/[0-9]/.test(q[i]!) && /[0-9]/.test(lower[i]!));
+          }
+        }
+      }
+      return true;
     });
     if (fuzzyHit) {
       fuzzy.push({ lib, name: fuzzyHit, exact: false });
@@ -318,13 +355,8 @@ export async function searchInstalledSymbols(
   // caller reaching for it has already guessed the nickname wrong.
   const hits: { libId: string; rank: number; name: string }[] = [];
   for (const [lib, file] of await listInstalledLibraries(dirs)) {
-    let text: string;
-    try {
-      text = await readFile(file, 'utf8');
-    } catch {
-      continue;
-    }
-    const names = [...text.matchAll(/^\s*\(symbol\s+"([^"]+)"/gm)].map((m) => m[1]!);
+    const names = await libSymbolNames(file);
+    if (!names) continue;
     for (const { name, rank } of rankSymbolNames(names, query, 4)) {
       hits.push({ libId: `${lib}:${name}`, rank, name });
     }
@@ -439,7 +471,7 @@ export async function resolveLibrarySymbol(
 
 export interface SymbolFinding {
   libId: string;
-  kind: 'no-library' | 'no-symbol' | 'pin-count' | 'pin-mismatch';
+  kind: 'no-library' | 'no-symbol' | 'wrong-library' | 'pin-count' | 'pin-mismatch';
   detail: string;
 }
 
@@ -494,9 +526,12 @@ export async function verifySchematicSymbols(
       continue;
     }
     if (resolved.status === 'found-elsewhere') {
+      // A distinct kind from 'no-library': the part IS verifiable, just filed
+      // under another nickname — callers counting real issues must include it,
+      // while 'no-library' stays "could not check".
       findings.push({
         libId: entry.libId,
-        kind: 'no-library',
+        kind: 'wrong-library',
         detail: `"${entry.libId}" names the wrong library, not the wrong part: use ${resolved.libIds.join(' or ')} instead.`,
       });
       continue;

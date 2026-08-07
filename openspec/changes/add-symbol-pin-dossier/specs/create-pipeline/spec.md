@@ -4,13 +4,15 @@
 
 ### Requirement: Stage-4 entry pin dossier
 
-Before each attempt of the schematic stage runs, the pipeline SHALL resolve every BOM part against the installed symbol libraries and inject the result into the stage prompt as a machine-verified dossier, so the agent starts with the pin facts it would otherwise spend turns reconstructing. Resolution SHALL query the part's MPN first and fall back to its Value, and SHALL be recomputed per attempt, since a rolled-back retry can run against a different BOM than its predecessor.
+Before each attempt of the schematic stage runs, the pipeline SHALL resolve every BOM part against the installed symbol libraries and inject the result into the stage prompt as a machine-verified dossier, so the agent starts with the pin facts it would otherwise spend turns reconstructing. Resolution SHALL search the part's MPN first and, only when that search returns no match, SHALL search its Value as a separate fallback query — a bogus MPN over a resolvable Value must not read as absence. Resolution SHALL be recomputed per attempt, since a rolled-back retry can run against a different BOM than its predecessor.
 
 For each covered part the dossier SHALL name the part's refdes and query, the top-ranked installed lib_id, and that symbol's real pins (number, name, electrical type), following `extends` links. A symbol defining more than one unit SHALL be flagged as one the drafting engine refuses. Alternative candidate lib_ids SHALL be listed so a wrong top match is recoverable without a search turn. A part no installed symbol matches SHALL be named as such, with the instruction to substitute, rather than omitted.
 
 Pure-passive refdes classes (R, C, L) are drawable from their canonical `Device:*` symbols and SHALL be omitted by design.
 
-The dossier SHALL be bounded in size, and parts beyond the bound SHALL be named as not included — with the instruction to fetch them via `symbol_pins` — never silently dropped, so absence from the dossier is never readable as absence from the libraries. Dossier construction SHALL NOT block the stage: on any error, or when no BOM exists, the stage runs with no dossier block, exactly as before this change.
+The dossier SHALL be bounded in size, and the bound covers the complete rendered block: parts beyond it SHALL be named as not included — with the instruction to fetch them via `symbol_pins` — never silently dropped, and the disclosure lines themselves SHALL fit within the bound, truncating their enumeration to an explicit count ("…and N more") rather than exceeding it, so coverage stays explicit even when the disclosure is cut short. Absence from the dossier is never readable as absence from the libraries.
+
+Failures SHALL be reported for what they are: a part whose probe errored SHALL be disclosed as unresolved-by-error — distinct from the size-cap disclosure, since an error is not a size decision and says nothing about availability — while a failure of dossier construction as a whole SHALL yield no block at all. Dossier construction SHALL NOT block the stage: on any error, on timeout, or when no BOM exists, the stage runs with no dossier block, exactly as before this change.
 
 A NO-INSTALLED-SYMBOL line is an absence claim, and the dossier SHALL make one only after at least one library was actually readable: when no `.kicad_sym` resolves in any search directory, the machine has verified nothing, and the dossier SHALL be omitted entirely rather than assert absence for every part. "Could not check" and "checked and absent" are different facts, and a block labeled machine-verified must never render the first as the second.
 
@@ -27,7 +29,12 @@ A NO-INSTALLED-SYMBOL line is an absence claim, and the dossier SHALL make one o
 #### Scenario: Size overflow is disclosed
 
 - **WHEN** the rendered dossier would exceed its size bound
-- **THEN** the parts left out are named as not included, with `symbol_pins` given as the way to fetch each
+- **THEN** the parts left out are named as not included, with `symbol_pins` given as the way to fetch each, and the complete block — disclosure included — still fits within the bound, ending the enumeration with an explicit "…and N more" count when the names alone would not fit
+
+#### Scenario: A probe error is not a size decision
+
+- **WHEN** one part's search or resolution throws while the rest of the dossier builds
+- **THEN** that part is disclosed as unresolved by error, separate from the size-cap disclosure, and the rest of the dossier renders normally
 
 #### Scenario: Dossier failure does not block the stage
 

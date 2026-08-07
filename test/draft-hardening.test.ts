@@ -665,20 +665,22 @@ describe('draft orchestration error paths', () => {
         'utf8',
       );
       const src = new SymbolSource(repo, [libDir]);
-      let suggested: string | null = null;
-      try {
-        await src.resolve('Sensor_Wrong:SHT40');
-        expect.unreachable('expected resolve to throw');
-      } catch (e) {
-        expect(e).toBeInstanceOf(SymbolResolutionError);
-        const err = e as SymbolResolutionError;
-        expect(err.reason).toBe('found-elsewhere');
-        suggested = err.candidates[0]!;
-        // The bug this guards: reconstructing from the query would produce
-        // "Sensor_Humidity:SHT40", which does not exist anywhere.
-        expect(suggested).toBe('Sensor_Humidity:SHT4x');
-      }
-      const resolved = await src.resolve(suggested!);
+      // Both then() handlers: an unexpected success rejects with its own error
+      // instead of being swallowed by a catch meant for the resolution failure.
+      const err = await src.resolve('Sensor_Wrong:SHT40').then(
+        () => {
+          throw new Error('expected resolve to throw');
+        },
+        (e: unknown) => e,
+      );
+      expect(err).toBeInstanceOf(SymbolResolutionError);
+      const failure = err as SymbolResolutionError;
+      expect(failure.reason).toBe('found-elsewhere');
+      const suggested = failure.candidates[0]!;
+      // The bug this guards: reconstructing from the query would produce
+      // "Sensor_Humidity:SHT40", which does not exist anywhere.
+      expect(suggested).toBe('Sensor_Humidity:SHT4x');
+      const resolved = await src.resolve(suggested);
       expect(resolved.libId).toBe('Sensor_Humidity:SHT4x');
       expect(resolved.pins).toHaveLength(2);
     } finally {

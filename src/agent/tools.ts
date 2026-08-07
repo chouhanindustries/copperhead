@@ -9,7 +9,7 @@ import { listSymbols, listNets } from '../kicad/sexp.js';
 import { checkLegibility, formatLegibility } from '../kicad/legibility.js';
 import { scoreSchematic, formatScore } from '../kicad/score.js';
 import { draftSchematic, defaultIntentPath, formatSchematicDraftReport } from '../kicad/draft/draft.js';
-import { verifySchematicSymbols, searchInstalledSymbols, symbolSearchDirs, resolveLibrarySymbol } from '../kicad/symlib.js';
+import { verifySchematicSymbols, searchInstalledSymbols, symbolSearchDirs, resolveLibrarySymbol, comparePinNumbers } from '../kicad/symlib.js';
 import { checkDrift } from '../memory/drift.js';
 import { saveConstraint, classifyAffectsTarget, affectsTargetExists } from '../memory/constraints.js';
 import { openspecValidate } from '../openspec/cli.js';
@@ -384,11 +384,13 @@ export const TOOLS: ToolDef[] = [
       const libId = str(args, 'lib_id');
       const name = libId.includes(':') ? libId.slice(libId.indexOf(':') + 1) : libId;
       const dirs = await symbolSearchDirs();
-      if (!dirs.length) return 'no installed KiCad symbol library directories found on this machine';
+      if (!dirs.length) {
+        return `cannot verify "${libId}": no installed KiCad symbol library directories were found on this machine, so nothing can be resolved or ruled out. Install the KiCad symbol libraries (or set KICAD_SYMBOL_DIR), or choose a part you can verify another way.`;
+      }
       const r = await resolveLibrarySymbol(libId, dirs);
       if (r.status === 'ok') {
         const pins = [...r.pins]
-          .sort((a, b) => a.number.localeCompare(b.number, 'en', { numeric: true }))
+          .sort((a, b) => comparePinNumbers(a.number, b.number))
           .map((p) => `  ${p.number}: ${p.name === '~' || !p.name ? '(unnamed)' : p.name} · ${p.type}`);
         const multi =
           r.units >= 2

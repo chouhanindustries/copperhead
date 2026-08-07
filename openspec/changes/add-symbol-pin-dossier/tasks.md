@@ -7,11 +7,11 @@
 
 ## 2. `bomSymbolDossier`
 
-- [x] 2.1 New `src/kicad/dossier.ts`: parse the BOM via the shared `parseBomTable`, group rows by query (MPN with the UNVERIFIED flag word stripped, else Value), skip pure-passive refdes classes (R/C/L)
-- [x] 2.2 Per query: `searchInstalledSymbols`, resolve the top hit's pins, render refdes + query + lib_id + pin table (number=name/type, numeric-aware pin order), MULTI-UNIT flag, alternative candidates, or the NO-INSTALLED-SYMBOL line
-- [x] 2.3 Size cap with named overflow ("NOT INCLUDED … use symbol_pins"), never silent truncation
-- [x] 2.4 Never throws: bad BOM, unreadable library, or empty search dirs degrade to `''`
-- [x] 2.5 Tests: MPN and Value resolution, passive omission, no-symbol line, multi-unit flag, cap disclosure, empty on no BOM table
+- [x] 2.1 New `src/kicad/dossier.ts`: parse the BOM via the shared `parseBomTable`, group rows by primary query (MPN with the UNVERIFIED flag word stripped, else Value), skip pure-passive refdes classes (R/C/L)
+- [x] 2.2 Per part: search the MPN first, and only on an MPN miss run the Value as a separate fallback search; resolve the top hit's pins, render refdes + query + lib_id + pin table (number=name/type, shared numeric-aware pin order), MULTI-UNIT flag, alternative candidates, or the NO-INSTALLED-SYMBOL line
+- [x] 2.3 Size cap over the complete rendered block: named overflow ("NOT INCLUDED … use symbol_pins") and errored parts ("UNRESOLVED (probe error)") disclosed separately, both trailers bounded with an explicit "…and N more" truncation — never silent, never over the cap; test the final rendered size with overflow disclosure
+- [x] 2.4 Never throws: bad BOM, unreadable library, or empty search dirs degrade to `''`; a single part's probe error is disclosed, not converted into `''` or a size-cap entry
+- [x] 2.5 Tests: MPN resolution, Value fallback after an MPN miss, passive omission, no-symbol line, multi-unit flag, cap disclosure within bound, empty on no BOM table
 
 ## 3. `symbol_pins` agent tool
 
