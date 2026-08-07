@@ -2,7 +2,13 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { resolveLibrarySymbol, verifySchematicSymbols } from '../src/kicad/symlib.js';
+import {
+  resolveLibrarySymbol,
+  verifySchematicSymbols,
+  closestSymbolNames,
+  searchInstalledSymbols,
+} from '../src/kicad/symlib.js';
+import { symbolAvailabilityFacts } from '../src/agent/recovery.js';
 
 // A minimal stand-in for /usr/share/kicad/symbols/Device.kicad_sym: R (2 pins)
 // and R_Small which `extends` R (inherits R's pins, has none of its own).
@@ -81,14 +87,42 @@ describe('symlib (I9: verify symbols against the installed KiCad library)', () =
   });
 
   it('reports candidates when the exact name is absent', async () => {
+    const r = await resolveLibrarySymbol('Device:R_Smal', [libDir]);
+    expect(r.status).toBe('no-symbol');
+    if (r.status === 'no-symbol') expect(r.candidates).toContain('R_Small'); // prefix match
+  });
+
+  it('never pads candidates with single-letter generics for a long query (#195)', async () => {
+    // Old behavior: "R" ⊂ "R_Nonexistent" counted as a match, so any long
+    // query got the library's one-letter passives as "closest" suggestions.
     const r = await resolveLibrarySymbol('Device:R_Nonexistent', [libDir]);
     expect(r.status).toBe('no-symbol');
-    if (r.status === 'no-symbol') expect(r.candidates).toContain('R'); // substring match
+    if (r.status === 'no-symbol') expect(r.candidates).not.toContain('R');
   });
 
   it('reports no-library when the library file is missing', async () => {
     const r = await resolveLibrarySymbol('Connector:Whatever', [libDir]);
     expect(r.status).toBe('no-library');
+  });
+
+  it('ranks separator-variant names as near-misses and drops sub-units (#195)', () => {
+    // Real strings from the lemondrop run (run-logs/2026-08-07T17-52-03): the
+    // validator answered "Device:Rotary_Encoder" with "closest: C, D, R" while
+    // RotaryEncoder_Switch sat one underscore away in that library.
+    const device = ['C', 'D', 'L', 'R', 'FerriteBead', 'RotaryEncoder', 'RotaryEncoder_Switch', 'RotaryEncoder_Switch_MP'];
+    const got = closestSymbolNames(device, 'Rotary_Encoder');
+    expect(got[0]).toBe('RotaryEncoder'); // separator-insensitive exact match first
+    expect(got).toContain('RotaryEncoder_Switch');
+    expect(got).not.toContain('C');
+    expect(got).not.toContain('R');
+
+    // "microSD_Card" differs from the installed name by case and underscore placement.
+    expect(closestSymbolNames(['Micro_SD_Card', 'Micro_SD_Card_Det1', 'USB_A'], 'microSD_Card')[0]).toBe('Micro_SD_Card');
+
+    // Sub-unit children polluted 5 of 8 candidate slots in the real run.
+    const audio = ['TLV320AIC23BPW', 'TLV320AIC23BPW_0_1', 'TLV320AIC23BPW_1_1', 'TLV320AIC23BRHD', 'TLV320AIC23BRHD_0_1', 'TLV320AIC23BRHD_1_1', 'TLV320AIC3100', 'TLV320AIC3100_0_1'];
+    const tlv = closestSymbolNames(audio, 'TLV320');
+    expect(tlv.sort()).toEqual(['TLV320AIC23BPW', 'TLV320AIC23BRHD', 'TLV320AIC3100']);
   });
 
   it('verifies a schematic: clean match, pin-count diff, missing symbol, uninstalled lib', async () => {
@@ -103,5 +137,62 @@ describe('symlib (I9: verify symbols against the installed KiCad library)', () =
     expect(skipped).toBe(1);
     // The faithful Device:R must NOT produce a pin-mismatch.
     expect(findings.find((f) => f.libId === 'Device:R')).toBeUndefined();
+  });
+});
+
+// A one-pin top-level symbol entry, with the sub-unit child the scrape must skip.
+const sym = (name: string): string =>
+  `  (symbol "${name}" (pin_names (offset 0))
+    (symbol "${name}_1_1"
+      (pin passive line (at 0 0 0) (length 1.27) (name "~") (number "1"))
+    )
+  )`;
+const lib = (...names: string[]): string =>
+  `(kicad_symbol_lib (version 20251024) (generator test)\n${names.map(sym).join('\n')}\n)`;
+
+describe('cross-library discovery and refusal fact-checking (#195, #196, #197)', () => {
+  // The lemondrop run's real layout: the parts the stage-4 agent declared
+  // "verified absent" live in libraries it never guessed.
+  let dir: string;
+
+  beforeAll(async () => {
+    dir = await mkdtemp(path.join(tmpdir(), 'copperhead-symsearch-test-'));
+    await writeFile(path.join(dir, 'Audio.kicad_sym'), lib('TLV320AIC23BPW', 'TLV320AIC3100'), 'utf8');
+    await writeFile(path.join(dir, 'Driver_LED.kicad_sym'), lib('TPS61165DBV'), 'utf8');
+    await writeFile(path.join(dir, 'Connector_Audio.kicad_sym'), lib('AudioJack3', 'AudioJack3_Ground'), 'utf8');
+    await writeFile(path.join(dir, 'Device.kicad_sym'), lib('C', 'D', 'R', 'RotaryEncoder_Switch'), 'utf8');
+  });
+
+  afterAll(async () => {
+    await rm(dir, { recursive: true, force: true }).catch(() => {});
+  });
+
+  it('finds a part filed under a library nickname the caller could not derive', async () => {
+    expect(await searchInstalledSymbols('TPS61165', [dir])).toEqual(['Driver_LED:TPS61165DBV']);
+    expect(await searchInstalledSymbols('AudioJack3', [dir])).toContain('Connector_Audio:AudioJack3');
+    // exact (separator-insensitive) matches outrank other libraries' near-misses
+    expect((await searchInstalledSymbols('Rotary_Encoder_Switch', [dir]))[0]).toBe('Device:RotaryEncoder_Switch');
+  });
+
+  it('returns nothing for a part that is genuinely absent everywhere', async () => {
+    expect(await searchInstalledSymbols('TLP2361', [dir])).toEqual([]);
+  });
+
+  it('fact-checks lib_ids named in a refusal against the installed libraries', async () => {
+    // Condensed from the recorded constraint that drove the real abort: the
+    // first claim is false (the symbol resolves), the second names a part
+    // that is installed under a different library.
+    const refusal =
+      'VERIFIED ABSENT: "Audio:TLV320AIC23BPW" does not exist; ' +
+      'Regulator_Switching:TPS61165 is not installed (see docs/BOM.md and create.ts:311)';
+    const facts = await symbolAvailabilityFacts(refusal, [dir]);
+    expect(facts).toMatch(/Audio:TLV320AIC23BPW: RESOLVES/);
+    expect(facts).toContain('Driver_LED:TPS61165DBV');
+    // file:line refs are not lib_ids
+    expect(facts).not.toContain('create.ts');
+  });
+
+  it('produces no facts block when the text names no lib_ids', async () => {
+    expect(await symbolAvailabilityFacts('turn timed out after 300s; see create.ts:311', [dir])).toBe('');
   });
 });

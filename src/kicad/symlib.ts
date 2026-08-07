@@ -84,6 +84,93 @@ export async function findLibraryFile(lib: string, dirs: string[]): Promise<stri
   return null;
 }
 
+/**
+ * Rank a library's symbol names against a queried name that failed to resolve.
+ * Comparison is case-insensitive with separators (`_`, `-`, `.`) stripped, so
+ * `Rotary_Encoder` finds `RotaryEncoder_Switch` and `microSD_Card` finds
+ * `Micro_SD_Card` — KiCad's own naming is inconsistent on exactly this axis.
+ * Sub-unit children (`Name_<unit>_<style>`) are internal structure, not
+ * placeable symbols, and never candidates. The name-inside-query direction
+ * requires at least 3 significant characters: a stock library is full of
+ * single-letter generics (`R`, `C`, `D`) that would otherwise "match" nearly
+ * any part number and crowd out the real near-miss.
+ */
+const canonSymName = (s: string): string => s.toLowerCase().replace(/[_\-.]/g, '');
+
+export function closestSymbolNames(names: Iterable<string>, query: string, cap = 8): string[] {
+  const canon = canonSymName;
+  const q = canon(query);
+  if (q.length < 2) return [];
+  const ranked: { name: string; rank: number }[] = [];
+  const seen = new Set<string>();
+  for (const name of names) {
+    if (seen.has(name) || /_\d+_\d+$/.test(name)) continue;
+    seen.add(name);
+    const c = canon(name);
+    let rank: number;
+    if (c === q) rank = 0;
+    else if (c.startsWith(q)) rank = 1;
+    else if (c.includes(q)) rank = 2;
+    else if (c.length >= 3 && q.includes(c)) rank = 3;
+    else continue;
+    ranked.push({ name, rank });
+  }
+  ranked.sort((a, b) => a.rank - b.rank || a.name.length - b.name.length || (a.name < b.name ? -1 : 1));
+  return ranked.slice(0, cap).map((r) => r.name);
+}
+
+/** Every installed `<lib>.kicad_sym`, keyed by library nickname; the first
+ * search dir claims a nickname, matching `findLibraryFile`'s precedence. */
+export async function listInstalledLibraries(dirs: string[]): Promise<Map<string, string>> {
+  const map = new Map<string, string>();
+  for (const dir of dirs) {
+    let entries: string[];
+    try {
+      entries = await readdir(dir);
+    } catch {
+      continue;
+    }
+    for (const e of entries) {
+      if (!e.endsWith('.kicad_sym')) continue;
+      const lib = e.slice(0, -'.kicad_sym'.length);
+      if (!map.has(lib)) map.set(lib, path.join(dir, e));
+    }
+  }
+  return map;
+}
+
+/**
+ * Search every installed library for symbols matching a part name, returning
+ * ranked `Lib:Name` lib_ids with exact (separator-insensitive) matches first.
+ * This is the discovery primitive a bare lib_id probe cannot provide: a wrong
+ * library-nickname guess is otherwise indistinguishable from a missing part,
+ * and KiCad's nicknames rarely follow from the part number (TPS61165DBV lives
+ * in Driver_LED, AudioJack3 in Connector_Audio, INA226 in Sensor_Energy).
+ */
+export async function searchInstalledSymbols(
+  query: string,
+  dirs: string[],
+  cap = 24,
+): Promise<string[]> {
+  const q = canonSymName(query);
+  if (q.length < 2) return [];
+  const exact: string[] = [];
+  const near: string[] = [];
+  for (const [lib, file] of await listInstalledLibraries(dirs)) {
+    let text: string;
+    try {
+      text = await readFile(file, 'utf8');
+    } catch {
+      continue;
+    }
+    const names = [...text.matchAll(/^\s*\(symbol\s+"([^"]+)"/gm)].map((m) => m[1]!);
+    for (const name of closestSymbolNames(names, query, 4)) {
+      (canonSymName(name) === q ? exact : near).push(`${lib}:${name}`);
+    }
+  }
+  return [...exact, ...near].slice(0, cap);
+}
+
 /** Collect pins (number, name, electrical type) from a `(symbol …)` node,
  * including its nested unit sub-symbols. Same walk `libPinDefs` uses, plus the
  * electrical-type atom that pin-position parsing does not need. */
@@ -152,15 +239,8 @@ export async function resolveLibrarySymbol(
     current = base;
   }
 
-  // exact name not found: offer near matches (case-insensitive substring both ways)
-  const q = name.toLowerCase();
-  const candidates = [...symbols.keys()]
-    .filter((k) => {
-      const lk = k.toLowerCase();
-      return lk.includes(q) || q.includes(lk);
-    })
-    .slice(0, 8);
-  return { status: 'no-symbol', candidates };
+  // exact name not found: offer ranked near matches
+  return { status: 'no-symbol', candidates: closestSymbolNames(symbols.keys(), name) };
 }
 
 export interface SymbolFinding {

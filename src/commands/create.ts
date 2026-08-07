@@ -12,7 +12,7 @@ import { isDirty, commitAll, changedFiles } from '../util/git.js';
 import type { CompatSettings, CopperheadConfig } from '../config.js';
 import { checkDrift } from '../memory/drift.js';
 import { runAgentLoop, makeProvider, type BudgetExhaustedStats } from '../agent/loop.js';
-import { diagnoseStageFailure, transcriptExcerpt, withTimeout, type StageDiagnosis } from '../agent/recovery.js';
+import { diagnoseStageFailure, transcriptExcerpt, withTimeout, symbolAvailabilityFacts, type StageDiagnosis } from '../agent/recovery.js';
 import type { Provider } from '../agent/types.js';
 import type { RunMetaInput } from '../agent/runmeta.js';
 import { fmtDuration, fmtTokens, type ProgressRenderer } from '../agent/render.js';
@@ -157,7 +157,7 @@ export const STAGES: Stage[] = [
       });
     },
     prompt: () =>
-      'Stage 3: part selection. Write docs/BOM.md with the fixed table format (| Refdes | Value | Footprint | MPN | Rationale |). The Value column holds the COMPONENT VALUE and nothing else — "4.7uF", "1M", "500mAh Li-Po", "STM32F103C8T6" — because stage 4 draws it on the sheet as that part\'s Value field, where a description ("1S Li-Po cell, 500 mAh, bare leads") collides with neighbouring symbols and fails the legibility gate. Put the prose in the Rationale column instead; that is the column for it, and nothing draws it. One row per refdes: a grouped row ("SW3-SW16", "C5-C8") is not a BOM row and the schematic stage cannot match it. Every MPN you introduce is flagged UNVERIFIED with a datasheet-verifiable justification. Check leakage/quiescent current of every part against the power budget. Run check_drift before finishing.',
+      'Stage 3: part selection. Write docs/BOM.md with the fixed table format (| Refdes | Value | Footprint | MPN | Rationale |). The Value column holds the COMPONENT VALUE and nothing else — "4.7uF", "1M", "500mAh Li-Po", "STM32F103C8T6" — because stage 4 draws it on the sheet as that part\'s Value field, where a description ("1S Li-Po cell, 500 mAh, bare leads") collides with neighbouring symbols and fails the legibility gate. Put the prose in the Rationale column instead; that is the column for it, and nothing draws it. One row per refdes: a grouped row ("SW3-SW16", "C5-C8") is not a BOM row and the schematic stage cannot match it. Every MPN you introduce is flagged UNVERIFIED with a datasheet-verifiable justification. Check leakage/quiescent current of every part against the power budget. The design must be capturable with the KiCad symbol libraries installed on THIS machine: run search_symbols for every IC, module, connector and other active part before committing it to the BOM, and if a part has no installed symbol, pick one that has — stage 4 draws only from installed symbols, and a BOM row it cannot resolve makes the whole run unwinnable. Run check_drift before finishing.',
   },
   {
     name: 'schematic',
@@ -453,6 +453,10 @@ async function diagnose(input: {
     provider = await makeProvider(input.model, false, input.compat);
     const p = provider;
     const excerpt = await transcriptExcerpt(input.transcriptDir);
+    // Fact-check symbol-availability claims before the model judges them: a
+    // refusal narrating "library not installed" is adjudicated from the
+    // machine's actual libraries, not from the narration (I15/#197).
+    const symbolFacts = await symbolAvailabilityFacts(`${input.failure}\n${excerpt}`).catch(() => '');
     return await withTimeout(
       () =>
         diagnoseStageFailure(p, {
@@ -462,6 +466,7 @@ async function diagnose(input: {
           excerpt,
           attempt: input.attempt,
           maxAttempts: input.maxAttempts,
+          ...(symbolFacts ? { symbolFacts } : {}),
         }),
       input.timeoutMs,
       () => p.close?.(),
