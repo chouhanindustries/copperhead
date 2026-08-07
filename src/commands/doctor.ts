@@ -1,5 +1,6 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
+import { execa } from 'execa';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 import {
@@ -56,11 +57,11 @@ function defaultDeps(): DoctorDeps {
     // `git --version` prints "git version 2.34.1"; keep only the number, the
     // report already labels the row "git".
     gitVersion: async () => (await execFileP('git', ['--version'])).stdout.trim().replace(/^git version\s+/, ''),
-    // openspec ships as an npm-installed `.cmd` shim on Windows, not a real
-    // .exe like git; execFile only runs .cmd files through a shell. Folding
-    // the command into one string (no args array) avoids Node's DEP0190
-    // warning for shell:true + args.
-    openspecVersion: async () => (await execFileP('openspec --version', [], { shell: true })).stdout.trim(),
+    // Same probe shape as the real call site (src/openspec/cli.ts): execa
+    // resolves Windows .cmd/.bat shims via cross-spawn without a shell, so a
+    // missing binary still yields ENOENT (what isNotFoundError expects) on
+    // every platform, instead of a shell-reported exit 127/"not found".
+    openspecVersion: async () => (await execa('openspec', ['--version'])).stdout.trim(),
     env: process.env,
   };
 }
@@ -118,10 +119,14 @@ async function openspecCheck(probe: () => Promise<string>): Promise<DoctorCheck>
         hint: 'npm i -g @fission-ai/openspec; validate_change and the create pipeline need it.',
       };
     }
+    // Collapse embedded newlines/whitespace from a raw shell/subprocess error:
+    // formatDoctor's column layout assumes a single-line detail, and wrapWords
+    // splits on plain spaces only.
+    const rawMessage = (err as Error).message || String(err);
     return {
       name: 'openspec',
       status: 'fail',
-      detail: (err as Error).message || String(err),
+      detail: rawMessage.replace(/\s+/g, ' ').trim(),
     };
   }
 }
