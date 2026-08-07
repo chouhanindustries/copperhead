@@ -58,8 +58,7 @@ function defaultDeps(): DoctorDeps {
     // openspec ships as an npm-installed `.cmd` shim on Windows, not a real
     // .exe like git; execFile only runs .cmd files through a shell. Folding
     // the command into one string (no args array) avoids Node's DEP0190
-    // warning for shell:true + args, which doesn't apply here anyway since
-    // the command is a fixed literal, not user input.
+    // warning for shell:true + args.
     openspecVersion: async () => (await execFileP('openspec --version', [], { shell: true })).stdout.trim(),
     env: process.env,
   };
@@ -400,7 +399,7 @@ export async function runDoctor(opts: RunDoctorOptions): Promise<DoctorReport> {
     nodeCheck(deps.nodeVersion),
     await kicadCheck(deps.kicadVersion),
     await gitCheck(deps.gitVersion),
-    await openspecCheck(deps.openspecVersion), // new
+    await openspecCheck(deps.openspecVersion),
     providerCheck(opts.model, config, deps.env),
   ];
   if (resolvedModel) {
