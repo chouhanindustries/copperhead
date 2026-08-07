@@ -44,6 +44,7 @@ export interface DoctorDeps {
   nodeVersion: string;
   kicadVersion: () => Promise<string>;
   gitVersion: () => Promise<string>;
+  openspecVersion: () => Promise<string>;
   env: NodeJS.ProcessEnv;
 }
 
@@ -54,6 +55,12 @@ function defaultDeps(): DoctorDeps {
     // `git --version` prints "git version 2.34.1"; keep only the number, the
     // report already labels the row "git".
     gitVersion: async () => (await execFileP('git', ['--version'])).stdout.trim().replace(/^git version\s+/, ''),
+    // openspec ships as an npm-installed `.cmd` shim on Windows, not a real
+    // .exe like git; execFile only runs .cmd files through a shell. Folding
+    // the command into one string (no args array) avoids Node's DEP0190
+    // warning for shell:true + args, which doesn't apply here anyway since
+    // the command is a fixed literal, not user input.
+    openspecVersion: async () => (await execFileP('openspec --version', [], { shell: true })).stdout.trim(),
     env: process.env,
   };
 }
@@ -95,6 +102,19 @@ async function gitCheck(probe: () => Promise<string>): Promise<DoctorCheck> {
       status: 'fail',
       detail: 'not found on PATH',
       hint: 'install git; copperhead snapshots and commits its work.',
+    };
+  }
+}
+
+async function openspecCheck(probe: () => Promise<string>): Promise<DoctorCheck> {
+  try {
+    return { name: 'openspec', status: 'ok', detail: await probe() };
+  } catch {
+    return {
+      name: 'openspec',
+      status: 'fail',
+      detail: 'not found on PATH',
+      hint: 'npm i -g @fission-ai/openspec; validate_change and the create pipeline need it.',
     };
   }
 }
@@ -380,6 +400,7 @@ export async function runDoctor(opts: RunDoctorOptions): Promise<DoctorReport> {
     nodeCheck(deps.nodeVersion),
     await kicadCheck(deps.kicadVersion),
     await gitCheck(deps.gitVersion),
+    await openspecCheck(deps.openspecVersion), // new
     providerCheck(opts.model, config, deps.env),
   ];
   if (resolvedModel) {
