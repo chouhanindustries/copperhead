@@ -57,10 +57,14 @@ function defaultDeps(): DoctorDeps {
     // `git --version` prints "git version 2.34.1"; keep only the number, the
     // report already labels the row "git".
     gitVersion: async () => (await execFileP('git', ['--version'])).stdout.trim().replace(/^git version\s+/, ''),
-    // Same probe shape as the real call site (src/openspec/cli.ts): execa
-    // resolves Windows .cmd/.bat shims via cross-spawn without a shell, so a
-    // missing binary still yields ENOENT (what isNotFoundError expects) on
-    // every platform, instead of a shell-reported exit 127/"not found".
+    /**
+     * Probes `openspec --version` via execa, the same probe shape as the real
+     * call site (src/openspec/cli.ts): execa resolves Windows .cmd/.bat shims
+     * via cross-spawn without a shell, so a missing binary still yields ENOENT
+     * (what isNotFoundError expects) on every platform, instead of a
+     * shell-reported exit 127/"not found".
+     * @returns the trimmed stdout of `openspec --version` (e.g. "0.1.0").
+     */
     openspecVersion: async () => (await execa('openspec', ['--version'])).stdout.trim(),
     env: process.env,
   };
@@ -107,6 +111,17 @@ async function gitCheck(probe: () => Promise<string>): Promise<DoctorCheck> {
   }
 }
 
+/**
+ * Report whether the `openspec` CLI is reachable, needed for `validate_change`
+ * and the `create` pipeline. Fails soft like `kicadCheck`/`gitCheck`: a
+ * missing or erroring probe is returned as a `fail` check, never thrown.
+ * @param probe resolves the openspec version string, or rejects if the CLI
+ *   can't be run (e.g. not found on PATH).
+ * @returns an `ok` check with the version on success; a `fail` check with an
+ *   install hint when `probe` rejects with a not-found error (per
+ *   `isNotFoundError`), or a `fail` check with the flattened error message
+ *   otherwise.
+ */
 async function openspecCheck(probe: () => Promise<string>): Promise<DoctorCheck> {
   try {
     return { name: 'openspec', status: 'ok', detail: await probe() };
