@@ -2,7 +2,7 @@ import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { parseSexp, children, child, isList, type SexpNode, type Bounds } from '../sexp.js';
-import { symbolSearchDirs, findLibraryFile, findSymbolAcrossLibraries } from '../symlib.js';
+import { symbolSearchDirs, findLibraryFile, findSymbolAcrossLibraries, closestSymbolNames } from '../symlib.js';
 import { EMIT_VERSION, renameSymbolBlock } from '../emit.js';
 
 /**
@@ -323,13 +323,15 @@ export class SymbolSource {
       if (!block) {
         // The guessed library exists and simply lacks this name, so its own
         // near-matches are the most useful answer and come first: the caller
-        // named the right file and mistyped the part. Only when that file
-        // offers nothing is a different library worth suggesting — and only
-        // an exact hit there, since a cross-library *fuzzy* guess is weaker
-        // evidence than "you were close, in the right file".
+        // named the right file and mistyped the part. The scrape matches every
+        // `(symbol …)` line including indented sub-unit children;
+        // closestSymbolNames filters those out and ranks what remains, so all
+        // 8 slots carry placeable symbols. Only when that file offers nothing
+        // is a different library worth suggesting — and only an exact hit
+        // there, since a cross-library *fuzzy* guess is weaker evidence than
+        // "you were close, in the right file".
         const names = [...libText.matchAll(/^\s*\(symbol\s+"([^"]+)"/gm)].map((m) => m[1]!);
-        const q = name.toLowerCase();
-        const candidates = names.filter((k) => k.toLowerCase().includes(q) || q.includes(k.toLowerCase())).slice(0, 8);
+        const candidates = closestSymbolNames(names, name);
         if (candidates.length) throw new SymbolResolutionError(libId, 'no-symbol', candidates);
         const elsewhere = await crossLibrarySuggestions(name, lib, dirs);
         if (elsewhere.length) throw new SymbolResolutionError(libId, 'found-elsewhere', elsewhere);
