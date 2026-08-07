@@ -2,7 +2,7 @@ import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { parseSexp, children, child, isList, type SexpNode, type Bounds } from '../sexp.js';
-import { symbolSearchDirs, findLibraryFile } from '../symlib.js';
+import { symbolSearchDirs, findLibraryFile, closestSymbolNames } from '../symlib.js';
 import { EMIT_VERSION, renameSymbolBlock } from '../emit.js';
 
 /**
@@ -300,10 +300,11 @@ export class SymbolSource {
       const libText = await readFile(file, 'utf8');
       block = extractSymbolBlock(libText, name);
       if (!block) {
+        // The scrape matches every `(symbol …)` line including indented
+        // sub-unit children; closestSymbolNames filters those out and ranks
+        // what remains, so all 8 slots carry placeable symbols.
         const names = [...libText.matchAll(/^\s*\(symbol\s+"([^"]+)"/gm)].map((m) => m[1]!);
-        const q = name.toLowerCase();
-        const candidates = names.filter((k) => k.toLowerCase().includes(q) || q.includes(k.toLowerCase())).slice(0, 8);
-        throw new SymbolResolutionError(libId, 'no-symbol', candidates);
+        throw new SymbolResolutionError(libId, 'no-symbol', closestSymbolNames(names, name));
       }
       fromInstalled = true;
       this.libs.add(lib);
