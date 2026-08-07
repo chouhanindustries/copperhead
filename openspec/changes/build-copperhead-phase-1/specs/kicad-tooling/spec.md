@@ -21,7 +21,7 @@ ERC and DRC JSON reports SHALL be normalized into a single structured shape incl
 - **THEN** the returned violation includes its type, description, and sheet/location fields
 
 ### Requirement: Read-only s-expression parsing
-The system SHALL parse `.kicad_sch` files read-only to provide `list_symbols` (ref, value, footprint, sheet) and `list_nets` (net names); it SHALL NOT serialize or regenerate KiCad files.
+The system SHALL parse `.kicad_sch` files read-only to provide `list_symbols` (ref, value, footprint, sheet) and `list_nets` (net names); it SHALL NOT serialize or regenerate KiCad files. Pin-to-net connectivity SHALL recognize labels and explicit junction endpoints placed anywhere on a wire segment. `power:PWR_FLAG` SHALL declare external drive without becoming the net name.
 
 #### Scenario: Symbols match the schematic
 - **WHEN** `list_symbols` runs on the fixture schematic
@@ -30,6 +30,10 @@ The system SHALL parse `.kicad_sch` files read-only to provide `list_symbols` (r
 #### Scenario: Hierarchical sheets
 - **WHEN** the schematic has multiple sheets
 - **THEN** `list_symbols` includes symbols from every sheet with their sheet attribution
+
+#### Scenario: Mid-segment label with power flag
+- **WHEN** a net label lies at the midpoint of a wire between a component pin and `power:PWR_FLAG`
+- **THEN** the pin resolves to the label's net name and `PWR_FLAG` is not returned by `list_nets`
 
 ### Requirement: SVG export
 The system SHALL export schematic and board SVGs via kicad-cli for rendering and before/after diffing.

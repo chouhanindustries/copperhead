@@ -47,7 +47,7 @@ Tools are defined once as `{ name, description, jsonSchema, handler }` in `src/a
 
 ### D5 — ERC/DRC: `kicad-cli` with `--format json`, one report normalizer
 
-`run_erc`/`run_drc` shell out to `kicad-cli sch erc` / `pcb drc` with `--format json --exit-code-violations`, writing reports into the scratch dir of the run. `src/kicad/report.ts` normalizes both into `{ severity, type, description, sheet?, position?, items[] }`. The loop's repair cycle (max `maxRepairCycles`, default 5) feeds violations back verbatim; on exhaustion it restores the snapshot and exits non-zero (AC-3.6).
+`run_erc`/`run_drc` shell out to `kicad-cli sch erc` / `pcb drc` with `--format json --exit-code-violations`, writing reports into the scratch dir of the run. `src/kicad/report.ts` normalizes both into `{ severity, type, description, sheet?, position?, items[] }`. The loop feeds violations back verbatim and tracks consecutive non-improving reports per check kind. The first failure and a lower violation count establish progress; an equal or higher count spends one repair cycle. On exhaustion of `maxRepairCycles` (default 5) it restores the snapshot and exits non-zero (AC-3.6).
 
 ### D6 — Run lifecycle: git snapshot, transcript, structured commit
 

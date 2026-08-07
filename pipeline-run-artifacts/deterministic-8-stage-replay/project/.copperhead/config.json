@@ -1,0 +1,13 @@
+{
+  "schematic": "replay-board.kicad_sch",
+  "board": "replay-board.kicad_pcb",
+  "docs": "docs/",
+  "model": null,
+  "maxTurns": 20,
+  "maxRepairCycles": 5,
+  "budgets": {},
+  "turnTimeoutMs": 30000,
+  "heartbeatMs": 0,
+  "maxStageRetries": 0,
+  "llmCache": false
+}

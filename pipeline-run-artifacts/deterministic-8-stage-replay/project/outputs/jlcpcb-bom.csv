@@ -1,0 +1,4 @@
+Comment,Designator,Footprint,LCSC Part #
+10k,R1,Resistor_SMD:R_0603_1608Metric,
+1k,R2,Resistor_SMD:R_0603_1608Metric,
+ESP32-S3-MINI,U1,RF_Module:ESP32-S3-MINI-1,

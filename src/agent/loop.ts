@@ -243,6 +243,7 @@ async function runWithProviders(opts: RunOptions, providers: Set<Provider>): Pro
     decisions: [],
     lastErc: null,
     lastDrc: null,
+    repairProgress: {},
     repairCycles: 0,
     finishRequest: null,
   };
