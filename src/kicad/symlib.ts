@@ -44,8 +44,13 @@ export interface LibPin {
  * Candidate directories holding KiCad's stock `.kicad_sym` libraries, most
  * specific first. Env overrides win (KiCad exports these), then the standard
  * install locations for Linux/macOS/Windows. Only existing dirs are returned.
+ *
+ * @param winRoot test seam for the Windows `C:\Program Files\KiCad` root;
+ *   defaults to the real path. Without this, the Windows version-directory
+ *   discovery below can only be exercised on an actual Windows machine with
+ *   KiCad installed at the default location.
  */
-export async function symbolSearchDirs(env = process.env): Promise<string[]> {
+export async function symbolSearchDirs(env = process.env, winRoot = 'C:/Program Files/KiCad'): Promise<string[]> {
   const fromEnv = [
     env.KICAD_SYMBOL_DIR,
     env.KICAD10_SYMBOL_DIR,
@@ -77,7 +82,7 @@ export async function symbolSearchDirs(env = process.env): Promise<string[]> {
   // exactly that, not "env overrides win, plus whatever else this discovers"
   // — a caller pointing KICAD_SYMBOL_DIR at an isolated directory (tests, a
   // pinned library set) must get only that directory back.
-  const kicadRoot = 'C:/Program Files/KiCad';
+  const kicadRoot = winRoot;
   try {
     if (fromEnv.length > 0) throw new Error('env override present; skip Windows auto-discovery');
     const entries = await readdir(kicadRoot, { withFileTypes: true });
@@ -138,7 +143,12 @@ async function allLibraryFiles(dirs: string[]): Promise<{ lib: string; file: str
 
 export interface CrossLibraryMatch {
   lib: string;
-  /** true when the part name matched exactly; false for a fuzzy hit. */
+  /** The symbol name actually found (may differ from the query on a fuzzy hit,
+   * e.g. `SHT4x` for a query of `SHT40`) — the suggested lib_id must be built
+   * from this, never from the caller's original query, or a fuzzy suggestion
+   * points at a lib_id that does not exist. */
+  name: string;
+  /** true when `name` matched exactly; false for a fuzzy hit. */
   exact: boolean;
 }
 
@@ -199,7 +209,7 @@ export async function findSymbolAcrossLibraries(
     }
     const names = [...text.matchAll(/^\s*\(symbol\s+"([^"]+)"/gm)].map((m) => m[1]!);
     if (!skipExact && names.includes(name)) {
-      exact.push({ lib, exact: true });
+      exact.push({ lib, name, exact: true });
       continue;
     }
     // The "does the query contain the library name" direction is only
@@ -217,19 +227,23 @@ export async function findSymbolAcrossLibraries(
     // real part, which is exactly the wrong-part failure this tool must not
     // introduce.
     const MIN_EDIT_MATCH_LEN = 5;
-    if (
-      names.some((n) => {
-        const lower = n.toLowerCase();
-        if (lower.includes(q)) return true;
-        if (lower.length >= MIN_SHORT_NAME_LEN && q.includes(lower)) return true;
-        return (
-          q.length >= MIN_EDIT_MATCH_LEN &&
-          lower.length >= MIN_EDIT_MATCH_LEN &&
-          editDistanceWithin(q, lower, 1) <= 1
-        );
-      })
-    ) {
-      fuzzy.push({ lib, exact: false });
+    // The matched candidate string, not just whether one exists: a fuzzy hit
+    // must report the real symbol name (`n`) so the caller can build a lib_id
+    // that actually resolves. Suggesting `${lib}:${query}` back would name a
+    // part that was never found in that library — the exact regression this
+    // fuzzy path exists to avoid repeating.
+    const fuzzyHit = names.find((n) => {
+      const lower = n.toLowerCase();
+      if (lower.includes(q)) return true;
+      if (lower.length >= MIN_SHORT_NAME_LEN && q.includes(lower)) return true;
+      return (
+        q.length >= MIN_EDIT_MATCH_LEN &&
+        lower.length >= MIN_EDIT_MATCH_LEN &&
+        editDistanceWithin(q, lower, 1) <= 1
+      );
+    });
+    if (fuzzyHit) {
+      fuzzy.push({ lib, name: fuzzyHit, exact: false });
     }
   }
   return [...exact, ...fuzzy];
@@ -287,7 +301,7 @@ export async function resolveLibrarySymbol(
   const file = await findLibraryFile(lib, dirs);
   if (!file) {
     const elsewhere = await findSymbolAcrossLibraries(name, dirs, lib);
-    if (elsewhere.length) return { status: 'found-elsewhere', libIds: elsewhere.map((m) => `${m.lib}:${name}`) };
+    if (elsewhere.length) return { status: 'found-elsewhere', libIds: elsewhere.map((m) => `${m.lib}:${m.name}`) };
     return { status: 'no-library' };
   }
   const root = parseSexp(await readFile(file, 'utf8'))[0];
@@ -308,14 +322,10 @@ export async function resolveLibrarySymbol(
     current = base;
   }
 
-  // Not in the guessed file: a genuine exact match elsewhere is a stronger
-  // signal than a same-file substring guess (the file name, not the part
-  // name, was the mistake), so it takes priority.
-  const elsewhere = await findSymbolAcrossLibraries(name, dirs, lib);
-  if (elsewhere.length) return { status: 'found-elsewhere', libIds: elsewhere.map((m) => `${m.lib}:${name}`) };
-
-  // exact name not found anywhere: offer near matches within the guessed file
-  // (case-insensitive substring both ways)
+  // The guessed library exists and simply lacks this name, so its own
+  // near-matches are the most useful answer and come first: the caller named
+  // the right file and mistyped the part. Only when that file offers nothing
+  // is a different library worth suggesting (mirrors SymbolSource.resolve).
   const q = name.toLowerCase();
   const candidates = [...symbols.keys()]
     .filter((k) => {
@@ -323,6 +333,11 @@ export async function resolveLibrarySymbol(
       return lk.includes(q) || q.includes(lk);
     })
     .slice(0, 8);
+  if (candidates.length) return { status: 'no-symbol', candidates };
+
+  const elsewhere = await findSymbolAcrossLibraries(name, dirs, lib);
+  if (elsewhere.length) return { status: 'found-elsewhere', libIds: elsewhere.map((m) => `${m.lib}:${m.name}`) };
+
   return { status: 'no-symbol', candidates };
 }
 

@@ -211,9 +211,9 @@ export class SymbolResolutionError extends Error {
  */
 async function crossLibrarySuggestions(name: string, lib: string, dirs: string[]): Promise<string[]> {
   const matches = await findSymbolAcrossLibraries(name, dirs, lib);
-  const exact = matches.filter((m) => m.exact).map((m) => `${m.lib}:${name}`);
+  const exact = matches.filter((m) => m.exact).map((m) => `${m.lib}:${m.name}`);
   if (exact.length) return exact;
-  return matches.map((m) => `${m.lib}:${name}`);
+  return matches.map((m) => `${m.lib}:${m.name}`);
 }
 
 export class SymbolSource {
