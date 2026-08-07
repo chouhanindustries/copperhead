@@ -1,5 +1,5 @@
 import { existsSync } from 'node:fs';
-import { writeFile } from 'node:fs/promises';
+import { mkdir, writeFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import path from 'node:path';
 import { configPath, loadConfig, type CopperheadConfig } from '../config.js';
@@ -147,7 +147,9 @@ function projectFile(slug: string, rootUuid: string): string {
 }
 
 async function persist(repoRoot: string, config: CopperheadConfig): Promise<void> {
-  await writeFile(configPath(repoRoot), JSON.stringify(config, null, 2) + '\n', 'utf8');
+  const cfgPath = configPath(repoRoot);
+  await mkdir(path.dirname(cfgPath), { recursive: true });
+  await writeFile(cfgPath, JSON.stringify(config, null, 2) + '\n', 'utf8');
 }
 
 /**
