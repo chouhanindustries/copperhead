@@ -44,13 +44,11 @@ function parseSpecBudgets(spec: string): Map<string, string> {
   const afterHeading = spec.slice(heading.index + heading[0].length);
   const nextHeading = afterHeading.search(/^#{1,2}\s/m);
   const section = nextHeading >= 0 ? afterHeading.slice(0, nextHeading) : afterHeading;
-
-  const budgetLine =
-    /^\s*-\s*([A-Za-z][A-Za-z0-9_-]*)\s*:\s*(.+?)\s*$/gm;
-
+  const withoutCodeBlocks = section.split(/```/).filter((_, i) => i % 2 === 0).join('');
+  const budgetLine = /^-\s*([A-Za-z][A-Za-z0-9_-]*)\s*:\s*(.+?)\s*$/gm;
   let match: RegExpExecArray | null;
 
-  while ((match = budgetLine.exec(section)) !== null) {
+  while ((match = budgetLine.exec(withoutCodeBlocks)) !== null) { 
     const key = match[1];
     const value = match[2];
 
@@ -58,11 +56,21 @@ function parseSpecBudgets(spec: string): Map<string, string> {
 
     // Keep only the canonical value before any explanatory prose.
     const canonical = value.replace(/\s*\(.*$/, '').trim();
-
+    if (!isBudgetValue(canonical)) continue;
     budgets.set(key, canonical);
   }
 
   return budgets;
+}
+
+function isBudgetValue(value: string): boolean {
+  return /^\d+(?:\.\d+)?(?:\s*[A-Za-zµμ%/0-9]+)?$/.test(value);
+}
+
+function parseLeadingNumber(value: string): number | null {
+  const match = value.match(/^\d+(?:\.\d+)?/);
+
+  return match ? Number(match[0]) : null;
 }
 
 export async function syncVerify(repoRoot: string): Promise<SyncReport> {
@@ -99,7 +107,8 @@ export async function syncVerify(repoRoot: string): Promise<SyncReport> {
     const shortKey = key.split('.').pop()!;
 
     // Constraints documented in SPEC.md are checked deterministically.
-    if (constraint.source.startsWith('docs/SPEC.md')) {
+    const budgetSource = `${config.docs.replace(/\/?$/, '/')}SPEC.md#budgets`;
+    if (constraint.source.startsWith(budgetSource)) {
       if (!specBudgets.has(shortKey)) {
         resolvable.push({
           kind: 'dual-write',
@@ -121,14 +130,24 @@ export async function syncVerify(repoRoot: string): Promise<SyncReport> {
               ? String(constraint.min)
               : undefined;
 
-      if (recorded !== undefined && documented !== recorded) {
-        resolvable.push({
-          kind: 'dual-write',
-          doc: 'constraints.json',
-          claim: `${shortKey}: ${recorded}`,
-          actual: `SPEC.md documents ${documented}`,
-          resolution: `update either SPEC.md or constraints.json so both agree`,
-        });
+      if (recorded !== undefined) {
+        const documentedNumber = parseLeadingNumber(documented);
+        const recordedNumber = parseLeadingNumber(recorded);
+
+        const matches =
+          documentedNumber !== null && recordedNumber !== null
+            ? documentedNumber === recordedNumber
+            : documented === recorded;
+
+        if (!matches) {
+          resolvable.push({
+            kind: 'dual-write',
+            doc: 'constraints.json',
+            claim: `${shortKey}: ${recorded}`,
+            actual: `SPEC.md documents ${documented}`,
+            resolution: 'update either SPEC.md or constraints.json so both agree',
+          });
+        }
       }
 
       continue;
@@ -165,7 +184,7 @@ export async function syncVerify(repoRoot: string): Promise<SyncReport> {
     }
   }
   for (const [budget, value] of Object.entries(config.budgets)) {
-    if (!Object.keys(registry).some((k) => k.endsWith(budget))) {
+    if (!Object.keys(registry).some((k) => k.split('.').pop() === budget,)) {
       resolvable.push({
         kind: 'dual-write',
         doc: '.copperhead/config.json',
