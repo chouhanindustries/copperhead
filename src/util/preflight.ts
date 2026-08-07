@@ -27,14 +27,18 @@ export function isNotFoundError(err: any): boolean {
   if (!err) return false;
   if (err.code === 'ENOENT') return true;
   if (process.platform === 'win32') {
+    // execa exposes the exit code as `.exitCode`; node's built-in
+    // child_process (e.g. promisify(execFile)) puts it on `.code` instead —
+    // fall back so both shapes are covered.
+    const exitCode = typeof err.exitCode === 'number' ? err.exitCode : err.code;
     const msg = String(err.stderr || err.message || '');
-    if (err.exitCode === 9009) {
+    if (exitCode === 9009) {
       return (
         msg.includes('is not recognized') ||
         msg.includes('cannot find the path specified')
       );
     }
-    if (err.exitCode === 1) {
+    if (exitCode === 1) {
       return msg.includes('is not recognized');
     }
   }

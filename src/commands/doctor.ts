@@ -14,6 +14,7 @@ import {
 } from '../config.js';
 import { kicadCliVersion } from '../kicad/cli.js';
 import { redactSecrets } from '../util/redact.js';
+import { isNotFoundError } from '../util/preflight.js';
 
 const execFileP = promisify(execFile);
 
@@ -108,12 +109,19 @@ async function gitCheck(probe: () => Promise<string>): Promise<DoctorCheck> {
 async function openspecCheck(probe: () => Promise<string>): Promise<DoctorCheck> {
   try {
     return { name: 'openspec', status: 'ok', detail: await probe() };
-  } catch {
+  } catch (err) {
+    if (isNotFoundError(err)) {
+      return {
+        name: 'openspec',
+        status: 'fail',
+        detail: 'not found on PATH',
+        hint: 'npm i -g @fission-ai/openspec; validate_change and the create pipeline need it.',
+      };
+    }
     return {
       name: 'openspec',
       status: 'fail',
-      detail: 'not found on PATH',
-      hint: 'npm i -g @fission-ai/openspec; validate_change and the create pipeline need it.',
+      detail: (err as Error).message || String(err),
     };
   }
 }
