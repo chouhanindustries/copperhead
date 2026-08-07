@@ -9,7 +9,7 @@ import { listSymbols, listNets } from '../kicad/sexp.js';
 import { checkLegibility, formatLegibility } from '../kicad/legibility.js';
 import { scoreSchematic, formatScore } from '../kicad/score.js';
 import { draftSchematic, defaultIntentPath, formatSchematicDraftReport } from '../kicad/draft/draft.js';
-import { verifySchematicSymbols, searchInstalledSymbols, symbolSearchDirs } from '../kicad/symlib.js';
+import { verifySchematicSymbols, searchInstalledSymbols, symbolSearchDirs, resolveLibrarySymbol } from '../kicad/symlib.js';
 import { checkDrift } from '../memory/drift.js';
 import { saveConstraint, classifyAffectsTarget, affectsTargetExists } from '../memory/constraints.js';
 import { openspecValidate } from '../openspec/cli.js';
@@ -364,6 +364,48 @@ export const TOOLS: ToolDef[] = [
         return `no installed symbol matches "${query}" (searched every library in: ${dirs.join(', ')}). The part is not capturable on this machine as named — choose a part whose symbol exists, or a same-family variant that does.`;
       }
       return `installed symbols matching "${query}":\n${hits.map((h) => `  - ${h}`).join('\n')}`;
+    },
+  },
+  {
+    schema: {
+      name: 'symbol_pins',
+      description:
+        'Return the REAL pins (number, name, electrical type) of an installed KiCad symbol by lib_id, following extends links, plus its unit count — the authoritative source for REF.PIN endpoints, instead of guessing pins or reading .kicad_sym files. Warns when the symbol is multi-unit, which the drafting engine refuses. On a miss it lists the closest names in that library and where the symbol actually lives, so one call answers both "what are the pins" and "which lib_id is right".',
+      parameters: {
+        type: 'object',
+        properties: {
+          lib_id: { type: 'string', description: 'full library identifier, e.g. "Device:R" or "Audio:TLV320AIC3100"' },
+        },
+        required: ['lib_id'],
+      },
+    },
+    requiresUnlock: false,
+    handler: async (_ctx, args) => {
+      const libId = str(args, 'lib_id');
+      const name = libId.includes(':') ? libId.slice(libId.indexOf(':') + 1) : libId;
+      const dirs = await symbolSearchDirs();
+      if (!dirs.length) return 'no installed KiCad symbol library directories found on this machine';
+      const r = await resolveLibrarySymbol(libId, dirs);
+      if (r.status === 'ok') {
+        const pins = [...r.pins]
+          .sort((a, b) => a.number.localeCompare(b.number, 'en', { numeric: true }))
+          .map((p) => `  ${p.number}: ${p.name === '~' || !p.name ? '(unnamed)' : p.name} · ${p.type}`);
+        const multi =
+          r.units >= 2
+            ? `\nWARNING: this symbol defines ${r.units} units; the drafting engine refuses multi-unit symbols — choose a single-unit variant.`
+            : '';
+        return `${libId} — ${r.pins.length} pin(s), ${r.units} unit(s):\n${pins.join('\n')}${multi}`;
+      }
+      const elsewhere = await searchInstalledSymbols(name, dirs, 6);
+      const where = elsewhere.length
+        ? `\ninstalled as: ${elsewhere.join(', ')}`
+        : `\nno installed symbol matches "${name}" in any library — the part is not capturable as named.`;
+      if (r.status === 'no-symbol') {
+        const close = r.candidates.length ? `\nclosest in that library: ${r.candidates.join(', ')}` : '';
+        return `"${libId}" does not exist in that library.${close}${where}`;
+      }
+      const lib = libId.includes(':') ? libId.slice(0, libId.indexOf(':')) : libId;
+      return `no library named "${lib}" is installed.${where}`;
     },
   },
   {

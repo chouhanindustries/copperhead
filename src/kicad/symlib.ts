@@ -361,6 +361,19 @@ export function pinsOfSymbolNode(sym: SexpNode[]): LibPin[] {
   return pins;
 }
 
+/** Highest unit index among a symbol's `Name_<unit>_<style>` children: 1 for a
+ * single-unit part. Unit 0 holds common graphics, so it never raises the count.
+ * The drafting engine refuses symbols with units >= 2 (they share symbol-space
+ * pin coordinates), which makes this the drawability half of availability. */
+function maxUnitIndex(sym: SexpNode[]): number {
+  let max = 1;
+  for (const c of children(sym, 'symbol')) {
+    const m = atomAt(c, 1)?.match(/_(\d+)_\d+$/);
+    if (m) max = Math.max(max, Number(m[1]));
+  }
+  return max;
+}
+
 /** The top-level `(symbol "name" …)` entries of a parsed `.kicad_sym` root. */
 function librarySymbols(root: SexpNode[]): Map<string, SexpNode[]> {
   const map = new Map<string, SexpNode[]>();
@@ -381,7 +394,7 @@ export async function resolveLibrarySymbol(
   libId: string,
   dirs: string[],
 ): Promise<
-  | { status: 'ok'; pins: LibPin[] }
+  | { status: 'ok'; pins: LibPin[]; units: number }
   | { status: 'no-symbol'; candidates: string[] }
   | { status: 'no-library' }
   | { status: 'found-elsewhere'; libIds: string[] }
@@ -404,10 +417,10 @@ export async function resolveLibrarySymbol(
     const sym = symbols.get(current);
     if (!sym) break;
     const pins = pinsOfSymbolNode(sym);
-    if (pins.length) return { status: 'ok', pins };
+    if (pins.length) return { status: 'ok', pins, units: maxUnitIndex(sym) };
     // no pins of its own → follow an `extends` base if present
     const base = atomAt(child(sym, 'extends'), 1);
-    if (!base) return { status: 'ok', pins }; // genuinely pinless (e.g. a graphic)
+    if (!base) return { status: 'ok', pins, units: maxUnitIndex(sym) }; // genuinely pinless (e.g. a graphic)
     current = base;
   }
 

@@ -19,6 +19,8 @@ import { fmtDuration, fmtTokens, type ProgressRenderer } from '../agent/render.j
 import { copper, dim, ok, stageLine, warn } from '../agent/theme.js';
 import { openspecInit } from '../openspec/cli.js';
 import { sweepStaleTempDirs, pruneHistoryDir } from '../util/tmp.js';
+import { bomSymbolDossier } from '../kicad/dossier.js';
+import { symbolSearchDirs } from '../kicad/symlib.js';
 import { assertDiskSpace, DEFAULT_MIN_FREE_BYTES } from '../util/preflight.js';
 import { runCheck } from './check.js';
 import { emitCreateJlcpcbBom } from './export.js';
@@ -183,7 +185,7 @@ export const STAGES: Stage[] = [
       });
     },
     prompt: () =>
-      'Stage 3: part selection. Write docs/BOM.md with the fixed table format (| Refdes | Value | Footprint | MPN | Rationale |). The Value column holds the COMPONENT VALUE and nothing else — "4.7uF", "1M", "500mAh Li-Po", "STM32F103C8T6" — because stage 4 draws it on the sheet as that part\'s Value field, where a description ("1S Li-Po cell, 500 mAh, bare leads") collides with neighbouring symbols and fails the legibility gate. Put the prose in the Rationale column instead; that is the column for it, and nothing draws it. One row per refdes: a grouped row ("SW3-SW16", "C5-C8") is not a BOM row and the schematic stage cannot match it. Every MPN you introduce is flagged UNVERIFIED with a datasheet-verifiable justification. Check leakage/quiescent current of every part against the power budget. The design must be capturable with the KiCad symbol libraries installed on THIS machine: run search_symbols for every IC, module, connector and other active part before committing it to the BOM, and if a part has no installed symbol, pick one that has — stage 4 draws only from installed symbols, and a BOM row it cannot resolve makes the whole run unwinnable. Run check_drift before finishing.',
+      'Stage 3: part selection. Write docs/BOM.md with the fixed table format (| Refdes | Value | Footprint | MPN | Rationale |). The Value column holds the COMPONENT VALUE and nothing else — "4.7uF", "1M", "500mAh Li-Po", "STM32F103C8T6" — because stage 4 draws it on the sheet as that part\'s Value field, where a description ("1S Li-Po cell, 500 mAh, bare leads") collides with neighbouring symbols and fails the legibility gate. Put the prose in the Rationale column instead; that is the column for it, and nothing draws it. One row per refdes: a grouped row ("SW3-SW16", "C5-C8") is not a BOM row and the schematic stage cannot match it. Every MPN you introduce is flagged UNVERIFIED with a datasheet-verifiable justification. Check leakage/quiescent current of every part against the power budget. The design must be capturable with the KiCad symbol libraries installed on THIS machine: run search_symbols for every IC, module, connector and other active part before committing it to the BOM, and if a part has no installed symbol, pick one that has — stage 4 draws only from installed symbols, and a BOM row it cannot resolve makes the whole run unwinnable. Existence is not enough: confirm the chosen symbol with symbol_pins and substitute if it reports more than one unit — the drafting engine refuses multi-unit symbols (gate packs, dual opamps), so prefer the single-unit variant. Run check_drift before finishing.',
   },
   {
     name: 'schematic',
@@ -237,7 +239,7 @@ export const STAGES: Stage[] = [
       return true;
     },
     prompt: () =>
-      'Stage 4: schematic. An empty KiCad project has already been scaffolded and wired into .copperhead/config.json. You author INTENT, never geometry: write the netlist-intent IR and call draft_schematic — the deterministic engine computes every coordinate, wire, label, power symbol, and group box, and the sheet it draws satisfies the drafting standard by construction (captioned group boxes per SUBSYSTEMS.md subsystem, left-to-right flow, rails up and grounds down, net labels between groups, filled title block). The IR (schematic.intent.json) is JSON: {"version": 1, "parts": [{"ref", "libId", "value", "footprint", "group"}], "nets": [{"name", "pins": ["REF.PIN", …], "kind"?}], "noConnect": ["REF.PIN", …], "hints"?: {"groupOrder"?, "paper"?, "date"?}}. Build it from BOM.md (same refdes and values — validation cross-checks and refuses mismatches) and SUBSYSTEMS.md (every non-power part names one subsystem heading as its group). Use exact canonical KiCad lib_ids (e.g. Device:R) and REAL pin numbers from the library — validation lists a part\'s actual pins when you name one that does not exist. Declare every deliberately unused pin in noConnect; power rails are recognized from pin types automatically (override with "kind" only when the inference is wrong — the draft report lists every net\'s resolved class). Pass the full IR as intent_json to draft_schematic; the report embeds the legibility findings and the score for the fresh sheet. To repair ANY finding (ERC, legibility, validation), fix the IR and call draft_schematic again — edit_file is refused on the drafted sheet. When the draft is clean run run_erc and check_drift, update PINOUT.md to match the IR\'s pin assignments, and finish.',
+      'Stage 4: schematic. An empty KiCad project has already been scaffolded and wired into .copperhead/config.json. You author INTENT, never geometry: write the netlist-intent IR and call draft_schematic — the deterministic engine computes every coordinate, wire, label, power symbol, and group box, and the sheet it draws satisfies the drafting standard by construction (captioned group boxes per SUBSYSTEMS.md subsystem, left-to-right flow, rails up and grounds down, net labels between groups, filled title block). The IR (schematic.intent.json) is JSON: {"version": 1, "parts": [{"ref", "libId", "value", "footprint", "group"}], "nets": [{"name", "pins": ["REF.PIN", …], "kind"?}], "noConnect": ["REF.PIN", …], "hints"?: {"groupOrder"?, "paper"?, "date"?}}. Build it from BOM.md (same refdes and values — validation cross-checks and refuses mismatches) and SUBSYSTEMS.md (every non-power part names one subsystem heading as its group). Use exact canonical KiCad lib_ids (e.g. Device:R) and REAL pin numbers from the library: the pin dossier below (when present) already lists every BOM part\'s installed symbol and its real pins — work from it and from symbol_pins rather than reading .kicad_sym files, and validation lists a part\'s actual pins when you name one that does not exist. Declare every deliberately unused pin in noConnect; power rails are recognized from pin types automatically (override with "kind" only when the inference is wrong — the draft report lists every net\'s resolved class). Pass the full IR as intent_json to draft_schematic; the report embeds the legibility findings and the score for the fresh sheet. To repair ANY finding (ERC, legibility, validation), fix the IR and call draft_schematic again — edit_file is refused on the drafted sheet. When the draft is clean run run_erc and check_drift, update PINOUT.md to match the IR\'s pin assignments, and finish.',
   },
   {
     name: 'layout-draft',
@@ -842,13 +844,33 @@ export async function runCreate(opts: CreateOptions): Promise<{ ok: boolean; com
           `running${attempt > 1 ? ` (attempt ${attempt}/${config.maxStageRetries + 1})` : ''}`,
         ),
       );
+      // The BOM freezes before this stage, so every part's real pins are
+      // computable before the first turn — recomputed per attempt, since a
+      // rolled-back retry can run against a different BOM than its
+      // predecessor. Advisory only: any failure degrades to no block.
+      let dossierBlock = '';
+      if (stage.name === 'schematic') {
+        try {
+          const bomPath = path.join(opts.repoRoot, config.docs, 'BOM.md');
+          if (existsSync(bomPath)) {
+            const dossier = await bomSymbolDossier(await readFile(bomPath, 'utf8'), await symbolSearchDirs());
+            if (dossier) {
+              dossierBlock =
+                '\n\n## Installed-symbol pin dossier (machine-verified)\nEach BOM part resolved against the KiCad libraries installed on THIS machine: the top name-match lib_id and its REAL pins (number=name/electrical-type). Confirm the match fits the BOM part; alternatives are listed. Passives (R/C/L) draw from their canonical Device symbols and are omitted. Use these pins for REF.PIN endpoints instead of reading .kicad_sym files; for any part not listed, call symbol_pins.\n' +
+                dossier;
+            }
+          }
+        } catch {
+          // the dossier is context, never a gate — the stage runs without it
+        }
+      }
       const res = await runAgentLoop({
         repoRoot: opts.repoRoot,
         model: opts.model,
         request: `create pipeline stage: ${stage.name}`,
         stagePrompt: guidance
-          ? `${basePrompt}\n\n## Recovery guidance (a previous attempt did not complete this stage — do this differently)\n${guidance}`
-          : basePrompt,
+          ? `${basePrompt}${dossierBlock}\n\n## Recovery guidance (a previous attempt did not complete this stage — do this differently)\n${guidance}`
+          : `${basePrompt}${dossierBlock}`,
         interactive: opts.interactive ?? false,
         allowDirty: true, // stages build on each other's uncommitted state within the pipeline
         ...(stageTurns !== undefined ? { maxTurns: stageTurns } : {}),
