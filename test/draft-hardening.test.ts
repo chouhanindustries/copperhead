@@ -124,6 +124,63 @@ describe('derived (extends) symbols', () => {
     }
   });
 
+  it('refuses a power-port part instead of silently dropping it (#212)', async () => {
+    // A power part passed every structural check and was then filtered out of
+    // every placement path: never placed, never given an endpoint, absent from
+    // its own group's member list, and missing from `notes`. The draft still
+    // returned ok, so a model that writes `power:GND` had no signal at all and
+    // kept doing it.
+    const repo = await mkdtemp(path.join(tmpdir(), 'copperhead-irpower-'));
+    const libs = await mkdtemp(path.join(tmpdir(), 'copperhead-irpower-libs-'));
+    try {
+      await writeFile(
+        path.join(libs, 'power.kicad_sym'),
+        `(kicad_symbol_lib (version 20251024) (generator test)
+  (symbol "GND" (power) (pin_names (offset 0))
+    (symbol "GND_1_1"
+      (pin power_in line (at 0 0 270) (length 0) hide (name "GND") (number "1"))
+    )
+  )
+)`,
+        'utf8',
+      );
+      await writeFile(
+        path.join(repo, 'schematic.intent.json'),
+        JSON.stringify({
+          version: 1,
+          parts: [
+            { ref: 'R1', libId: 'Device:R', value: '1k', group: 'A' },
+            { ref: 'R2', libId: 'Device:R', value: '1k', group: 'A' },
+            { ref: 'PG1', libId: 'power:GND', value: 'GND', group: 'A' },
+          ],
+          nets: [
+            { name: 'SIG', pins: ['R1.1', 'R2.1'] },
+            { name: 'GND', pins: ['R1.2', 'R2.2', 'PG1.1'] },
+          ],
+        }),
+        'utf8',
+      );
+      const res = await draftSchematicToText({
+        repoRoot: repo,
+        schematic: 'b.kicad_sch',
+        symbolDirs: [SYMLIB, libs],
+      });
+      expect(res.ok).toBe(false);
+      if (res.ok) return;
+      expect(res.message).toContain('power-port symbol');
+      // One finding, not three: the part is recorded before the refusal so the
+      // group and BOM cross-checks take their isPower skips and the model is
+      // not handed unrelated-looking noise about the same mistake.
+      expect(res.findings).toHaveLength(1);
+      expect(res.findings[0]!.detail).toContain('PG1');
+      // The finding has to name the alternative, or it is a dead end.
+      expect(res.message).toMatch(/nets/);
+    } finally {
+      await rm(repo, { recursive: true, force: true });
+      await rm(libs, { recursive: true, force: true });
+    }
+  });
+
   it('still refuses a symbol whose extends target is unnamed', async () => {
     const repo = await mkdtemp(path.join(tmpdir(), 'copperhead-derived-bad-'));
     try {

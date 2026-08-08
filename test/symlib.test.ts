@@ -10,6 +10,7 @@ import {
   closestSymbolNames,
   searchInstalledSymbols,
   findLibraryFile,
+  vendoredCacheDirs,
 } from '../src/kicad/symlib.js';
 import { symbolAvailabilityFacts } from '../src/agent/recovery.js';
 
@@ -449,5 +450,163 @@ describe('cross-library discovery and refusal fact-checking (#195, #196, #197)',
 
   it('produces no facts block when the text names no lib_ids', async () => {
     expect(await symbolAvailabilityFacts('turn timed out after 300s; see create.ts:311', [dir])).toBe('');
+  });
+});
+
+describe('stale symbol-dir env override (#212)', () => {
+  let root: string;
+  let versionDir: string;
+
+  beforeAll(async () => {
+    root = (await mkdtemp(path.join(tmpdir(), 'copperhead-stalenv-'))).split(path.sep).join('/');
+    versionDir = `${root}/10.0/share/kicad/symbols`;
+    await mkdir(versionDir, { recursive: true });
+  });
+
+  afterAll(async () => {
+    await rm(root, { recursive: true, force: true }).catch(() => {});
+  });
+
+  it('falls back to discovery when the override names nothing that exists', async () => {
+    // The exclusivity test used to read `fromEnv.length`, which counts
+    // variables that are SET, while `out` collects only directories that
+    // EXIST. A variable left behind by an uninstalled or relocated KiCad made
+    // those diverge and returned an empty search path, which is not "search
+    // nothing" but "every symbol is absent": search_symbols then answered "no
+    // installed symbol matches" for parts sitting in the stock library it
+    // never opened.
+    const dirs = await symbolSearchDirs({ KICAD_SYMBOL_DIR: `${root}/gone` }, root);
+    expect(dirs).toContain(versionDir);
+  });
+
+  it('still lets an override that resolves win exclusively', async () => {
+    // The fallback must not weaken the rule it sits beside: an override
+    // pointing somewhere real is still the only directory returned, or every
+    // test pinning a fixture dir starts scanning the host's real libraries.
+    const pinned = await mkdtemp(path.join(tmpdir(), 'copperhead-pinned-'));
+    try {
+      expect(await symbolSearchDirs({ KICAD_SYMBOL_DIR: pinned }, root)).toEqual([pinned]);
+    } finally {
+      await rm(pinned, { recursive: true, force: true }).catch(() => {});
+    }
+  });
+
+  it('falls back when every one of several overrides is stale', async () => {
+    const dirs = await symbolSearchDirs(
+      { KICAD_SYMBOL_DIR: `${root}/gone`, KICAD9_SYMBOL_DIR: `${root}/also-gone` },
+      root,
+    );
+    expect(dirs).toContain(versionDir);
+  });
+
+  it('keeps the surviving override when only some are stale', async () => {
+    const live = await mkdtemp(path.join(tmpdir(), 'copperhead-live-'));
+    try {
+      const dirs = await symbolSearchDirs({ KICAD_SYMBOL_DIR: `${root}/gone`, KICAD9_SYMBOL_DIR: live }, root);
+      expect(dirs).toEqual([live]);
+    } finally {
+      await rm(live, { recursive: true, force: true }).catch(() => {});
+    }
+  });
+});
+
+describe('verify_symbols sees a project vendored cache (#212)', () => {
+  // A drafted project keeps engine-generated power symbols in its own
+  // sym-lib-cache/ and embeds them in the sheet. verifySchematicSymbols only
+  // searched installed directories, so every copperhead_power:* entry failed
+  // to resolve and the cross-library fallback fuzzy-matched it to whatever
+  // stock name looked close.
+  const POWER_LIB = `(kicad_symbol_lib (version 20251024) (generator copperhead-vendor)
+  (symbol "GND" (power) (pin_names (offset 0))
+    (symbol "GND_0_1" (polyline (pts (xy -1.27 -1.27) (xy 1.27 -1.27)) (stroke (width 0.254) (type default)) (fill (type none))))
+    (symbol "GND_1_1"
+      (pin power_in line (at 0 0 270) (length 0) hide (name "GND") (number "1"))
+    )
+  )
+)`;
+  const sheet = `(kicad_sch (version 20251024) (generator "copperhead-draft")
+  (lib_symbols
+    (symbol "Device:R" (pin_numbers hide) (pin_names (offset 0))
+      (symbol "R_0_1" (rectangle (start -1.016 -2.54) (end 1.016 2.54)))
+      (symbol "R_1_1"
+        (pin passive line (at 0 3.81 270) (length 1.27) (name "~") (number "1"))
+        (pin passive line (at 0 -3.81 90) (length 1.27) (name "~") (number "2"))
+      )
+    )
+    (symbol "copperhead_power:GND" (power) (pin_names (offset 0))
+      (symbol "GND_0_1" (polyline (pts (xy -1.27 -1.27) (xy 1.27 -1.27)) (stroke (width 0.254) (type default)) (fill (type none))))
+      (symbol "GND_1_1"
+        (pin power_in line (at 0 0 270) (length 0) hide (name "GND") (number "1"))
+      )
+    )
+  )
+)`;
+
+  let repo: string;
+  let schPath: string;
+  let env: NodeJS.ProcessEnv;
+
+  beforeAll(async () => {
+    const installed = await mkdtemp(path.join(tmpdir(), 'copperhead-vendor-installed-'));
+    await writeFile(path.join(installed, 'Device.kicad_sym'), DEVICE_LIB, 'utf8');
+    repo = await mkdtemp(path.join(tmpdir(), 'copperhead-vendor-repo-'));
+    // The sheet sits one level down, the layout the reference boards use, so
+    // the cache is found by walking up rather than by assuming it is adjacent.
+    await mkdir(path.join(repo, 'reference'), { recursive: true });
+    await mkdir(path.join(repo, 'sym-lib-cache'), { recursive: true });
+    await writeFile(path.join(repo, 'sym-lib-cache', 'copperhead_power.kicad_sym'), POWER_LIB, 'utf8');
+    schPath = path.join(repo, 'reference', 'board.kicad_sch');
+    await writeFile(schPath, sheet, 'utf8');
+    env = { KICAD_SYMBOL_DIR: installed };
+  });
+
+  afterAll(async () => {
+    await rm(repo, { recursive: true, force: true }).catch(() => {});
+  });
+
+  it('finds the cache by walking up from the schematic', async () => {
+    expect(await vendoredCacheDirs(schPath)).toEqual([path.join(repo, 'sym-lib-cache')]);
+  });
+
+  it('verifies engine-owned power symbols instead of misreporting them', async () => {
+    const res = await verifySchematicSymbols(schPath, env);
+    expect(res.findings).toEqual([]);
+    // Counted as verified, not skipped: "could not check" and "checked and
+    // correct" must stay distinguishable.
+    expect(res.checked).toBe(2);
+    expect(res.skipped).toBe(0);
+  });
+
+  it('still catches a stock symbol whose pins diverge', async () => {
+    // The ordering guarantee. Installed dirs are searched FIRST so a stock
+    // lib_id verifies against the stock library; putting the vendored cache
+    // first would compare each embedded entry with the copy it was generated
+    // from and report clean forever.
+    const tampered = path.join(repo, 'reference', 'tampered.kicad_sch');
+    await writeFile(tampered, sheet.replace('(name "~") (number "1")', '(name "WRONG") (number "1")'), 'utf8');
+    try {
+      const res = await verifySchematicSymbols(tampered, env);
+      expect(res.findings.map((f) => f.kind)).toContain('pin-mismatch');
+      expect(res.findings.some((f) => f.libId === 'Device:R')).toBe(true);
+      // and the power symbol is still clean in the same pass
+      expect(res.findings.some((f) => f.libId.startsWith('copperhead_power:'))).toBe(false);
+    } finally {
+      await rm(tampered, { force: true }).catch(() => {});
+    }
+  });
+
+  it('reports an unvendored, uninstalled lib_id as unverifiable as before', async () => {
+    const orphan = path.join(repo, 'reference', 'orphan.kicad_sch');
+    await writeFile(
+      orphan,
+      sheet.replace('(symbol "copperhead_power:GND"', '(symbol "Nowhere:Gadget"'),
+      'utf8',
+    );
+    try {
+      const res = await verifySchematicSymbols(orphan, env);
+      expect(res.findings.some((f) => f.libId === 'Nowhere:Gadget')).toBe(true);
+    } finally {
+      await rm(orphan, { force: true }).catch(() => {});
+    }
   });
 });
