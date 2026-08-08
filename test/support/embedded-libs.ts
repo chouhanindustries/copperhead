@@ -48,17 +48,20 @@ export async function extractEmbeddedLibs(projectDir: string, outDir: string): P
   for (const sheet of await sheetsUnder(projectDir)) {
     const text = await readFile(sheet, 'utf8');
     // Quoted names after `(symbol` occur only inside lib_symbols (placed
-    // instances carry `(lib_id …)` instead), and only library entries have a
-    // `lib:` prefix. Split on the FIRST colon, matching resolve()'s parsing.
+    // instances carry `(lib_id …)` instead). Split on the FIRST colon,
+    // matching resolve()'s parsing. A colonless name is a part whose
+    // libsource recorded no library at all (cm5_minima's PUSB3F96X_1); it
+    // goes into a synthetic nickname so fillEmptyLibs' exact cross-library
+    // search can claim it, which outranks any fuzzy stock-library guess.
     for (const m of text.matchAll(/^\s*\(symbol\s+"([^"]+)"/gm)) {
       const libId = m[1]!;
       const cut = libId.indexOf(':');
-      if (cut <= 0) continue;
-      const lib = libId.slice(0, cut);
+      const lib = cut > 0 ? libId.slice(0, cut) : 'copperhead_embedded';
       const name = libId.slice(cut + 1);
+      if (!name) continue;
       // A nickname findLibraryFile would refuse cannot resolve anyway.
       if (lib.includes('/') || lib.includes('\\') || lib.includes('..')) continue;
-      if (/_\d+_\d+$/.test(name)) continue; // a unit child that kept its prefix
+      if (/_\d+_\d+$/.test(name)) continue; // a unit child, not a placeable entry
       if (byLib.get(lib)?.has(name)) continue;
       const block = extractSymbolBlock(text, libId);
       if (!block) continue;
