@@ -18,7 +18,7 @@ The drafting engine SHALL accept a versioned netlist-intent document (`schematic
 
 ### Requirement: IR validation fails structured and early
 
-The engine SHALL validate the IR before any placement: lib_ids must resolve, every referenced pin must exist on its symbol, every net must have at least two endpoints, every non-power part must belong to exactly one group present in SUBSYSTEMS.md, a pin declared no-connect must exist and must appear in no net, and the IR's parts SHALL be cross-checked against BOM.md (refdes present, value matching), so a transcription slip fails validation immediately rather than surfacing later at the drift gate. Validation SHALL also cover the field types the engine and emitter dereference (part fields, net kind, endpoint strings, `noConnect`, `hints.*`), so type-confused-but-valid JSON comes back as findings rather than a TypeError surfaced as an opaque tool error; SHALL refuse a net name containing a quote, backslash, or control character, since the name is embedded verbatim in the generated power-symbol source where such a character corrupts the emitted file; and SHALL refuse two power-class nets whose names sanitize to the same generated-symbol token, since they would share one `lib_id` and quietly merge their rails. Validation SHALL also refuse a part resolving to a multi-unit library symbol: the engine places single instances only, and a multi-unit symbol's units share symbol-space pin coordinates, so drafting one would overlay unrelated pins on one point and silently merge their nets. Validation failures SHALL be reported as a numbered finding list in the same shape as `verify_symbols` output, and a failed draft SHALL leave any existing schematic untouched.
+The engine SHALL validate the IR before any placement: lib_ids must resolve, every referenced pin must exist on its symbol, every net must have at least two endpoints, every non-power part must belong to exactly one group present in SUBSYSTEMS.md, a pin declared no-connect must exist and must appear in no net, and the IR's parts SHALL be cross-checked against BOM.md (refdes present, value matching), so a transcription slip fails validation immediately rather than surfacing later at the drift gate. Validation SHALL also cover the field types the engine and emitter dereference (part fields, net kind, endpoint strings, `noConnect`, `hints.*`), so type-confused-but-valid JSON comes back as findings rather than a TypeError surfaced as an opaque tool error; SHALL refuse a net name containing a quote, backslash, or control character, since the name is embedded verbatim in the generated power-symbol source where such a character corrupts the emitted file; and SHALL refuse two power-class nets whose names sanitize to the same generated-symbol token, since they would share one `lib_id` and quietly merge their rails. For a part resolving to a multi-unit library symbol, validation SHALL refuse the two shapes unit-per-instance placement cannot express — a pin number repeated across NUMBERED units, which makes a net endpoint ambiguous, and a pin defined only in a de Morgan alternate body style, which would vanish from the drawn sheet — each as a finding naming the part and the offending pin(s); a conventional multi-unit symbol SHALL validate and be placed one unit per instance, including symbols whose power pins live in the common (unit-0) child. Validation failures SHALL be reported as a numbered finding list in the same shape as `verify_symbols` output, and a failed draft SHALL leave any existing schematic untouched.
 
 #### Scenario: Unknown pin is rejected (AC-16.6)
 
@@ -45,15 +45,29 @@ The engine SHALL validate the IR before any placement: lib_ids must resolve, eve
 - **WHEN** the IR is valid JSON with a wrong-typed field the engine dereferences (a numeric `group`, a string `hints.groupOrder`, a string `noConnect`, a non-string net endpoint)
 - **THEN** validation fails with a numbered finding naming the field and the expected shape, and no TypeError reaches the tool layer
 
-#### Scenario: Multi-unit symbol is refused
+#### Scenario: Ambiguous multi-unit pin mapping is refused
 
-- **WHEN** the IR names a part whose library symbol defines more than one unit (an opamp, a gate pack)
-- **THEN** validation fails naming the part and the reason, before any placement runs
+- **WHEN** the IR names a part whose library symbol repeats a pin number across numbered units, or defines a pin only in a de Morgan alternate body style
+- **THEN** validation fails naming the part and the offending pin(s), before any placement runs
 
 #### Scenario: Undrawable and colliding net names are refused
 
 - **WHEN** a net name contains a quote, backslash, or control character, or two power-class net names sanitize to the same generated-symbol token
 - **THEN** validation fails naming the offending net name(s), before any placement runs
+
+### Requirement: Multi-unit symbols place one unit per instance
+
+The engine SHALL place each unit of a multi-unit symbol (an opamp, a gate pack, a gang jumper) as its own placement instance sharing the part's refdes: each instance carries its unit's pins and body (common unit-0 pins and graphics included, since KiCad draws them on every unit), participates in placement, idiom passes, routing, and clearance checks like an independent part, and is emitted with its `(unit N)` in both the symbol and its instance data so KiCad renders the unit letters (U1A, U1B). Net endpoints SHALL remain plain `REF.PIN` package pin numbers with no unit syntax — a numbered unit's pin resolves to exactly one placed unit, and a common (unit-0) pin's net SHALL be wired at EVERY placed appearance so the appearances stay one electrical point and no drawn pin end dangles. Units none of whose own (non-common) pins appear in any net or no-connect SHALL be left unplaced (the intent says nothing about them); a multi-unit part with no referenced pins at all SHALL place all its units so the part stays visible. The geometric netlist and legibility measurements SHALL resolve a placed instance's pins and body from its own unit, never from the whole package.
+
+#### Scenario: Dual pack drafts as two instances
+
+- **WHEN** the IR wires pins of both units of a two-unit symbol under one refdes
+- **THEN** the drafted sheet contains two placed instances sharing that refdes with `(unit 1)` and `(unit 2)`, the embedded lib symbol appears once, and every endpoint's drawn connectivity matches the IR exactly
+
+#### Scenario: Unreferenced unit stays off the sheet
+
+- **WHEN** the IR wires only unit 1's pins of a two-unit symbol
+- **THEN** exactly one instance is placed and no `(unit 2)` instance is emitted
 
 ### Requirement: Deterministic power-net recognition
 

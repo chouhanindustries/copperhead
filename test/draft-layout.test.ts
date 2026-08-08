@@ -156,6 +156,132 @@ describe('shelf-wrap: the group ribbon reflows into rows (design D12)', () => {
   }, 30000);
 });
 
+/** N MCUs chained U1.5 -> U2.4, U2.5 -> U3.4, ... in ONE group: each signal
+ * edge pushes layer depth forward, so the group tiles as one column per part —
+ * a horizontal ribbon that outgrows every sheet long before the netlist does. */
+function chainGroup(n: number, group = 'MAIN'): SchematicIntent {
+  const parts = [];
+  const nets = [];
+  const noConnect: string[] = [];
+  for (let i = 1; i <= n; i++) {
+    parts.push({ ref: `U${i}`, libId: 'CopperMCU:MCU8', value: 'MCU8', group });
+    for (const p of ['3', '6', '7', '8']) noConnect.push(`U${i}.${p}`);
+    if (i > 1) nets.push({ name: `SIG${i}`, pins: [`U${i - 1}.5`, `U${i}.4`] });
+  }
+  noConnect.push('U1.4', `U${n}.5`);
+  nets.push({ name: 'VCC', pins: Array.from({ length: n }, (_, i) => `U${i + 1}.1`) });
+  nets.push({ name: 'GND', pins: Array.from({ length: n }, (_, i) => `U${i + 1}.2`) });
+  return { version: 1, parts, nets, noConnect };
+}
+
+describe('column banding: a group wider than every sheet wraps into bands (#219)', () => {
+  const PAPER_DIMS: Record<string, { w: number; h: number }> = {
+    A5: { w: 210, h: 148 }, A4: { w: 297, h: 210 }, A3: { w: 420, h: 297 },
+    A2: { w: 594, h: 420 }, A1: { w: 841, h: 594 }, A0: { w: 1189, h: 841 },
+  };
+  const FRAME = 10;
+
+  it('bands an oversized single group instead of overflowing the frame, and keeps the paper small', async () => {
+    // 40 chained parts tile naturally to ~1610 mm — wider than A0's usable
+    // frame. Before banding this drew an A0 whose content ran 430 mm past the
+    // right edge: a sheet that would not plot (issue #219, 367 findings).
+    const { model, report } = await place(chainGroup(40));
+    expect(report.notes).toContain('group "MAIN" was wider than the sheet; its columns wrapped onto 4 bands');
+    expect(report.paper).toBe('A3');
+    expect(report.mergedNets).toEqual([]);
+    const paper = PAPER_DIMS[model.paper]!;
+    for (const r of model.rectangles) {
+      expect(r.x1, `${r.name} left of frame`).toBeGreaterThanOrEqual(FRAME);
+      expect(r.y1, `${r.name} above frame`).toBeGreaterThanOrEqual(FRAME);
+      expect(r.x2, `${r.name} past right frame edge`).toBeLessThanOrEqual(paper.w - FRAME);
+      expect(r.y2, `${r.name} past bottom frame edge`).toBeLessThanOrEqual(paper.h - FRAME);
+    }
+    for (const s of model.symbols) {
+      expect(s.at.x, `${s.ref} outside the frame`).toBeGreaterThanOrEqual(FRAME);
+      expect(s.at.x, `${s.ref} outside the frame`).toBeLessThanOrEqual(paper.w - FRAME);
+    }
+  });
+
+  it('never bands a layout that already fits a sheet', async () => {
+    const { report } = await place(chainGroup(4));
+    expect(report.notes).toEqual([]);
+  });
+
+  it('bands the oversized group while small groups still shelf-wrap around it', async () => {
+    const wide = chainGroup(30);
+    const intent: SchematicIntent = {
+      version: 1,
+      parts: [
+        ...wide.parts,
+        { ref: 'U101', libId: 'CopperMCU:MCU8', value: 'MCU8', group: 'AUX1' },
+        { ref: 'U102', libId: 'CopperMCU:MCU8', value: 'MCU8', group: 'AUX2' },
+      ],
+      nets: [
+        ...wide.nets,
+        { name: 'AUX', pins: ['U101.5', 'U102.4'] },
+      ],
+      noConnect: [
+        ...(wide.noConnect ?? []),
+        ...['1', '2', '3', '4', '6', '7', '8'].map((p) => `U101.${p}`),
+        ...['1', '2', '3', '5', '6', '7', '8'].map((p) => `U102.${p}`),
+      ].filter((e) => !['U101.5', 'U102.4'].includes(e)),
+    };
+    const { model, report } = await place(intent);
+    expect(report.notes.some((n) => /group "MAIN" was wider than the sheet; its columns wrapped onto \d+ bands/.test(n))).toBe(true);
+    expect(report.notes.some((n) => /group "AUX\d" was wider/.test(n))).toBe(false);
+    const paper = PAPER_DIMS[model.paper]!;
+    for (const r of model.rectangles) {
+      expect(r.x2, `${r.name} past right frame edge`).toBeLessThanOrEqual(paper.w - FRAME);
+      expect(r.y2, `${r.name} past bottom frame edge`).toBeLessThanOrEqual(paper.h - FRAME);
+    }
+    for (let i = 0; i < model.rectangles.length; i++) {
+      for (let j = i + 1; j < model.rectangles.length; j++) {
+        const a = model.rectangles[i]!;
+        const b = model.rectangles[j]!;
+        const overlaps = a.x1 < b.x2 && a.x2 > b.x1 && a.y1 < b.y2 && a.y2 > b.y1;
+        expect(overlaps, `${a.name} overlaps ${b.name}`).toBe(false);
+      }
+    }
+  });
+
+  it('a banded sheet passes the legibility gate with zero out-of-frame findings', async () => {
+    const repo = await mkdtemp(path.join(tmpdir(), 'copperhead-band-'));
+    try {
+      const intent = chainGroup(40);
+      await mkdir(path.join(repo, 'docs'), { recursive: true });
+      await writeFile(
+        path.join(repo, 'docs', 'SUBSYSTEMS.md'),
+        ['# Subsystems', ...[...new Set(intent.parts.map((p) => p.group))].map((g) => `\n## ${g}\n\nBlock ${g}.`)].join('\n'),
+        'utf8',
+      );
+      await writeFile(
+        path.join(repo, 'docs', 'BOM.md'),
+        ['# BOM', '', '| Refdes | Value | Footprint | MPN | Rationale |', '| --- | --- | --- | --- | --- |',
+          ...intent.parts.map((p) => `| ${p.ref} | ${p.value} |  | UNVERIFIED | fixture |`)].join('\n'),
+        'utf8',
+      );
+      await writeFile(path.join(repo, 'schematic.intent.json'), JSON.stringify(intent, null, 2), 'utf8');
+
+      const res = await draftSchematic({
+        repoRoot: repo,
+        schematic: 'board.kicad_sch',
+        docsDir: 'docs',
+        symbolDirs: [SYMLIB],
+      });
+      expect(res.ok, res.ok ? '' : res.message).toBe(true);
+      if (!res.ok) return;
+      const leg = await checkLegibility(res.schematicPath, { docsDir: path.join(repo, 'docs') });
+      // the family cap shows at most 10 findings per family; assert on the
+      // suppressed ledger too so 367-finding regressions cannot hide behind it
+      expect(leg.findings.filter((f) => f.kind === 'out-of-frame')).toEqual([]);
+      expect(leg.suppressed.filter((s) => s.family === 'out-of-frame')).toEqual([]);
+      expect(leg.findings.filter((f) => f.severity === 'error')).toEqual([]);
+    } finally {
+      await rm(repo, { recursive: true, force: true });
+    }
+  }, 30000);
+});
+
 describe('stacked pins are one point on the sheet', () => {
   /** PWRIC repeats its GND pin (2 and 4) at one coordinate, thermal-pad style. */
   const stacked: SchematicIntent = {
