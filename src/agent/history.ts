@@ -121,7 +121,6 @@ function rangeOf(call: ToolCall): { start: number; end: number } {
   return { start: s, end: typeof e === 'number' && Number.isFinite(e) ? e : Infinity };
 }
 
-
 /** Every message returned gets fresh objects, so a provider that mutates what it
  *  is handed cannot reach the run's own history. Strings are immutable and
  *  shared by reference, so this costs object shells, not payload bytes. */

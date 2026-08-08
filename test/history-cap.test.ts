@@ -1,10 +1,11 @@
 import { describe, it, expect } from 'vitest';
-import { writeFile } from 'node:fs/promises';
+import { writeFile, mkdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { execa } from 'execa';
 import { capHistory, HISTORY_CAP_DEFAULTS, type HistoryCapOptions } from '../src/agent/history.js';
 import { renderConversation, renderDelta } from '../src/agent/providers/tool-protocol.js';
 import { runAgentLoop } from '../src/agent/loop.js';
+import { loadConfig, DEFAULTS } from '../src/config.js';
 import { runInit } from '../src/memory/scaffold.js';
 import { tempFixtureRepo } from './helpers.js';
 import type { Msg, Provider, Turn } from '../src/agent/types.js';
@@ -165,6 +166,36 @@ describe('capHistory — what it actually trims', () => {
     const { messages: out, stats } = capHistory(msgs, { ...opts, maxToolResultChars: 100000 });
     expect(out[1].role === 'tool' && out[1].content).toContain('superseded');
     expect(stats.superseded).toBe(1);
+  });
+
+  it('treats start_line with no end_line as open-ended, to the end of the file', () => {
+    // rangeOf's fallback for a missing end_line is Infinity, mirroring
+    // toolReadFile's own "read from start_line to EOF" behavior. Every other
+    // range test in this file supplies both bounds, so this exercises that
+    // arm specifically.
+    const openEnded = 'TAIL'.repeat(500);
+    // A later [1, 200] read does NOT contain an unbounded [50, Infinity] read
+    // (200 < Infinity), so it must not supersede it. This is the real
+    // assertion: the open-ended read is treated as genuinely unbounded, not
+    // silently capped at some default end line.
+    const boundedMsgs: Msg[] = [
+      ...read('c1', 'a.kicad_sch', openEnded, { start: 50 }), // lines 50..EOF
+      ...read('c2', 'a.kicad_sch', 'lines 1-200', { start: 1, end: 200 }),
+      ...filler(2),
+    ];
+    const { messages: notSuperseded, stats: statsA } = capHistory(boundedMsgs, { ...opts, maxToolResultChars: 100000 });
+    expect(notSuperseded[1].role === 'tool' && notSuperseded[1].content).toBe(openEnded);
+    expect(statsA.superseded).toBe(0);
+
+    // A later read that is itself open-ended (or whole-file) DOES contain it.
+    const wholeFileMsgs: Msg[] = [
+      ...read('c1', 'a.kicad_sch', openEnded, { start: 50 }),
+      ...read('c2', 'a.kicad_sch', 'whole file'), // [1, Infinity]
+      ...filler(2),
+    ];
+    const { messages: superseded, stats: statsB } = capHistory(wholeFileMsgs, { ...opts, maxToolResultChars: 100000 });
+    expect(superseded[1].role === 'tool' && superseded[1].content).toContain('superseded');
+    expect(statsB.superseded).toBe(1);
   });
 
   it('does not let a failed later read supersede a successful earlier one', () => {
@@ -351,6 +382,98 @@ describe('capHistory — what it actually trims', () => {
     // The most recent read must survive intact regardless of how much was cut.
     expect(renderConversation(out)).toContain(sch.slice(0, 200));
   });
+});
+
+describe('historyCap config parsing', () => {
+  it('defaults to true, and loadConfig turns { historyCap: false } into config.historyCap === false', async () => {
+    expect(DEFAULTS.historyCap).toBe(true);
+
+    const { repo, cleanup } = await tempFixtureRepo();
+    try {
+      await mkdir(path.join(repo, '.copperhead'), { recursive: true });
+      await writeFile(
+        path.join(repo, '.copperhead', 'config.json'),
+        JSON.stringify({ historyCap: false }),
+        'utf8',
+      );
+      const config = await loadConfig(repo);
+      expect(config.historyCap).toBe(false);
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it('historyCap: false actually disables capping: a stale duplicate read is sent uncapped, not stubbed', async () => {
+    const { repo, cleanup } = await tempFixtureRepo();
+    try {
+      // Write historyCap: false before init, so runInit's read-modify-write of
+      // config.json (via loadConfig) carries it through rather than overwriting
+      // it with the default.
+      await mkdir(path.join(repo, '.copperhead'), { recursive: true });
+      await writeFile(path.join(repo, '.copperhead', 'config.json'), JSON.stringify({ historyCap: false }), 'utf8');
+      await runInit({ repoRoot: repo, installHooks: false });
+      const writtenConfig = JSON.parse(
+        await readFile(path.join(repo, '.copperhead', 'config.json'), 'utf8'),
+      ) as { historyCap?: boolean };
+      expect(writtenConfig.historyCap).toBe(false); // sanity: init didn't clobber it
+
+      const body = 'a big file\n'.repeat(2000);
+      await writeFile(path.join(repo, 'big.txt'), body, 'utf8');
+      await execa('git', ['add', '-A'], { cwd: repo });
+      await execa('git', ['commit', '-q', '-m', 'fixture'], { cwd: repo });
+
+      const seen: Msg[][] = [];
+      let turn = 0;
+      const provider: Provider = {
+        name: 'scripted-uncapped',
+        async chat(messages: Msg[]): Promise<Turn> {
+          seen.push(messages.map((m) => JSON.parse(JSON.stringify(m)) as Msg));
+          turn++;
+          const usage = { inputTokens: 100, outputTokens: 10 };
+          if (turn <= 2) {
+            return {
+              text: null,
+              toolCalls: [{ id: `read-${turn}`, name: 'read_file', args: { path: 'big.txt' } }],
+              usage,
+            };
+          }
+          return {
+            text: null,
+            toolCalls: [{ id: 'fin', name: 'finish', args: { outcome: 'done', summary: 'done' } }],
+            usage,
+          };
+        },
+      };
+
+      const res = await runAgentLoop({
+        repoRoot: repo,
+        request: 'read the same file twice, with capping disabled',
+        model: 'gpt-5',
+        provider,
+        maxTurns: 20,
+        log: () => {},
+        meta: { command: 'do', modelSource: 'flag', version: '0.0.0-test', kicadCliVersion: '0.0.0' },
+      });
+
+      // No saving at all: capHistory never ran, so RunStats.capCharsSaved must
+      // be absent (the field is omitted, per transcript.ts, when there is
+      // nothing to report) rather than merely zero.
+      expect(res.stats.capCharsSaved).toBeUndefined();
+
+      // The real assertion: the third request (after both reads) must carry the
+      // first read's full, unstubbed content — proving the provider actually
+      // received the uncapped array, not just that the counter stayed at zero.
+      const lastRequest = seen[seen.length - 1]!;
+      const toolResults = lastRequest.filter((m) => m.role === 'tool');
+      expect(toolResults).toHaveLength(2);
+      for (const m of toolResults) {
+        expect(m.role === 'tool' && m.content).toBe(body);
+      }
+      expect(lastRequest.some((m) => m.role === 'tool' && m.content.includes('superseded'))).toBe(false);
+    } finally {
+      await cleanup();
+    }
+  }, 20000);
 });
 
 describe('capHistory in the agent loop', () => {
