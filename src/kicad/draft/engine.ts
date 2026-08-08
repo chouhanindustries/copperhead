@@ -31,6 +31,12 @@ const LABEL_ADVANCE = 0.6;
 /** How far a colliding label may ride its stub outward, in grid units. */
 const MAX_LABEL_NUDGE = 4;
 /**
+ * How far a power stub may be pulled in or pushed out to clear a foreign
+ * connection point, in grid units. Bounded so the symbol stays visibly attached
+ * to the pin it serves; past this the merged-net gate is the better answer.
+ */
+const MAX_POWER_STUB_SHIFT = 4;
+/**
  * Fraction of labels allowed to still overlap a foreign net's label text after
  * the de-collision pass has done what it can.
  *
@@ -982,7 +988,13 @@ export function draftSchematicPlacement(validated: ValidatedIntent, projectName:
   const libSymbols = new Map<string, string>();
   const pwrFlags: string[] = [];
   /** Labels sitting at a stub end, with the stub they may ride outward. */
-  const stubbedLabels: { label: number; wire: number; o: { dx: number; dy: number } }[] = [];
+  const stubbedLabels: {
+    label: number;
+    wire: number;
+    o: { dx: number; dy: number };
+    /** The net's own endpoints, so a clearance check can ignore them (#217). */
+    pins: string[];
+  }[] = [];
   /** Wired-net labels with every wire point of their run as fallback anchors. */
   const wiredLabels: { label: number; pts: { x: number; y: number }[] }[] = [];
   let wireIdx = new Map<string, number>();
@@ -1023,6 +1035,59 @@ export function draftSchematicPlacement(validated: ValidatedIntent, projectName:
   // Horizontal stubs run 4 units so their symbol clears the 2-unit signal
   // stubs and label anchors of neighbouring rows.
   const powerBodies = [...placed.values()].map((p) => p.body);
+
+  /**
+   * True when any of `segs` touches a FOREIGN connection point: a pin, the
+   * stub end any connected pin grows (predicted — stubs of nets sorted later
+   * are not emitted yet), or an already-emitted wire of another net. KiCad
+   * joins wires at coincident endpoints and at an endpoint on a wire's
+   * interior, so any such contact merges nets (I22, #204).
+   *
+   * Used by every pass that decides where a wire may end: the trunk-and-branch
+   * veto, the labelled-stub fallback (the cap-to-ground drop placed a cap whose
+   * own 2-unit stub ended exactly on the neighbouring power pin's stub interior,
+   * so stubs need the check as much as trunks), the power-stub ladder, and the
+   * label nudge. Defined here rather than beside the signal pass because the
+   * power pass below runs first and needs it too (#217).
+   */
+  const touchesForeign = (
+    segs: { x1: number; y1: number; x2: number; y2: number }[],
+    netName: string,
+    ownEps: Set<string>,
+    opts: { predictStubs?: boolean } = {},
+  ): boolean => {
+    const predictStubs = opts.predictStubs ?? true;
+    for (const [oref, opl] of placed) {
+      for (const pin of opl.sym.pins) {
+        const ep = `${oref}.${pin.number}`;
+        const onet = netByEndpoint.get(ep);
+        if (!onet || onet.name === netName || ownEps.has(ep)) continue;
+        const p = pinAt(opl, pin);
+        if (segs.some((c) => pointOnSeg(p.x, p.y, c))) return true;
+        if (!predictStubs) continue;
+        const o = outward(pin);
+        const len = (netClasses.get(onet.name)?.cls ?? 'signal') !== 'signal' && o.dx !== 0 ? STUB + 2 : STUB;
+        const end = { x: p.x + o.dx * len * U, y: p.y + o.dy * len * U };
+        if (segs.some((c) => pointOnSeg(end.x, end.y, c))) return true;
+      }
+    }
+    for (const w of wires) {
+      if (w.net === netName) continue;
+      if (
+        segs.some(
+          (c) =>
+            pointOnSeg(w.x1, w.y1, c) ||
+            pointOnSeg(w.x2, w.y2, c) ||
+            pointOnSeg(c.x1, c.y1, w) ||
+            pointOnSeg(c.x2, c.y2, w),
+        )
+      ) {
+        return true;
+      }
+    }
+    return false;
+  };
+
   /** Visible power value texts placed so far, for the collision rules below. */
   const shownPowerValues: { net: string; box: Bounds }[] = [];
   const powerValueBox = (net: string, x: number, y: number): Bounds => {
@@ -1066,6 +1131,77 @@ export function draftSchematicPlacement(validated: ValidatedIntent, projectName:
             len += 2;
           }
         }
+      }
+      /**
+       * The length chosen above answers a typographic question: where does the
+       * value text stop colliding. It says nothing about where the stub's
+       * ENDPOINT lands, and a power stub that ends on another net's stub is a
+       * shorted rail (#217: cm5_minima put a +5V pin 4 units above a GND pin,
+       * both stubs grew 2 units toward each other, and they met exactly in the
+       * middle — the drawn sheet ties +5V to GND).
+       *
+       * So the text-driven length is only a preference. Try it first, then
+       * lengths either side of it, and take the first whose endpoint touches no
+       * foreign connection point. Shorter is in the ladder deliberately: two
+       * pins facing each other cannot be separated by growing the stub, only by
+       * pulling it back. One unit is the floor — the power symbol still needs
+       * somewhere to sit.
+       *
+       * When nothing clears, keep the preferred length and let the merged-net
+       * gate refuse loudly. Shipping a quiet short is the one outcome barred.
+       */
+      const ownPinEps = new Set(net.pins);
+      /**
+       * Which bodies a stub of length `l` would cross, by index.
+       *
+       * A pin sits ON its own part's outline, so EVERY length crosses at least
+       * that body, including the preferred one the engine ships today. Treating
+       * any crossing as disqualifying would veto the whole ladder (it did, on
+       * the first attempt at #217). What matters is that moving the stub does
+       * not put it through something the preferred length was already clear of.
+       */
+      const crossedBy = (l: number): Set<number> => {
+        const e = at(l);
+        const out = new Set<number>();
+        powerBodies.forEach((bd, i) => {
+          if (segCrossesBody(ep.at.x, ep.at.y, e.x, e.y, bd)) out.add(i);
+        });
+        return out;
+      };
+      const baseCrossed = crossedBy(len);
+      const clearsAt = (l: number): boolean => {
+        if ([...crossedBy(l)].some((i) => !baseCrossed.has(i))) return false;
+        const e = at(l);
+        return !touchesForeign([{ x1: ep.at.x, y1: ep.at.y, x2: e.x, y2: e.y }], net.name, ownPinEps, {
+          predictStubs: false,
+        });
+      };
+      /**
+       * Whether the value text would still be clear at length `l`. The length
+       * chosen above already answers this for the preferred length; the ladder
+       * has to keep answering it, or a stub moved for electrical reasons drags
+       * its rail name into a neighbouring body (it dragged "+3V3" into R1 on
+       * the pull-up idiom the first time this ladder was written).
+       *
+       * Only a preference: a text collision is a legibility cost the report
+       * names, while a merged net refuses the draft outright. So a rung that is
+       * electrically clear but typographically ugly still beats no rung at all.
+       */
+      const textClearAt = (l: number): boolean => {
+        if (hideValue) return true;
+        const v = valueAtOf(at(l));
+        const b = powerValueBox(net.name, v.x, v.y);
+        if (powerBodies.some((bd) => boundsOverlap(b, bd))) return false;
+        return !shownPowerValues.some((p) => p.net !== net.name && boundsOverlap(p.box, b));
+      };
+      if (!clearsAt(len)) {
+        const ladder: number[] = [];
+        for (let d = 1; d <= MAX_POWER_STUB_SHIFT; d++) {
+          ladder.push(len + d);
+          if (len - d >= 1) ladder.push(len - d);
+        }
+        const freed = ladder.find((l) => clearsAt(l) && textClearAt(l)) ?? ladder.find(clearsAt);
+        if (freed !== undefined) len = freed;
       }
       const stubEnd = at(len);
       const valueAt = valueAtOf(stubEnd);
@@ -1119,49 +1255,6 @@ export function draftSchematicPlacement(validated: ValidatedIntent, projectName:
 
   // signal nets: local nets wired, everything else labelled at a stub
   const bodies = [...placed.values()].map((p) => p.body);
-  /**
-   * True when any of `segs` touches a FOREIGN connection point: a pin, the
-   * stub end any connected pin grows (predicted — stubs of nets sorted later
-   * are not emitted yet), or an already-emitted wire of another net. KiCad
-   * joins wires at coincident endpoints and at an endpoint on a wire's
-   * interior, so any such contact merges nets (I22, #204). Used by the
-   * trunk-and-branch veto AND the labelled-stub fallback — the cap-to-ground
-   * drop placed a cap whose own 2-unit stub ended exactly on the neighbouring
-   * power pin's stub interior, so stubs need the check as much as trunks.
-   */
-  const touchesForeign = (
-    segs: { x1: number; y1: number; x2: number; y2: number }[],
-    netName: string,
-    ownEps: Set<string>,
-  ): boolean => {
-    for (const [oref, opl] of placed) {
-      for (const pin of opl.sym.pins) {
-        const ep = `${oref}.${pin.number}`;
-        const onet = netByEndpoint.get(ep);
-        if (!onet || onet.name === netName || ownEps.has(ep)) continue;
-        const o = outward(pin);
-        const len = (netClasses.get(onet.name)?.cls ?? 'signal') !== 'signal' && o.dx !== 0 ? STUB + 2 : STUB;
-        const p = pinAt(opl, pin);
-        const end = { x: p.x + o.dx * len * U, y: p.y + o.dy * len * U };
-        if (segs.some((c) => pointOnSeg(p.x, p.y, c) || pointOnSeg(end.x, end.y, c))) return true;
-      }
-    }
-    for (const w of wires) {
-      if (w.net === netName) continue;
-      if (
-        segs.some(
-          (c) =>
-            pointOnSeg(w.x1, w.y1, c) ||
-            pointOnSeg(w.x2, w.y2, c) ||
-            pointOnSeg(c.x1, c.y1, w) ||
-            pointOnSeg(c.x2, c.y2, w),
-        )
-      ) {
-        return true;
-      }
-    }
-    return false;
-  };
   let wired = 0;
   let labelled = 0;
   for (const net of [...signalNets].sort((a, b) => a.name.localeCompare(b.name))) {
@@ -1257,7 +1350,7 @@ export function draftSchematicPlacement(validated: ValidatedIntent, projectName:
         // labels are always horizontal (drafting standard): leftward pins read
         // outward to the left, everything else extends to the right
         labels.push({ name: net.name, x: end.x, y: end.y, rot: s.o.dx === -1 ? 180 : 0 });
-        stubbedLabels.push({ label: labels.length - 1, wire: wires.length - 1, o: s.o });
+        stubbedLabels.push({ label: labels.length - 1, wire: wires.length - 1, o: s.o, pins: net.pins });
         labelled++;
       }
     }
@@ -1461,6 +1554,23 @@ export function draftSchematicPlacement(validated: ValidatedIntent, projectName:
      */
     const mergesAt = (x: number, y: number): boolean =>
       labels.some((o, i) => i !== rec.label && o.name !== lb.name && sameCoord(o.x, x) && sameCoord(o.y, y));
+    /**
+     * Riding a label outward drags the stub's ENDPOINT with it (`rideTo` moves
+     * both). Every test above this asks a typographic question — does the text
+     * box clear a body, a wire, another label — and none asks the electrical
+     * one, so the pass could answer "the text is clear here" about a point that
+     * sits on another net's wire and silently tie the two together (#217:
+     * interf_u rode /PC-RD's stub from 2 units to 4 and parked its end on
+     * /WR_REG's trunk).
+     *
+     * A candidate must therefore be electrically clear as well as legible.
+     * The stub's own wire needs no exclusion: `touchesForeign` skips wires of
+     * the same net, and this one is the net's own.
+     */
+    const wireClearAt = (x: number, y: number): boolean =>
+      !touchesForeign([{ x1: stub.x1, y1: stub.y1, x2: x, y2: y }], lb.name, new Set(rec.pins), {
+        predictStubs: false,
+      });
     const rideTo = (x: number, y: number): void => {
       stub.x2 = x;
       stub.y2 = y;
@@ -1478,7 +1588,7 @@ export function draftSchematicPlacement(validated: ValidatedIntent, projectName:
       if (bodies.some((b) => segCrossesBody(stub.x1, stub.y1, x, y, b))) break;
       candidates.push({ x, y });
     }
-    const clear = candidates.find((c) => clearAt(c.x, c.y));
+    const clear = candidates.find((c) => clearAt(c.x, c.y) && wireClearAt(c.x, c.y));
     if (clear) {
       rideTo(clear.x, clear.y);
       continue;
@@ -1491,7 +1601,10 @@ export function draftSchematicPlacement(validated: ValidatedIntent, projectName:
     // A label that merely overlaps is left alone: moving it would buy nothing
     // and the emitted sheet must stay a function of the IR alone.
     if (!mergesAt(lb.x, lb.y)) continue;
-    const unmerged = candidates.find((c) => !mergesAt(c.x, c.y));
+    // Same precedence as above, one rung down: this is already the consolation
+    // move for a label sitting on another net's point, so it may accept
+    // overlapping text, but it still may not trade one merge for another.
+    const unmerged = candidates.find((c) => !mergesAt(c.x, c.y) && wireClearAt(c.x, c.y));
     if (unmerged) rideTo(unmerged.x, unmerged.y);
   }
 
