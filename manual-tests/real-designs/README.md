@@ -9,7 +9,7 @@ So the comparison splits in two:
 - **The netlist is checked by machine.** However differently the two sheets are drawn, they must join the same pins into the same nets. Every net that the source had and the draft lost, or that the draft invented, is reported.
 - **The drawing is checked by eye.** Two PNGs, the person's and the engine's, of the same circuit. This is where you find out whether the output reads like a schematic or merely is one.
 
-Nothing under this directory is a committed project. The designs are read from a local KiCad install at run time and the outputs land in `manual-tests/runs/` (gitignored), so nothing is redistributed. That is deliberate: several of the most interesting boards carry licences a permissive repo cannot vendor. The one that currently drafts cleanest, `stickhub`, is CC BY-NC-SA.
+The designs are read from a local KiCad install at run time and the sweep's outputs land in `manual-tests/runs/` (gitignored). What IS committed lives in [examples/](examples/): the side-by-side output for boards that draft cleanly and whose licences permit redistribution, each with its licence file beside it. Boards whose licences do not permit it stay run-only; `stickhub`, for instance, is CC BY-NC-SA.
 
 ## Running it
 
@@ -61,7 +61,7 @@ That test tells you whether anything broke. This directory is for looking at wha
 Against KiCad 10.0.4's demos, three boards draft with connectivity exact and the rest refuse. The refusals are worth reading, because they are the honest map of what the engine cannot yet do:
 
 - **Multi-unit symbols** block seven of fifteen projects (opamps, gate packs, multi-gang jumpers). Correct as things stand, since a symbol's units share pin coordinates and drafting one would merge nets silently. Tracked in #218, with the finding that in all seven this was the *only* refusal.
-- **Symbol resolution** blocks five, mostly project-local libraries and `easyeda2kicad` imports rather than anything the engine did wrong.
+- **Symbol resolution** blocked five, all boards drawn against private libraries that were never published. The harness now rebuilds those libraries from the copies every sheet embeds in its `lib_symbols` section ([test/support/embedded-libs.ts](../../test/support/embedded-libs.ts)), so they resolve without being installed; `royalblue54L_feather` and `cm5_minima` draft cleanly because of it.
 - **Merged nets at routing** blocked two, `cm5_minima` (+5V shorted to GND) and `interf_u` (/PC-RD to /WR_REG), until #217. Both now draft with connectivity exact.
 
 And the finding that only the renders could have surfaced: **the three boards that draft are correct and unreadable** (#219). All three score a composite of 40 against 85.6 to 92 for the committed reference boards, and `stickhub` carries 367 out-of-frame findings, meaning content placed outside the drawing frame. Its 94 parts come out as one horizontal ribbon on an A0 sheet that is roughly 85% empty, where the designer drew the same circuit densely on A3.
