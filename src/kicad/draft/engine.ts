@@ -1316,6 +1316,70 @@ export function draftSchematicPlacement(validated: ValidatedIntent, projectName:
     const w = Math.max(1, s.length) * LABEL_ADVANCE * LABEL_HEIGHT;
     return { minX: x - w / 2, minY: y - LABEL_HEIGHT / 2, maxX: x + w / 2, maxY: y + LABEL_HEIGHT / 2 };
   };
+  /** Text-box-vs-segment overlap; hoisted so slot refinement below and the
+   * label pass share one metric. */
+  const segHitsBoxEarly = (w: { x1: number; y1: number; x2: number; y2: number }, b: Bounds): boolean =>
+    Math.min(w.x1, w.x2) < b.maxX - 0.01 &&
+    Math.max(w.x1, w.x2) > b.minX + 0.01 &&
+    Math.min(w.y1, w.y2) < b.maxY - 0.01 &&
+    Math.max(w.y1, w.y2) > b.minY + 0.01;
+
+  // ---------- symbol-field slot refinement (I23, #210) ----------
+  // The heuristic slots above consult nothing: attempt-07 ended ERC-clean
+  // with 8 error-severity findings that were exactly these ref/value fields
+  // sitting on wires and neighbouring bodies, with no IR lever to move them.
+  // Re-slot each dirty pair down a deterministic ladder; the first slot whose
+  // boxes clear every wire, every FOREIGN body, and all field text placed so
+  // far wins. Where the heuristic is already clean the output is
+  // byte-identical; where nothing clears, the heuristic stays so the checker
+  // still reports the collision honestly.
+  {
+    const fieldBoxes: Bounds[] = extraSymbols
+      .filter((s) => !s.hideValue)
+      .map((s) => centeredTextBox(s.value, s.valueAt.x, s.valueAt.y));
+    for (const sym of emitSymbols) {
+      const pl = placed.get(sym.ref)!;
+      const cx = (pl.body.minX + pl.body.maxX) / 2;
+      const cy = (pl.body.minY + pl.body.maxY) / 2;
+      const textW = Math.max(sym.ref.length, sym.value.length) * 0.8 * 1.27;
+      const pairClear = (r: { x: number; y: number }, v: { x: number; y: number }): boolean => {
+        for (const b of [centeredTextBox(sym.ref, r.x, r.y), centeredTextBox(sym.value, v.x, v.y)]) {
+          if (wires.some((w) => segHitsBoxEarly(w, b))) return false;
+          for (const [oref, op] of placed) {
+            if (oref !== sym.ref && boundsOverlap(b, op.body)) return false;
+          }
+          if (fieldBoxes.some((t) => boundsOverlap(t, b))) return false;
+        }
+        return true;
+      };
+      if (!pairClear(sym.refAt, sym.valueAt)) {
+        const ladder: [{ x: number; y: number }, { x: number; y: number }][] = [];
+        for (const extra of [0, 2.54]) {
+          ladder.push(
+            [{ x: cx, y: pl.body.maxY + 2.54 + extra }, { x: cx, y: pl.body.maxY + 5.08 + extra }],
+            [{ x: cx, y: pl.body.minY - 5.08 - extra }, { x: cx, y: pl.body.minY - 2.54 - extra }],
+            [
+              { x: pl.body.maxX + textW / 2 + 1.27 + extra, y: cy - 1.27 },
+              { x: pl.body.maxX + textW / 2 + 1.27 + extra, y: cy + 1.27 },
+            ],
+            [
+              { x: pl.body.minX - textW / 2 - 1.27 - extra, y: cy - 1.27 },
+              { x: pl.body.minX - textW / 2 - 1.27 - extra, y: cy + 1.27 },
+            ],
+          );
+        }
+        for (const [r, v] of ladder) {
+          if (pairClear(r, v)) {
+            sym.refAt = r;
+            sym.valueAt = v;
+            break;
+          }
+        }
+      }
+      fieldBoxes.push(centeredTextBox(sym.ref, sym.refAt.x, sym.refAt.y), centeredTextBox(sym.value, sym.valueAt.x, sym.valueAt.y));
+    }
+  }
+
   /** Every visible ref/value text the checker will measure. */
   const textObstacles: Bounds[] = [
     ...emitSymbols.flatMap((s) => [centeredTextBox(s.ref, s.refAt.x, s.refAt.y), centeredTextBox(s.value, s.valueAt.x, s.valueAt.y)]),

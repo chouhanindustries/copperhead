@@ -209,3 +209,56 @@ describe('labelled-stub fallback avoids foreign contact (I22 third face)', () =>
     }
   });
 });
+
+describe('symbol-field slot refinement (I23, #210)', () => {
+  it('every emitted ref/value box clears wires and foreign bodies when a clear slot exists', async () => {
+    // The cap-to-ground drop leaves C9 flush against U1; before the
+    // refinement its heuristic field slot could land on the neighbour's body
+    // or a wire with no IR lever to move it (attempt-07 aborted ERC-clean on
+    // exactly this class).
+    const repo = await mkdtemp(path.join(tmpdir(), 'copperhead-fieldslots-'));
+    try {
+      await mkdir(path.join(repo, 'docs'), { recursive: true });
+      await writeFile(path.join(repo, 'docs', 'SUBSYSTEMS.md'), '## Main\n', 'utf8');
+      await writeFile(
+        path.join(repo, 'schematic.intent.json'),
+        JSON.stringify({
+          version: 1,
+          parts: [
+            { ref: 'U1', libId: 'CopperMCU:MCU8', value: 'MCU8', footprint: 'X:Y', group: 'Main' },
+            { ref: 'C9', libId: 'Device:C', value: '100n', footprint: 'X:Y', group: 'Main' },
+            { ref: 'R3', libId: 'Device:R', value: '10k', footprint: 'X:Y', group: 'Main' },
+          ],
+          nets: [
+            { name: 'BUCK_SS', pins: ['U1.3', 'C9.1'] },
+            { name: 'GND', pins: ['C9.2', 'U1.2'] },
+            { name: 'PULL', pins: ['U1.4', 'R3.1'] },
+            { name: 'VCC', pins: ['R3.2', 'U1.1'] },
+          ],
+          noConnect: ['U1.5', 'U1.6', 'U1.7', 'U1.8'],
+        }),
+        'utf8',
+      );
+      const res = await draftSchematicToText({
+        repoRoot: repo,
+        schematic: 'board.kicad_sch',
+        intentPath: 'schematic.intent.json',
+        docsDir: 'docs',
+        symbolDirs: [SYMLIB],
+      });
+      expect(res.ok, res.ok ? '' : (res as { message: string }).message).toBe(true);
+      if (!res.ok) return;
+      const sch = path.join(repo, 'board.kicad_sch');
+      const { writeFile: wf } = await import('node:fs/promises');
+      await wf(sch, res.text, 'utf8');
+      const { checkLegibility } = await import('../src/kicad/legibility.js');
+      const leg = await checkLegibility(sch, { docsDir: path.join(repo, 'docs') });
+      const fieldErrors = leg.findings.filter(
+        (f) => f.severity === 'error' && /(Reference|Value) text (overlaps the body|sits on a wire)/.test(f.detail) && !/#PWR/.test(f.detail),
+      );
+      expect(fieldErrors, JSON.stringify(fieldErrors, null, 2)).toEqual([]);
+    } finally {
+      await rm(repo, { recursive: true, force: true });
+    }
+  });
+});
