@@ -16,6 +16,7 @@ function deps(over: Partial<DoctorDeps> = {}): Partial<DoctorDeps> {
     nodeVersion: 'v20.0.0',
     kicadVersion: async () => 'kicad-cli 9.0.0',
     gitVersion: async () => 'git version 2.43.0',
+    openspecVersion: async () => 'openspec 1.8.0',
     env: {},
     ...over,
   };
@@ -233,6 +234,55 @@ describe('copperhead doctor', () => {
       const git = r.checks.find((c) => c.name === 'git')!;
       expect(git.status).toBe('fail');
       expect(git.hint).toMatch(/install git/i);
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it('reports a missing openspec as a failure with an install hint (does not throw)', async () => {
+    const { repo, cleanup } = await tempFixtureRepo();
+    try {
+      const r = await runDoctor({
+        repoRoot: repo,
+        model: 'claude-code',
+        deps: deps({
+          openspecVersion: async () => {
+            throw Object.assign(new Error('spawn openspec ENOENT'), { code: 'ENOENT' });
+          },
+        }),
+      });
+      const os = r.checks.find((c) => c.name === 'openspec')!;
+      expect(os.status).toBe('fail');
+      expect(os.hint).toContain('@fission-ai/openspec');
+      expect(r.ok).toBe(false);
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it('a raw multi-line shell error never reaches the report unflattened (regression)', async () => {
+    const { repo, cleanup } = await tempFixtureRepo();
+    try {
+      // A shell-shaped error (exit 127, not ENOENT) is not the "not found"
+      // case the probe itself can produce (execa yields ENOENT for that on
+      // every platform), but any unexpected error must still land as a
+      // single line so it cannot break formatDoctor's column layout.
+      const r = await runDoctor({
+        repoRoot: repo,
+        model: 'claude-code',
+        deps: deps({
+          openspecVersion: async () => {
+            throw Object.assign(
+              new Error('Command failed: openspec --version\n/bin/sh: 1: openspec: not found\n'),
+              { code: 127 },
+            );
+          },
+        }),
+      });
+      const os = r.checks.find((c) => c.name === 'openspec')!;
+      expect(os.status).toBe('fail');
+      expect(os.detail).toContain('openspec: not found');
+      expect(os.detail).not.toContain('\n');
     } finally {
       await cleanup();
     }
