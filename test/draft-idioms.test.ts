@@ -106,9 +106,12 @@ describe('drop chains: series passives restack as one straight run (AC-16.31)', 
       const u1 = at(syms, 'U1');
       const r1 = at(syms, 'R1');
       // U1.3 sits at -10.16; its stub extends left 2.54, and the pull-up sits
-      // directly on that axis, one gap above, rail symbol on top
+      // directly on that axis, lifted one grid row past the plain gap: the
+      // one-gap position parks R1's bottom lead on U1.1's pin row, where the
+      // VCC power stub runs straight through the pulled SIG node (I22, #204).
+      // The bounded lift keeps the idiom and clears the contact.
       expect(r1.x).toBeCloseTo(u1.x - 12.7, 5);
-      expect(r1.y + 3.81).toBeCloseTo(u1.y - 5.08, 5); // bottom lead one gap above the stub end
+      expect(r1.y + 3.81).toBeCloseTo(u1.y - 7.62, 5); // bottom lead one gap plus one lift above the stub end
       expect(r1.y).toBeLessThan(u1.y);
     } finally {
       await cleanup();
