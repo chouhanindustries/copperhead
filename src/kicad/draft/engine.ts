@@ -86,7 +86,7 @@ export interface SchematicDraftReport {
    * them into one net in the emitted sheet. Non-empty means the drawing does
    * not implement the IR, so the caller must refuse the draft.
    */
-  mergedNets: { x: number; y: number; nets: string[] }[];
+  mergedNets: { x: number; y: number; nets: string[]; via?: 'labels' | 'wires' }[];
   /**
    * Labels whose TEXT still overlaps a foreign net's label after de-collision.
    * The netlist is correct — these are legibility defects, tolerated up to
@@ -1119,6 +1119,49 @@ export function draftSchematicPlacement(validated: ValidatedIntent, projectName:
 
   // signal nets: local nets wired, everything else labelled at a stub
   const bodies = [...placed.values()].map((p) => p.body);
+  /**
+   * True when any of `segs` touches a FOREIGN connection point: a pin, the
+   * stub end any connected pin grows (predicted — stubs of nets sorted later
+   * are not emitted yet), or an already-emitted wire of another net. KiCad
+   * joins wires at coincident endpoints and at an endpoint on a wire's
+   * interior, so any such contact merges nets (I22, #204). Used by the
+   * trunk-and-branch veto AND the labelled-stub fallback — the cap-to-ground
+   * drop placed a cap whose own 2-unit stub ended exactly on the neighbouring
+   * power pin's stub interior, so stubs need the check as much as trunks.
+   */
+  const touchesForeign = (
+    segs: { x1: number; y1: number; x2: number; y2: number }[],
+    netName: string,
+    ownEps: Set<string>,
+  ): boolean => {
+    for (const [oref, opl] of placed) {
+      for (const pin of opl.sym.pins) {
+        const ep = `${oref}.${pin.number}`;
+        const onet = netByEndpoint.get(ep);
+        if (!onet || onet.name === netName || ownEps.has(ep)) continue;
+        const o = outward(pin);
+        const len = (netClasses.get(onet.name)?.cls ?? 'signal') !== 'signal' && o.dx !== 0 ? STUB + 2 : STUB;
+        const p = pinAt(opl, pin);
+        const end = { x: p.x + o.dx * len * U, y: p.y + o.dy * len * U };
+        if (segs.some((c) => pointOnSeg(p.x, p.y, c) || pointOnSeg(end.x, end.y, c))) return true;
+      }
+    }
+    for (const w of wires) {
+      if (w.net === netName) continue;
+      if (
+        segs.some(
+          (c) =>
+            pointOnSeg(w.x1, w.y1, c) ||
+            pointOnSeg(w.x2, w.y2, c) ||
+            pointOnSeg(c.x1, c.y1, w) ||
+            pointOnSeg(c.x2, c.y2, w),
+        )
+      ) {
+        return true;
+      }
+    }
+    return false;
+  };
   let wired = 0;
   let labelled = 0;
   for (const net of [...signalNets].sort((a, b) => a.name.localeCompare(b.name))) {
@@ -1160,53 +1203,11 @@ export function draftSchematicPlacement(validated: ValidatedIntent, projectName:
           candidate.push({ x1: trunkX, y1: meetYs[i - 1]!, x2: trunkX, y2: meetYs[i]! });
         }
         if (candidate.some((c) => bodies.some((b) => segCrossesBody(c.x1, c.y1, c.x2, c.y2, b)))) continue;
-        // No candidate segment may touch a FOREIGN connection point: a pin,
-        // the stub end every connected pin grows (labelled stubs of nets
-        // sorted later are not emitted yet, so they must be predicted), or an
-        // already-emitted wire of another net. KiCad joins wires at coincident
-        // endpoints and at an endpoint on a wire's interior, so a trunk
-        // routed down a column of neighbouring stub ends silently merges
-        // nets — the lemondrop run drew the crystal drive onto TOUCH_IRQ
-        // exactly this way (I22, #204). Mirrors the chain pass's axisClear,
+        // No candidate segment may touch a foreign connection point (I22,
+        // #204): a trunk routed down a column of neighbouring stub ends
+        // silently merges nets. Mirrors the chain pass's axisClear,
         // generalized to every candidate segment.
-        const ownEps = new Set(net.pins);
-        let touchesForeign = false;
-        for (const [oref, opl] of placed) {
-          if (touchesForeign) break;
-          for (const pin of opl.sym.pins) {
-            const ep = `${oref}.${pin.number}`;
-            const onet = netByEndpoint.get(ep);
-            if (!onet || onet.name === net.name || ownEps.has(ep)) continue;
-            const o = outward(pin);
-            const len = (netClasses.get(onet.name)?.cls ?? 'signal') !== 'signal' && o.dx !== 0 ? STUB + 2 : STUB;
-            const p = pinAt(opl, pin);
-            const end = { x: p.x + o.dx * len * U, y: p.y + o.dy * len * U };
-            if (candidate.some((c) => pointOnSeg(p.x, p.y, c) || pointOnSeg(end.x, end.y, c))) {
-              if (process.env.COPPERHEAD_DEBUG_VETO) console.error(`VETO ${net.name}: foreign pin/stub ${ep} (${onet.name}) pin(${p.x},${p.y}) end(${end.x},${end.y})`);
-              touchesForeign = true;
-              break;
-            }
-          }
-        }
-        if (!touchesForeign) {
-          for (const w of wires) {
-            if (w.net === net.name) continue;
-            if (
-              candidate.some(
-                (c) =>
-                  pointOnSeg(w.x1, w.y1, c) ||
-                  pointOnSeg(w.x2, w.y2, c) ||
-                  pointOnSeg(c.x1, c.y1, w) ||
-                  pointOnSeg(c.x2, c.y2, w),
-              )
-            ) {
-              if (process.env.COPPERHEAD_DEBUG_VETO) console.error(`VETO ${net.name}: emitted wire of ${w.net} (${w.x1},${w.y1})-(${w.x2},${w.y2})`);
-              touchesForeign = true;
-              break;
-            }
-          }
-        }
-        if (touchesForeign) continue;
+        if (touchesForeign(candidate, net.name, new Set(net.pins))) continue;
         for (const c of candidate) addWire(net.name, c.x1, c.y1, c.x2, c.y2);
         // one label names the wired net (topmost-leftmost wire point): the net
         // stays identifiable to PINOUT/drift and to a reviewer without a
@@ -1232,10 +1233,30 @@ export function draftSchematicPlacement(validated: ValidatedIntent, projectName:
     }
     if (!asWire) {
       for (const s of stubs) {
-        addWire(net.name, s.ep.at.x, s.ep.at.y, s.end.x, s.end.y);
+        // A stub is a wire too: its endpoint resting on a foreign net's wire
+        // or connection point merges nets exactly like a trunk would (the
+        // cap-to-ground drop's 2-unit stub ended on the neighbouring power
+        // pin's stub interior — I22's third face). Grow the stub a grid unit
+        // at a time until the endpoint is clear; the interior then CROSSES
+        // the foreign wire mid-segment, which does not connect. If no length
+        // clears, emit the plain stub and let the merged-net gate refuse
+        // loudly rather than ship the contact.
+        let end = s.end;
+        const own = new Set(net.pins);
+        for (let extra = 0; extra <= 2; extra++) {
+          const cand = {
+            x: s.ep.at.x + s.o.dx * (STUB + extra) * U,
+            y: s.ep.at.y + s.o.dy * (STUB + extra) * U,
+          };
+          if (!touchesForeign([{ x1: s.ep.at.x, y1: s.ep.at.y, x2: cand.x, y2: cand.y }], net.name, own)) {
+            end = cand;
+            break;
+          }
+        }
+        addWire(net.name, s.ep.at.x, s.ep.at.y, end.x, end.y);
         // labels are always horizontal (drafting standard): leftward pins read
         // outward to the left, everything else extends to the right
-        labels.push({ name: net.name, x: s.end.x, y: s.end.y, rot: s.o.dx === -1 ? 180 : 0 });
+        labels.push({ name: net.name, x: end.x, y: end.y, rot: s.o.dx === -1 ? 180 : 0 });
         stubbedLabels.push({ label: labels.length - 1, wire: wires.length - 1, o: s.o });
         labelled++;
       }
@@ -1487,7 +1508,10 @@ export function draftSchematicPlacement(validated: ValidatedIntent, projectName:
   // pipeline loudly, while a merged net passes ERC-as-warning and flows into
   // layout and fabrication outputs. Reported as a hard finding — the netlist
   // the IR declared is not the netlist that got drawn.
-  const mergedNets = [...findMergedNets(labels), ...findWireContactMerges(wires, labels)];
+  const mergedNets = [
+    ...findMergedNets(labels).map((m) => ({ ...m, via: 'labels' as const })),
+    ...findWireContactMerges(wires, labels).map((m) => ({ ...m, via: 'wires' as const })),
+  ];
 
   // Overlapping label TEXT is the other half of the same pass and deliberately
   // not a gate. The de-collision loop clears what it can and, where it cannot,

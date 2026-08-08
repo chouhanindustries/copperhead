@@ -75,13 +75,19 @@ export async function draftSchematicToText(opts: SchematicDraftOptions): Promise
   if (report.mergedNets.length) {
     const findings = report.mergedNets.map((m) => ({
       detail:
-        `nets ${m.nets.join(' and ')} share a label position at (${m.x}, ${m.y}), which merges them into one net — ` +
-        `the drawn netlist would not match the intent. This is an engine placement fault, not an intent error: the ` +
-        `de-collision pass already treats foreign labels as obstacles and, failing that, moves a label off a shared ` +
-        `point even at the cost of overlapping text, so reaching this state means both labels were immovable ` +
-        `(wired-net labels carry no stub to ride) or the sheet is too dense to separate them. Reshaping the IR is ` +
-        `unlikely to help and should not be attempted more than once — report it against the engine with the intent ` +
-        `that produced it.`,
+        m.via === 'wires'
+          ? `nets ${m.nets.join(' and ')} come into WIRE contact at (${m.x}, ${m.y}) — a wire endpoint or label of one ` +
+            `rests on the other's wire, which KiCad joins into one net, so the drawn netlist would not match the ` +
+            `intent. This is an engine routing/placement fault, not an intent error; the engine's own avoidance ` +
+            `should have prevented it. Reshaping the IR is unlikely to help and should not be attempted more than ` +
+            `once — report it against the engine with the intent that produced it.`
+          : `nets ${m.nets.join(' and ')} share a label position at (${m.x}, ${m.y}), which merges them into one net — ` +
+            `the drawn netlist would not match the intent. This is an engine placement fault, not an intent error: the ` +
+            `de-collision pass already treats foreign labels as obstacles and, failing that, moves a label off a shared ` +
+            `point even at the cost of overlapping text, so reaching this state means both labels were immovable ` +
+            `(wired-net labels carry no stub to ride) or the sheet is too dense to separate them. Reshaping the IR is ` +
+            `unlikely to help and should not be attempted more than once — report it against the engine with the intent ` +
+            `that produced it.`,
     }));
     return { ok: false, findings, message: formatIrFindings(findings) };
   }
