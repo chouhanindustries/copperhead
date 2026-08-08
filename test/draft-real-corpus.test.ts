@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { draftSchematicToText } from '../src/kicad/draft/draft.js';
 import { findSymbolAcrossLibraries } from '../src/kicad/symlib.js';
+import { extractEmbeddedLibs } from './support/embedded-libs.js';
 import {
   classifyRefusal,
   netPartition,
@@ -123,7 +124,10 @@ async function roundTrip(dir: string, project: string): Promise<Outcome> {
   const work = await mkdtemp(path.join(tmpdir(), 'copperhead-corpus-'));
   try {
     const source = await exportNetlist(sch, path.join(work, 'source.net'));
-    const symbolDirs = [...(await projectSymbolDirs(dir)), ...INSTALLED_SYMBOLS];
+    // Extracted-from-the-sheets first: most corpus boards were drawn against
+    // private libraries that only survive as the sheets' embedded lib_symbols.
+    const extracted = await extractEmbeddedLibs(dir, path.join(work, 'extracted-libs'));
+    const symbolDirs = [...extracted, ...(await projectSymbolDirs(dir)), ...INSTALLED_SYMBOLS];
     await fillEmptyLibs(source, symbolDirs);
     const intent = netlistToIntent(source);
     await writeFile(path.join(work, 'schematic.intent.json'), JSON.stringify(intent, null, 2), 'utf8');

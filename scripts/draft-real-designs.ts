@@ -16,6 +16,7 @@
  *   manual-tests/runs/real-designs/<project>/
  *     source.net                 netlist exported from the real project
  *     schematic.intent.json      the IR extracted from it
+ *     extracted-libs/            libraries rebuilt from the sheets' lib_symbols
  *     drawn/board.kicad_sch      what the engine drafted
  *     back.net                   netlist exported back from the drafted sheet
  *     render/original-*.png      the human's drawing, one per sheet
@@ -43,6 +44,7 @@ import { mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { draftSchematicToText } from '../src/kicad/draft/draft.js';
 import { findSymbolAcrossLibraries } from '../src/kicad/symlib.js';
+import { extractEmbeddedLibs } from '../test/support/embedded-libs.js';
 import {
   classifyRefusal,
   netPartition,
@@ -151,7 +153,12 @@ async function run(project: string): Promise<string> {
   await mkdir(path.join(out, 'render'), { recursive: true });
 
   const source = await exportNetlist(sch, path.join(out, 'source.net'));
-  const symbolDirs = [...(await projectSymbolDirs(dir)), ...INSTALLED_SYMBOLS];
+  // Extracted-from-the-sheets first: it is byte-for-byte what the design
+  // actually placed, so it outranks both loose project libs and the installed
+  // stock set. Most corpus boards ship no .kicad_sym at all (their libraries
+  // were private); without this every part refuses symbol-unresolved.
+  const extracted = await extractEmbeddedLibs(dir, path.join(out, 'extracted-libs'));
+  const symbolDirs = [...extracted, ...(await projectSymbolDirs(dir)), ...INSTALLED_SYMBOLS];
   await fillEmptyLibs(source, symbolDirs);
   const intent = netlistToIntent(source);
   await writeFile(path.join(out, 'schematic.intent.json'), JSON.stringify(intent, null, 2), 'utf8');
