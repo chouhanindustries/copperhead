@@ -2,8 +2,9 @@ import path from 'node:path';
 import { readFile, writeFile } from 'node:fs/promises';
 import { execa } from 'execa';
 import type { Msg, Provider, Turn } from './types.js';
-import { availableTools, dispatchTool, type RunContext } from './tools.js';
+import { availableTools, dispatchToolResult, type RunContext } from './tools.js';
 import { CachingProvider } from './response-cache.js';
+import { capHistory } from './history.js';
 import { withTimeout, TurnTimeoutError } from './recovery.js';
 import { buildSystemPrompt } from './prompts.js';
 import { loadConstraints, reopenDeferredAffects } from '../memory/constraints.js';
@@ -345,6 +346,8 @@ async function runWithProviders(opts: RunOptions, providers: Set<Provider>): Pro
   let tokensIn = 0;
   let tokensOut = 0;
   let turnsUsed = 0;
+  /** Characters kept out of the wire by history capping, summed over the run. */
+  let capCharsSaved = 0;
   const perTurn: { turn: number; in: number; out: number }[] = [];
   let plan: string | null = null;
   let nudges = 0;
@@ -361,6 +364,7 @@ async function runWithProviders(opts: RunOptions, providers: Set<Provider>): Pro
     tokensOut,
     perTurn,
     durationMs: Date.now() - startMs,
+    ...(capCharsSaved ? { capCharsSaved } : {}),
   });
 
   /** One outcome line, printed last at every terminal branch (AC-8.5). */
@@ -499,14 +503,35 @@ async function runWithProviders(opts: RunOptions, providers: Set<Provider>): Pro
           )
         : null;
     heartbeat?.unref?.();
+    // Trim settled history out of the request only - `messages` itself stays
+    // whole, so the transcript, the ledger, and the next turn's own capping all
+    // still see full fidelity. Length and order are preserved, which is what
+    // keeps the claude-code session-resume index (`sentCount`) and every
+    // provider's toolCallId pairing valid.
+    const sent = config.historyCap ? capHistory(messages) : { messages, stats: null };
+    // The capped view is built once but `withRetry` may put it on the wire more
+    // than once, so the saving is counted per attempt: `capCharsSaved` measures
+    // characters actually kept off the wire, not characters trimmed. The
+    // transcript event stays one per attempt too, carrying its attempt number,
+    // so a retried turn is legible rather than looking like double-counting.
+    let capAttempt = 0;
     try {
       res = await withRetry(
-        () =>
-          withTimeout(
-            () => provider.chat(messages, tools, { onStream: (chars) => (streamedChars = chars) }),
+        async () => {
+          if (sent.stats?.charsSaved) {
+            capCharsSaved += sent.stats.charsSaved;
+            await transcript.event('history-capped', {
+              turn: turn + 1,
+              attempt: ++capAttempt,
+              ...sent.stats,
+            });
+          }
+          return withTimeout(
+            () => provider.chat(sent.messages, tools, { onStream: (chars) => (streamedChars = chars) }),
             config.turnTimeoutMs,
             () => provider.close?.(),
-          ),
+          );
+        },
         { onRetry: (attempt) => log(`rate limited; retry ${attempt}`) },
       );
     } catch (err) {
@@ -590,10 +615,13 @@ async function runWithProviders(opts: RunOptions, providers: Set<Provider>): Pro
     nudges = 0;
 
     for (const call of res.toolCalls) {
-      const result = await dispatchTool(ctx, call.name, call.args);
-      await transcript.event('tool', { name: call.name, args: call.args, result });
+      const { text: result, ok } = await dispatchToolResult(ctx, call.name, call.args);
+      await transcript.event('tool', { name: call.name, args: call.args, result, ...(ok ? {} : { failed: true }) });
       r.toolResult(call.name, result.split('\n')[0] ?? '');
-      messages.push({ role: 'tool', toolCallId: call.id, content: result });
+      // Carry the failure status on the message rather than leaving later
+      // readers to infer it from the text: a file can legitimately begin with
+      // the same words a tool error does.
+      messages.push({ role: 'tool', toolCallId: call.id, content: result, ...(ok ? {} : { failed: true }) });
     }
 
     if (ctx.repairCycles > config.maxRepairCycles) {

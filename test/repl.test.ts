@@ -24,9 +24,9 @@ import { fiducialBootFrames, prefersAnimation } from '../src/agent/animate.js';
 import { plainRenderer } from '../src/agent/render.js';
 import { setColorEnabled } from '../src/agent/theme.js';
 import { mkdtemp, rm } from 'node:fs/promises';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { existsSync } from 'node:fs';
 
 function fakeTty(): { input: PassThrough; output: PassThrough; lines: string[] } {
   const input = new PassThrough();
@@ -467,12 +467,48 @@ describe('promptWithSlashHints', () => {
   });
 });
 
+/**
+ * Poll until `predicate` holds.
+ *
+ * These tests drive a real REPL over a pipe, so every step is asynchronous: the
+ * banner, the request, and the log writes all land whenever the event loop gets
+ * to them. A fixed sleep encodes a guess about how fast the machine is, and on a
+ * loaded CI runner that guess fails: `/quit` tears the session down before the
+ * request has logged anything, and the assertion fails for a reason that has
+ * nothing to do with the behavior under test. Waiting on the condition itself
+ * removes the guess without slowing the fast path.
+ */
+async function waitFor(what: string, predicate: () => boolean, timeoutMs = 5000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!predicate()) {
+    if (Date.now() > deadline) throw new Error(`timed out after ${timeoutMs}ms waiting for ${what}`);
+    await new Promise((r) => setTimeout(r, 5));
+  }
+}
+
+/** The session log's path, once the REPL has created it. */
+function sessionLogPath(repo: string): string | null {
+  const runsDir = path.join(repo, '.copperhead', 'runs');
+  if (!existsSync(runsDir)) return null;
+  const name = readdirSync(runsDir).find((f) => /^repl-.*\.log$/.test(f));
+  return name ? path.join(runsDir, name) : null;
+}
+
+/** Current session-log contents, or '' before it exists. */
+function sessionLog(repo: string): string {
+  const p = sessionLogPath(repo);
+  return p ? readFileSync(p, 'utf8') : '';
+}
+
 describe('session log file', () => {
   it('mirrors session lines to .copperhead/runs/repl-*.log with keys redacted', async () => {
     setColorEnabled(false);
     const repo = await mkdtemp(path.join(tmpdir(), 'copperhead-repl-log-'));
     try {
       const { input, output } = fakeTty();
+      let raw = '';
+      output.on('data', (c) => (raw += String(c)));
+      let requestLogged = false;
       const done = runRepl({
         repoRoot: repo,
         model: 'gpt-5',
@@ -484,20 +520,25 @@ describe('session log file', () => {
         output,
         runRequest: vi.fn(async (_req: string, log?: (l: string) => void) => {
           log?.('leaked sk-SECRET_KEY_123 in output');
+          requestLogged = true;
           return { outcome: 'success' as const };
         }),
       });
-      await new Promise((r) => setTimeout(r, 30));
+      // The prompt is the REPL's own "I am reading input now" signal. Writing
+      // before it appears loses the bytes, which is why this cannot just wait
+      // for the log file to exist.
+      await waitFor('the prompt', () => raw.includes('❯'));
       input.write('do the thing\n');
-      await new Promise((r) => setTimeout(r, 30));
+      // Wait for the request to have actually logged, rather than assuming it
+      // beat a fixed timer: this is the ordering that used to break under load.
+      await waitFor('the request to log its output', () => requestLogged);
       input.write('/quit\n');
       await done;
 
-      const runsDir = path.join(repo, '.copperhead', 'runs');
-      const { readdirSync, readFileSync } = await import('node:fs');
-      const logName = readdirSync(runsDir).find((f) => /^repl-.*\.log$/.test(f));
-      expect(logName).toBeDefined();
-      const text = readFileSync(path.join(runsDir, logName!), 'utf8');
+      // The log is a write stream, so `done` does not guarantee the last line
+      // reached disk.
+      await waitFor('the redacted line to be flushed', () => sessionLog(repo).includes('[REDACTED]'));
+      const text = sessionLog(repo);
       expect(text).toContain('copperhead v0.7.0'); // banner captured, SGR stripped
       expect(text).toContain('do the thing'); // echoed request
       expect(text).toContain('[REDACTED]'); // AC-4.1 redaction
@@ -523,6 +564,9 @@ describe('session log file', () => {
     ];
     try {
       const { input, output } = fakeTty();
+      let raw = '';
+      output.on('data', (c) => (raw += String(c)));
+      let requestLogged = false;
       const done = runRepl({
         repoRoot: repo,
         model: 'gpt-5',
@@ -534,19 +578,23 @@ describe('session log file', () => {
         output,
         runRequest: vi.fn(async (_req: string, log?: (l: string) => void) => {
           for (const s of secrets) log?.(`tool output: ${s} trailing`);
+          requestLogged = true;
           return { outcome: 'success' as const };
         }),
       });
-      await new Promise((r) => setTimeout(r, 30));
+      await waitFor('the prompt', () => raw.includes('❯'));
       input.write('publish it\n');
-      await new Promise((r) => setTimeout(r, 30));
+      await waitFor('the request to log its output', () => requestLogged);
       input.write('/quit\n');
       await done;
 
-      const runsDir = path.join(repo, '.copperhead', 'runs');
-      const { readdirSync, readFileSync } = await import('node:fs');
-      const logName = readdirSync(runsDir).find((f) => /^repl-.*\.log$/.test(f));
-      const text = readFileSync(path.join(runsDir, logName!), 'utf8');
+      // Every secret is logged on its own line; the last one landing means the
+      // write stream has caught up with the whole batch.
+      await waitFor('every redacted line to be flushed', () => {
+        const t = sessionLog(repo);
+        return t.split('[REDACTED]').length - 1 >= secrets.length;
+      });
+      const text = sessionLog(repo);
       for (const s of secrets) expect(text, s).not.toContain(s);
       expect(text).toContain('[REDACTED]');
       expect(text).toContain('trailing'); // surrounding context survives
