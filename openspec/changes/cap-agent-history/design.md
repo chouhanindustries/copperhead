@@ -38,19 +38,19 @@ One detail follows from mirroring the tool rather than its schema: `toolReadFile
 
 Failed reads are excluded from the candidate set as well, since replacing real content with a pointer to a read that returned nothing is strictly worse than sending the content again. See D3c for why that status cannot be read off the text.
 
-## D3c. Failure is carried as status, not inferred from the text
-
-A tool's failure text is just text. `dispatchTool` turns a throwing handler into an ordinary `error: ...` result, and the tool message that reaches the conversation holds nothing but a string, so any caller wanting to know "did this call fail?" is tempted to sniff prefixes. That is wrong in a way that is easy to miss: a repository can legitimately contain a file whose contents begin `error: ` (a build log, a pasted traceback), and reading it successfully would then be classified as a failure.
-
-So `dispatchToolResult` returns `{ text, ok }` and the loop records `failed` on the tool message. Capping reads that flag and never inspects the text. The existing string-returning `dispatchTool` is kept as a thin wrapper, so the many call sites that only ever want what the model would see are unchanged.
-
-The direction of the old bug matters less than its shape: misclassifying a real read as failed only cost savings, never correctness. But the fix removes a class of guess rather than narrowing one heuristic, and it puts the status where a future reader of the conversation can rely on it.
-
 ## D3b. The request view is structurally independent, not merely a fresh array
 
 Returning a new array is not enough on its own: the message objects inside it would still be the run's own. A provider that mutated what it was handed would be writing directly into the history the transcript and the finish gate read from.
 
 Every message in the view is therefore a fresh object, with fresh tool-call arrays and fresh argument objects. This is cheap in the way that matters: strings are immutable in JavaScript and shared by reference, so the copy allocates object shells, not the payload bytes that make the history expensive in the first place.
+
+## D3c. Failure is carried as status, not inferred from the text
+
+A tool's failure text is just text. `dispatchTool` turns a throwing handler into an ordinary `error: ...` result, and the tool message that reaches the conversation holds nothing but a string, so any caller wanting to know "did this call fail?" is tempted to sniff prefixes. That is wrong in a way that is easy to miss: a repository can legitimately contain a file whose contents begin `error:` (a build log, a pasted traceback), and reading it successfully would then be classified as a failure.
+
+So `dispatchToolResult` returns `{ text, ok }` and the loop records `failed` on the tool message. Capping reads that flag and never inspects the text. The existing string-returning `dispatchTool` is kept as a thin wrapper, so the many call sites that only ever want what the model would see are unchanged.
+
+The direction of the old bug matters less than its shape: misclassifying a real read as failed only cost savings, never correctness. But the fix removes a class of guess rather than narrowing one heuristic, and it puts the status where a future reader of the conversation can rely on it.
 
 ## D4. Trims are announced in-band
 
