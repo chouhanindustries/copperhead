@@ -7,6 +7,7 @@ import { CachingProvider } from './response-cache.js';
 import { withTimeout, TurnTimeoutError } from './recovery.js';
 import { buildSystemPrompt } from './prompts.js';
 import { loadConstraints, reopenDeferredAffects } from '../memory/constraints.js';
+import { isCreateProducedRepo, isEngineAuthoredSchematic } from '../kicad/fab.js';
 import {
   loadConfig,
   CONFIG_DIR,
@@ -228,11 +229,28 @@ async function runWithProviders(opts: RunOptions, providers: Set<Provider>): Pro
 
   const transcript = new Transcript(repoRoot);
   await transcript.init();
+  // Legibility gates finish only where copperhead authored the sheet; a
+  // hand-drawn repo gets findings as information, never as a wedge (C6).
+  // Both conditions matter: the create-origin marker scopes the gate to repos
+  // this tool produced, and the generator stamp scopes it to sheets copperhead
+  // still owns. A human taking the sheet over in KiCad re-saves it under
+  // KiCad's generator, and from then on the gate must not defend a drawing
+  // the engine can no longer regenerate. A create repo whose schematic is not
+  // yet scaffolded keeps the gate: the sheet stage 4 will produce is
+  // copperhead-authored by construction.
+  let gateLegibility = isCreateProducedRepo(config);
+  if (gateLegibility && config.schematic) {
+    try {
+      gateLegibility = isEngineAuthoredSchematic(await readFile(path.join(repoRoot, config.schematic), 'utf8'));
+    } catch {
+      // schematic configured but absent (pre-scaffold): keep the gate
+    }
+  }
   const ctx: RunContext = {
     repoRoot,
     config,
     transcript,
-    ledger: new ObligationsLedger(),
+    ledger: new ObligationsLedger(gateLegibility),
     runId: path.basename(transcript.dir),
     interactive: opts.interactive ?? false,
     confirm: opts.confirm ?? (async () => true),
@@ -242,6 +260,8 @@ async function runWithProviders(opts: RunOptions, providers: Set<Provider>): Pro
     filesTouched: new Set(),
     decisions: [],
     lastErc: null,
+    lastLegibility: null,
+    lastScore: null,
     lastDrc: null,
     repairCycles: 0,
     finishRequest: null,
@@ -379,6 +399,8 @@ async function runWithProviders(opts: RunOptions, providers: Set<Provider>): Pro
       filesTouched: [...ctx.filesTouched],
       ercResult: ctx.lastErc ? (ctx.lastErc.ok ? 'clean' : `${ctx.lastErc.violations.length} violations`) : null,
       drcResult: ctx.lastDrc ? (ctx.lastDrc.ok ? 'clean' : `${ctx.lastDrc.violations.length} violations`) : null,
+      legibilityResult: ctx.lastLegibility ? `${ctx.lastLegibility.error} error, ${ctx.lastLegibility.advisory} advisory` : null,
+      scoreResult: ctx.lastScore !== null ? `${ctx.lastScore}/100` : null,
       decisions: ctx.decisions,
       tokensIn,
       tokensOut,
@@ -729,6 +751,8 @@ async function runWithProviders(opts: RunOptions, providers: Set<Provider>): Pro
         filesTouched: files,
         ercResult: ctx.lastErc ? (ctx.lastErc.ok ? 'clean' : 'FAILING') : 'not run',
         drcResult: ctx.lastDrc ? (ctx.lastDrc.ok ? 'clean' : 'FAILING') : 'not run',
+        legibilityResult: ctx.lastLegibility ? `${ctx.lastLegibility.error} error, ${ctx.lastLegibility.advisory} advisory` : null,
+        scoreResult: ctx.lastScore !== null ? `${ctx.lastScore}/100` : null,
         decisions: ctx.decisions,
         tokensIn,
         tokensOut,
