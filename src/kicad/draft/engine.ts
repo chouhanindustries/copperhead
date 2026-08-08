@@ -485,8 +485,6 @@ export function draftSchematicPlacement(validated: ValidatedIntent, projectName:
   const placed = new Map<string, Placed>();
   const groupRects: { name: string; x1: number; y1: number; x2: number; y2: number }[] = [];
   const groupOf = new Map<string, string>();
-  let groupX = 0; // running x origin (units) for group tiling
-  let prevGroup: string | null = null; // last group that actually placed cells
   const groupExtents = new Map<string, { left: number; right: number }>();
   for (const gname of groupNames) {
     groupExtents.set(
@@ -495,497 +493,534 @@ export function draftSchematicPlacement(validated: ValidatedIntent, projectName:
     );
   }
 
-  for (const gname of groupNames) {
-    // widen the gap to the previous group when facing label text needs it
-    if (prevGroup !== null) {
-      groupX += widenBy(groupExtents.get(prevGroup)!.right, groupExtents.get(gname)!.left, 2 * MARGIN + GROUP_GAP);
-    }
-    const members = instances.filter(
-      (i) => i.part.group === gname && !i.sym.isPower && !decapOwner.has(i.key),
-    );
-    const caps = instances.filter((i) => i.part.group === gname && decapOwner.has(i.key));
-    for (const i of [...members, ...caps]) groupOf.set(i.key, gname);
-    const memberKeySet = new Set(members.map((m) => m.key));
+  /**
+   * Place every group's cells. `bandBudgetW` caps a single group's width, in
+   * grid units: a column that would tile past it starts a new band of columns
+   * below the ones already placed (#219). `Infinity` keeps the classic
+   * single-band ribbon. Placement is deterministic in (intent, budget), so the
+   * paper-selection pass below may re-run it with a tighter budget when no
+   * standard sheet holds the natural ribbon. Returns each group's band count.
+   */
+  const placeAllGroups = (bandBudgetW: number): Map<string, number> => {
+    placed.clear();
+    groupRects.length = 0;
+    groupOf.clear();
+    const bandsOf = new Map<string, number>();
+    let groupX = 0; // running x origin (units) for group tiling
+    let prevGroup: string | null = null; // last group that actually placed cells
 
-    // layer assignment: connectors at depth 0; signal edges push depth forward
-    const depth = new Map<string, number>(members.map((m) => [m.key, isConnector(m.part) ? 0 : 1]));
-    const edges: { from: string; to: string }[] = [];
-    for (const net of signalNets) {
-      const eps = net.pins
-        .map((ep) => {
-          const m = /^([^.]+)\.(.+)$/.exec(ep);
-          return m ? instKeyOf(m[1]!, m[2]!) : '';
-        })
-        .filter((k) => memberKeySet.has(k));
-      const uniq = [...new Set(eps)];
-      for (let i = 0; i < uniq.length; i++) {
-        for (let j = i + 1; j < uniq.length; j++) {
-          const [a, b] = [uniq[i]!, uniq[j]!].sort((x, y) => x.localeCompare(y, undefined, { numeric: true }));
-          edges.push({ from: a!, to: b! });
+    for (const gname of groupNames) {
+      // widen the gap to the previous group when facing label text needs it
+      if (prevGroup !== null) {
+        groupX += widenBy(groupExtents.get(prevGroup)!.right, groupExtents.get(gname)!.left, 2 * MARGIN + GROUP_GAP);
+      }
+      const members = instances.filter(
+        (i) => i.part.group === gname && !i.sym.isPower && !decapOwner.has(i.key),
+      );
+      const caps = instances.filter((i) => i.part.group === gname && decapOwner.has(i.key));
+      for (const i of [...members, ...caps]) groupOf.set(i.key, gname);
+      const memberKeySet = new Set(members.map((m) => m.key));
+
+      // layer assignment: connectors at depth 0; signal edges push depth forward
+      const depth = new Map<string, number>(members.map((m) => [m.key, isConnector(m.part) ? 0 : 1]));
+      const edges: { from: string; to: string }[] = [];
+      for (const net of signalNets) {
+        const eps = net.pins
+          .map((ep) => {
+            const m = /^([^.]+)\.(.+)$/.exec(ep);
+            return m ? instKeyOf(m[1]!, m[2]!) : '';
+          })
+          .filter((k) => memberKeySet.has(k));
+        const uniq = [...new Set(eps)];
+        for (let i = 0; i < uniq.length; i++) {
+          for (let j = i + 1; j < uniq.length; j++) {
+            const [a, b] = [uniq[i]!, uniq[j]!].sort((x, y) => x.localeCompare(y, undefined, { numeric: true }));
+            edges.push({ from: a!, to: b! });
+          }
         }
       }
-    }
-    for (let iter = 0; iter < members.length; iter++) {
-      let changed = false;
-      for (const e of edges) {
-        const want = (depth.get(e.from) ?? 0) + 1;
-        if ((depth.get(e.to) ?? 0) < want && want <= members.length) {
-          depth.set(e.to, want);
-          changed = true;
+      for (let iter = 0; iter < members.length; iter++) {
+        let changed = false;
+        for (const e of edges) {
+          const want = (depth.get(e.from) ?? 0) + 1;
+          if ((depth.get(e.to) ?? 0) < want && want <= members.length) {
+            depth.set(e.to, want);
+            changed = true;
+          }
+        }
+        if (!changed) break;
+      }
+      const depths = [...new Set([...depth.values()])].sort((a, b) => a - b);
+      const columns: string[][] = depths.map((d) => members.filter((m) => depth.get(m.key) === d).map((m) => m.key));
+
+      // barycenter row ordering (two sweeps), refdes as the deterministic tie
+      const rowOf = new Map<string, number>();
+      columns.forEach((col) => col.sort((a, b) => a.localeCompare(b, undefined, { numeric: true })).forEach((r, i) => rowOf.set(r, i)));
+      for (let sweep = 0; sweep < 2; sweep++) {
+        for (let ci = 1; ci < columns.length; ci++) {
+          const col = columns[ci]!;
+          const bary = (ref: string): number => {
+            const neigh = edges
+              .filter((e) => e.from === ref || e.to === ref)
+              .map((e) => (e.from === ref ? e.to : e.from))
+              .filter((o) => rowOf.has(o));
+            if (!neigh.length) return rowOf.get(ref)!;
+            return neigh.reduce((s, o) => s + rowOf.get(o)!, 0) / neigh.length;
+          };
+          col.sort((a, b) => bary(a) - bary(b) || a.localeCompare(b, undefined, { numeric: true })).forEach((r, i) => rowOf.set(r, i));
         }
       }
-      if (!changed) break;
-    }
-    const depths = [...new Set([...depth.values()])].sort((a, b) => a - b);
-    const columns: string[][] = depths.map((d) => members.filter((m) => depth.get(m.key) === d).map((m) => m.key));
 
-    // barycenter row ordering (two sweeps), refdes as the deterministic tie
-    const rowOf = new Map<string, number>();
-    columns.forEach((col) => col.sort((a, b) => a.localeCompare(b, undefined, { numeric: true })).forEach((r, i) => rowOf.set(r, i)));
-    for (let sweep = 0; sweep < 2; sweep++) {
-      for (let ci = 1; ci < columns.length; ci++) {
+      // cells: sized from body plus margins, positions snapped to the grid
+      const cellDims = new Map<string, { w: number; h: number; body: Bounds }>();
+      for (const m of members) {
+        const b = bodyBoundsOf(m.sym);
+        cellDims.set(m.key, {
+          w: ceilU(b.maxX - b.minX) + 2 * MARGIN,
+          h: ceilU(b.maxY - b.minY) + 2 * MARGIN,
+          body: b,
+        });
+      }
+      let colX = groupX;
+      let groupMaxY = 0;
+      let bandTop = 0; // y origin (units) of the current band of columns
+      let bandCount = 1;
+      for (let ci = 0; ci < columns.length; ci++) {
         const col = columns[ci]!;
-        const bary = (ref: string): number => {
-          const neigh = edges
-            .filter((e) => e.from === ref || e.to === ref)
-            .map((e) => (e.from === ref ? e.to : e.from))
-            .filter((o) => rowOf.has(o));
-          if (!neigh.length) return rowOf.get(ref)!;
-          return neigh.reduce((s, o) => s + rowOf.get(o)!, 0) / neigh.length;
-        };
-        col.sort((a, b) => bary(a) - bary(b) || a.localeCompare(b, undefined, { numeric: true })).forEach((r, i) => rowOf.set(r, i));
-      }
-    }
-
-    // cells: sized from body plus margins, positions snapped to the grid
-    const cellDims = new Map<string, { w: number; h: number; body: Bounds }>();
-    for (const m of members) {
-      const b = bodyBoundsOf(m.sym);
-      cellDims.set(m.key, {
-        w: ceilU(b.maxX - b.minX) + 2 * MARGIN,
-        h: ceilU(b.maxY - b.minY) + 2 * MARGIN,
-        body: b,
-      });
-    }
-    let colX = groupX;
-    let groupMaxY = 0;
-    for (let ci = 0; ci < columns.length; ci++) {
-      const col = columns[ci]!;
-      const colW = Math.max(...col.map((r) => cellDims.get(r)!.w));
-      let rowY = 0;
-      for (const ref of col) {
-        const dims = cellDims.get(ref)!;
-        const cx = colX + Math.floor(colW / 2); // shared column axis (units)
-        const cy = rowY + Math.floor(dims.h / 2);
-        const b = dims.body;
-        // origin so the body centers on the cell center, snapped to grid
-        const ox = grid(cx - Math.round((b.minX + b.maxX) / 2 / U));
-        const oy = grid(cy + Math.round((b.minY + b.maxY) / 2 / U));
-        const inst = instByKey.get(ref)!;
-        placed.set(ref, {
-          part: inst.part,
-          refDes: inst.ref,
-          unit: inst.unit,
-          sym: inst.sym,
-          x: ox,
-          y: oy,
-          body: { minX: ox + b.minX, minY: oy - b.maxY, maxX: ox + b.maxX, maxY: oy - b.minY },
-          cellW: dims.w,
-          cellH: dims.h,
-        });
-        rowY += dims.h + ROW_GAP;
-      }
-      groupMaxY = Math.max(groupMaxY, rowY - ROW_GAP);
-      const next = columns[ci + 1];
-      colX += colW + CHANNEL + (next ? widenBy(labelExtents(col).right, labelExtents(next).left, 2 * MARGIN + CHANNEL) : 0);
-    }
-
-    // decoupling rows: caps in a uniform row under their owner (or the group)
-    const capRefs = caps.map((c) => c.key).sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
-    if (capRefs.length) {
-      let capX = groupX;
-      const capY = groupMaxY + MARGIN + 4;
-      for (const ref of capRefs) {
-        const inst = instByKey.get(ref)!;
-        const b = bodyBoundsOf(inst.sym);
-        const ox = grid(capX + MARGIN);
-        const oy = grid(capY + MARGIN);
-        placed.set(ref, {
-          part: inst.part,
-          refDes: inst.ref,
-          unit: inst.unit,
-          sym: inst.sym,
-          x: ox,
-          y: oy,
-          body: { minX: ox + b.minX, minY: oy - b.maxY, maxX: ox + b.maxX, maxY: oy - b.minY },
-          cellW: ceilU(b.maxX - b.minX) + 2 * MARGIN,
-          cellH: ceilU(b.maxY - b.minY) + 2 * MARGIN,
-        });
-        capX += ceilU(b.maxX - b.minX) + 2 * MARGIN;
-      }
-      groupMaxY = capY + 2 * MARGIN + 6;
-    }
-
-    // ---------- idiom micro-templates and the alignment pass (7.5/7.5a) ----------
-    // Column placement is correct but reads machine-made for the small
-    // structures a human drafter draws by reflex: a pull-up sits directly on
-    // the pin it pulls with its rail above, a series RC hangs as one straight
-    // vertical run, crystal load caps mirror about their crystal. Two passes
-    // rearrange exactly those shapes after column placement, both no-ops
-    // unless the textbook topology is present, and both collision-checked so
-    // a failed fit falls back to the column position rather than overlapping.
-    const inGroup = new Set(members.map((m) => m.key));
-    const idiomPlaced = new Set<string>();
-    const CHAIN_GAP = 4 * U;
-    /** The two pins of a vertically-pinned two-lead instance, or null. */
-    const vertPins = (key: string): { top: DraftPin; bot: DraftPin } | null => {
-      const pins = placed.get(key)?.sym.pins ?? [];
-      if (pins.length !== 2) return null;
-      const top = pins.find((p) => outward(p).dy === -1);
-      const bot = pins.find((p) => outward(p).dy === 1);
-      return top && bot ? { top, bot } : null;
-    };
-    const isCrystal = (key: string): boolean => /crystal|reson/i.test(placed.get(key)?.part.libId ?? '');
-    /** An instance the chain pass may move: two vertical leads, in this group,
-     * not already spoken for by the decap row or the crystal template. */
-    const chainable = (key: string): boolean =>
-      inGroup.has(key) && !decapOwner.has(key) && !idiomPlaced.has(key) && !isCrystal(key) && vertPins(key) !== null;
-    /** Endpoint REF.PIN for an instance's pin (the base refdes, never the key). */
-    const epOf = (key: string, pin: string): string => `${placed.get(key)?.refDes ?? key}.${pin}`;
-    const parseEp = (ep: string): { ref: string; pin: string; key: string } | null => {
-      const m = /^([^.]+)\.(.+)$/.exec(ep);
-      return m ? { ref: m[1]!, pin: m[2]!, key: instKeyOf(m[1]!, m[2]!) } : null;
-    };
-    const classOf = (name: string): NetClass => netClasses.get(name)?.cls ?? 'signal';
-    const padOverlap = (a: Bounds, b: Bounds, pad: number): boolean =>
-      a.minX < b.maxX + pad && a.maxX > b.minX - pad && a.minY < b.maxY + pad && a.maxY > b.minY - pad;
-    /** Candidate placement putting `key`'s TOP pin connection point at (x, y). */
-    const candidateAt = (key: string, x: number, y: number): Placed => {
-      const prev = placed.get(key)!;
-      const v = vertPins(key)!;
-      const b = bodyBoundsOf(prev.sym);
-      const ox = x - v.top.x;
-      const oy = y + v.top.y;
-      return {
-        part: prev.part,
-        refDes: prev.refDes,
-        unit: prev.unit,
-        sym: prev.sym,
-        x: ox,
-        y: oy,
-        body: { minX: ox + b.minX, minY: oy - b.maxY, maxX: ox + b.maxX, maxY: oy - b.minY },
-        cellW: prev.cellW,
-        cellH: prev.cellH,
-      };
-    };
-    /** Apply candidate moves unless any moved body lands within a grid unit of
-     * an unmoved one; all-or-nothing so a failed fit changes nothing. */
-    const applyMoves = (moves: Map<string, Placed>): boolean => {
-      for (const cand of moves.values()) {
-        for (const [oref, op] of placed) {
-          if (moves.has(oref)) continue;
-          if (padOverlap(cand.body, op.body, U)) return false;
+        const colW = Math.max(...col.map((r) => cellDims.get(r)!.w));
+        // Banding (#219): a column that would tile past the width budget starts
+        // a new band of columns below everything placed so far, the way the
+        // shelf-wrap below re-rows whole groups. Never before the first column
+        // of a band, so a single over-wide column still places (and the caller
+        // rejects this budget instead).
+        if (colX > groupX && colX + colW - groupX > bandBudgetW) {
+          bandTop = groupMaxY + GROUP_GAP;
+          colX = groupX;
+          bandCount++;
         }
-      }
-      for (const [ref, cand] of moves) placed.set(ref, cand);
-      return true;
-    };
-    /** Every endpoint of every net a set of parts touches (the chain's own
-     * connection points, allowed to sit on its axis by definition). */
-    const ownEndpoints = (keys: Iterable<string>): Set<string> => {
-      const eps = new Set<string>();
-      for (const key of keys) {
-        for (const pin of placed.get(key)?.sym.pins ?? []) {
-          const net = netByEndpoint.get(epOf(key, pin.number));
-          for (const ep of net?.pins ?? []) eps.add(ep);
-        }
-      }
-      return eps;
-    };
-    /**
-     * A chain's wires run vertically along one x. No FOREIGN connected pin or
-     * stub end may sit on that line within the chain's y-range: KiCad joins
-     * wires at coincident endpoints, so a chain routed down a column of
-     * neighbouring stub ends silently merges nets. The first npn-switch run
-     * of this pass did exactly that — the reset pull-up's run down U1's
-     * left-pin stub column attached 5V to DRIVE. Body boxes cannot catch
-     * this; the check must be against connection points.
-     */
-    const axisClear = (
-      axisX: number,
-      yMin: number,
-      yMax: number,
-      ownEps: Set<string>,
-      conn: { y: number; net: string }[] = [],
-      movedRefs: Set<string> = new Set<string>(),
-    ): boolean => {
-      for (const [oref, opl] of placed) {
-        for (const pin of opl.sym.pins) {
-          const ep = `${opl.refDes}.${pin.number}`;
-          const net = netByEndpoint.get(ep);
-          if (!net) continue;
-          const o = outward(pin);
-          const len = classOf(net.name) !== 'signal' && o.dx !== 0 ? STUB + 2 : STUB;
-          const p = pinAt(opl, pin);
-          const end = { x: p.x + o.dx * len * U, y: p.y + o.dy * len * U };
-          if (!ownEps.has(ep)) {
-            for (const q of [p, end]) {
-              if (sameCoord(q.x, axisX) && q.y > yMin - U && q.y < yMax + U) return false;
-            }
-          }
-          // A horizontal stub SEGMENT crossing the axis exactly at a chain
-          // CONNECTION row of a DIFFERENT net passes through that connection
-          // point — a mid-segment crossing elsewhere is harmless, but a lead
-          // parked on the crossing row is a KiCad join. The pull-up idiom
-          // parked R1's bottom lead on U1's power-pin row and the VCC stub
-          // ran straight through the pulled SIG node (I22's chain-pass face,
-          // #204). Net-aware, because ownEps is too coarse here: U1's VCC pin
-          // shares a net with the chain's rail end, yet its stub through a
-          // SIG row still merges. Moved parts are skipped — `placed` holds
-          // their stale pre-move positions.
-          if (o.dx !== 0 && !movedRefs.has(oref)) {
-            const row = conn.find((c) => sameCoord(c.y, p.y));
-            if (row && row.net !== net.name) {
-              const lo = Math.min(p.x, end.x) - 0.001;
-              const hi = Math.max(p.x, end.x) + 0.001;
-              if (axisX >= lo && axisX <= hi) return false;
-            }
-          }
-        }
-      }
-      return true;
-    };
-    /** The room a rail/ground end grows past its pin: stub, bar, value text. */
-    const POWER_CLEAR = 8 * U;
-    const powerEndBox = (axisX: number, pinY: number, dir: -1 | 1): Bounds => ({
-      minX: axisX - 3 * U,
-      maxX: axisX + 3 * U,
-      minY: dir === -1 ? pinY - POWER_CLEAR : pinY,
-      maxY: dir === -1 ? pinY : pinY + POWER_CLEAR,
-    });
-    /** Clearance-check a chain (or flank) move set against its axis and its
-     * power-end growth, then apply; marks the parts idiom-placed only when
-     * everything held. */
-    const finalizeMoves = (
-      segments: { axisX: number; ys: number[]; conn?: { y: number; net: string }[] }[],
-      moves: Map<string, Placed>,
-      clearBoxes: Bounds[] = [],
-    ): boolean => {
-      const own = ownEndpoints(moves.keys());
-      const movedRefs = new Set(moves.keys());
-      for (const seg of segments) {
-        // the pad covers the power stub and symbol a rail/ground end grows
-        if (!axisClear(seg.axisX, Math.min(...seg.ys) - 4 * U, Math.max(...seg.ys) + 4 * U, own, seg.conn ?? [], movedRefs)) return false;
-      }
-      // a power symbol is not a body, so the body check cannot see it: the
-      // divider repro grew R2's GND bar and value text straight into the body
-      // of the part below until these boxes were checked explicitly
-      for (const box of clearBoxes) {
-        for (const [oref, op] of placed) {
-          if (moves.has(oref)) continue;
-          if (padOverlap(box, op.body, 0)) return false;
-        }
-      }
-      if (!applyMoves(moves)) return false;
-      for (const ref of moves.keys()) idiomPlaced.add(ref);
-      return true;
-    };
-
-    // Crystal flanking: each horizontal crystal pin whose net also reaches a
-    // two-lead cap-to-ground drops that cap below the pin's stub end. The
-    // crystal's pins are symmetric about its body, so the two caps come out
-    // mirror-placed at equal offsets and a common height by construction.
-    for (const m of members) {
-      if (!isCrystal(m.key)) continue;
-      const xpl = placed.get(m.key);
-      if (!xpl || xpl.sym.pins.length !== 2) continue;
-      const moves = new Map<string, Placed>();
-      const segments: { axisX: number; ys: number[] }[] = [];
-      const clearBoxes: Bounds[] = [];
-      for (const pin of xpl.sym.pins) {
-        const o = outward(pin);
-        if (o.dx === 0) continue;
-        const net = netByEndpoint.get(`${m.ref}.${pin.number}`);
-        if (!net || classOf(net.name) !== 'signal') continue;
-        const cap = net.pins
-          .map(parseEp)
-          .find((e): e is { ref: string; pin: string; key: string } => {
-            if (!e || e.key === m.key || !chainable(e.key) || moves.has(e.key)) return false;
-            const v = vertPins(e.key)!;
-            if (e.pin !== v.top.number) return false; // crystal node must enter the cap's top lead
-            const other = netByEndpoint.get(`${e.ref}.${v.bot.number}`);
-            return other !== undefined && classOf(other.name) !== 'signal';
+        let rowY = bandTop;
+        for (const ref of col) {
+          const dims = cellDims.get(ref)!;
+          const cx = colX + Math.floor(colW / 2); // shared column axis (units)
+          const cy = rowY + Math.floor(dims.h / 2);
+          const b = dims.body;
+          // origin so the body centers on the cell center, snapped to grid
+          const ox = grid(cx - Math.round((b.minX + b.maxX) / 2 / U));
+          const oy = grid(cy + Math.round((b.minY + b.maxY) / 2 / U));
+          const inst = instByKey.get(ref)!;
+          placed.set(ref, {
+            part: inst.part,
+            refDes: inst.ref,
+            unit: inst.unit,
+            sym: inst.sym,
+            x: ox,
+            y: oy,
+            body: { minX: ox + b.minX, minY: oy - b.maxY, maxX: ox + b.maxX, maxY: oy - b.minY },
+            cellW: dims.w,
+            cellH: dims.h,
           });
-        if (!cap) continue;
-        const at = pinAt(xpl, pin);
-        const axisX = at.x + o.dx * STUB * U;
-        const cand = candidateAt(cap.key, axisX, at.y + CHAIN_GAP);
-        const v = vertPins(cap.key)!;
-        moves.set(cap.key, cand);
-        segments.push({ axisX, ys: [at.y, cand.y - v.bot.y] });
-        clearBoxes.push(powerEndBox(axisX, cand.y - v.bot.y, 1)); // the ground symbol below the cap
-      }
-      // all-or-nothing per crystal: one dropped cap and one column cap would
-      // read worse than the plain columns the pass is improving on
-      if (moves.size) finalizeMoves(segments, moves, clearBoxes);
-    }
-
-    // Drop chains: a maximal run of two-lead vertical parts linked pin-to-pin
-    // by two-endpoint signal nets, ended on each side by an anchor pin (any
-    // other part) or a power-class net. The run is restacked as one straight
-    // vertical line: on the anchor's stub-end axis when there is an anchor
-    // (the wire from the anchor continues dead straight into the chain), on
-    // its own column axis when both ends are rails (a divider). Uniform gaps,
-    // top-to-bottom in connectivity order — AC-16.31's zero-bend contract.
-    type ChainEnd =
-      | { kind: 'power' | 'open' | 'invalid' }
-      | { kind: 'anchor'; ref: string; pin: DraftPin };
-    const walk = (start: string, dir: 'up' | 'down', chain: string[]): ChainEnd => {
-      let current = start;
-      for (;;) {
-        const v = vertPins(current)!;
-        const pinN = dir === 'up' ? v.top.number : v.bot.number;
-        const net = netByEndpoint.get(epOf(current, pinN));
-        if (!net) return { kind: 'open' }; // declared no-connect or unused
-        if (classOf(net.name) !== 'signal') return { kind: 'power' };
-        if (net.pins.length !== 2) return { kind: 'invalid' }; // a tapped node is not a series chain
-        const otherEp = net.pins.map(parseEp).find((e) => e !== null && e.key !== current);
-        if (!otherEp) return { kind: 'invalid' };
-        const opl = placed.get(otherEp.key);
-        if (!opl || groupOf.get(otherEp.key) !== gname) return { kind: 'invalid' };
-        if (chainable(otherEp.key) && !chain.includes(otherEp.key)) {
-          const ov = vertPins(otherEp.key)!;
-          // the link must enter through the lead facing the chain, or the
-          // drawn run would have to cross the part's own body
-          if (otherEp.pin !== (dir === 'up' ? ov.bot.number : ov.top.number)) return { kind: 'invalid' };
-          if (dir === 'up') chain.unshift(otherEp.key);
-          else chain.push(otherEp.key);
-          current = otherEp.key;
-          continue;
+          rowY += dims.h + ROW_GAP;
         }
-        const pin = opl.sym.pins.find((p) => p.number === otherEp.pin);
-        if (!pin || chain.includes(otherEp.key)) return { kind: 'invalid' };
-        return { kind: 'anchor', ref: otherEp.key, pin };
+        groupMaxY = Math.max(groupMaxY, rowY - ROW_GAP);
+        const next = columns[ci + 1];
+        colX += colW + CHANNEL + (next ? widenBy(labelExtents(col).right, labelExtents(next).left, 2 * MARGIN + CHANNEL) : 0);
       }
-    };
-    const chained = new Set<string>();
-    for (const m of members) {
-      if (!chainable(m.key) || chained.has(m.key)) continue;
-      const chain = [m.key];
-      const topEnd = walk(m.key, 'up', chain);
-      const bottomEnd = walk(chain[chain.length - 1]!, 'down', chain);
-      for (const ref of chain) chained.add(ref);
-      if (topEnd.kind === 'invalid' || bottomEnd.kind === 'invalid') continue;
-      if (chain.length > 4) continue; // beyond four parts this is a network, not an idiom
-      const anchors = [topEnd, bottomEnd].filter((e): e is Extract<ChainEnd, { kind: 'anchor' }> => e.kind === 'anchor');
-      if (anchors.length === 0 && chain.length < 2) continue; // a lone floating part has nothing to align to
-      if (topEnd.kind === 'open' && bottomEnd.kind === 'open') continue;
 
-      const stubEndOf = (a: Extract<ChainEnd, { kind: 'anchor' }>): { x: number; y: number; o: { dx: number; dy: number } } => {
-        const at = pinAt(placed.get(a.ref)!, a.pin);
-        const o = outward(a.pin);
-        return { x: at.x + o.dx * STUB * U, y: at.y + o.dy * STUB * U, o };
-      };
-      let axisX: number;
-      let cursor: number; // y of the next TOP pin to place
-      let order = chain;
-      if (topEnd.kind === 'anchor') {
-        const s = stubEndOf(topEnd);
-        if (s.o.dy === -1) continue; // an up-facing pin cannot feed a downward run
-        if (bottomEnd.kind === 'anchor') {
-          const b = stubEndOf(bottomEnd);
-          // both ends must sit on one axis with the second anchor below and
-          // able to receive from above, else leave the columns alone
-          if (!sameCoord(s.x, b.x) || b.y <= s.y || b.o.dy === 1) continue;
-        }
-        axisX = s.x;
-        cursor = s.y + CHAIN_GAP;
-      } else if (bottomEnd.kind === 'anchor') {
-        // rail above, anchor below (a pull-up): stack upward from the anchor
-        const s = stubEndOf(bottomEnd);
-        if (s.o.dy === 1) continue; // a down-facing pin cannot feed an upward run
-        axisX = s.x;
-        order = [...chain].reverse();
-        // Bounded lift: when a connection row would sit on a foreign stub's
-        // crossing (axisClear's segment check), raise the whole stack a grid
-        // row at a time rather than shipping the contact or losing the idiom.
-        const netOf = (key: string, pinN: string): string => netByEndpoint.get(epOf(key, pinN))?.name ?? '';
-        for (let lift = 0; lift < 3; lift++) {
-          let up = s.y - CHAIN_GAP - lift * 2 * U;
-          const moves = new Map<string, Placed>();
-          const conn: { y: number; net: string }[] = [{ y: s.y, net: netOf(bottomEnd.ref, bottomEnd.pin.number) }];
-          for (const ref of order) {
-            const v = vertPins(ref)!;
-            const span = v.top.y - v.bot.y; // symbol-space lead separation
-            const cand = candidateAt(ref, axisX, up - span);
-            moves.set(ref, cand);
-            conn.push({ y: up, net: netOf(ref, v.bot.number) }, { y: up - span, net: netOf(ref, v.top.number) });
-            up = up - span - CHAIN_GAP;
+      // decoupling rows: caps in a uniform row under their owner (or the group)
+      const capRefs = caps.map((c) => c.key).sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+      if (capRefs.length) {
+        let capX = groupX;
+        let capY = groupMaxY + MARGIN + 4;
+        for (const ref of capRefs) {
+          const inst = instByKey.get(ref)!;
+          const b = bodyBoundsOf(inst.sym);
+          // Banding (#219): a decoupling bank wider than the budget wraps onto
+          // another uniform row rather than running past the frame.
+          if (capX > groupX && capX + ceilU(b.maxX - b.minX) + 2 * MARGIN - groupX > bandBudgetW) {
+            capX = groupX;
+            capY += 2 * MARGIN + 6;
           }
-          const topY = up + CHAIN_GAP;
-          const topRef = order[order.length - 1]!;
-          const done = finalizeMoves(
-            [{ axisX, ys: [s.y, topY], conn: [...conn, { y: topY, net: netOf(topRef, vertPins(topRef)!.top.number) }] }],
-            moves,
-            topEnd.kind === 'power' ? [powerEndBox(axisX, topY, -1)] : [],
-          );
-          if (done) break;
+          const ox = grid(capX + MARGIN);
+          const oy = grid(capY + MARGIN);
+          placed.set(ref, {
+            part: inst.part,
+            refDes: inst.ref,
+            unit: inst.unit,
+            sym: inst.sym,
+            x: ox,
+            y: oy,
+            body: { minX: ox + b.minX, minY: oy - b.maxY, maxX: ox + b.maxX, maxY: oy - b.minY },
+            cellW: ceilU(b.maxX - b.minX) + 2 * MARGIN,
+            cellH: ceilU(b.maxY - b.minY) + 2 * MARGIN,
+          });
+          capX += ceilU(b.maxX - b.minX) + 2 * MARGIN;
         }
-        continue;
-      } else {
-        // both ends are rails: a divider — straighten in place on its own axis
-        const first = placed.get(chain[0]!)!;
-        const v = vertPins(chain[0]!)!;
-        const topAt = pinAt(first, v.top);
-        axisX = topAt.x;
-        cursor = topAt.y;
+        groupMaxY = capY + 2 * MARGIN + 6;
       }
-      const cursor0 = cursor;
-      const netOf2 = (key: string, pinN: string): string => netByEndpoint.get(epOf(key, pinN))?.name ?? '';
-      for (let lift = 0; lift < 3; lift++) {
-        cursor = cursor0 + lift * 2 * U;
-        const moves = new Map<string, Placed>();
-        const startY = cursor;
-        const conn: { y: number; net: string }[] = [];
-        let fits = true;
-        for (const ref of order) {
-          const cand = candidateAt(ref, axisX, cursor);
-          moves.set(ref, cand);
-          const v = vertPins(ref)!;
-          conn.push({ y: cursor, net: netOf2(ref, v.top.number) }, { y: cursor + (v.top.y - v.bot.y), net: netOf2(ref, v.bot.number) });
-          cursor = cursor + (v.top.y - v.bot.y) + CHAIN_GAP;
-        }
-        let axisEndY = cursor - CHAIN_GAP;
-        if (bottomEnd.kind === 'anchor') {
-          // cursor now sits one gap below the last lead; it may not pass the
-          // lower anchor's stub end or the closing wire would run backwards
-          const b = stubEndOf(bottomEnd);
-          if (cursor > b.y + 0.001) fits = false;
-          axisEndY = b.y;
-        }
-        const clearBoxes: Bounds[] = [];
-        if (topEnd.kind === 'power') clearBoxes.push(powerEndBox(axisX, startY, -1));
-        if (bottomEnd.kind === 'power') clearBoxes.push(powerEndBox(axisX, cursor - CHAIN_GAP, 1));
-        const endNet = conn.length ? conn[0]!.net : '';
-        const startConn = { y: cursor0 - CHAIN_GAP, net: topEnd.kind === 'anchor' ? netOf2(topEnd.ref, topEnd.pin.number) : endNet };
-        const lastConn = { y: axisEndY, net: bottomEnd.kind === 'anchor' ? netOf2(bottomEnd.ref, bottomEnd.pin.number) : (conn.length ? conn[conn.length - 1]!.net : '') };
-        if (fits && finalizeMoves([{ axisX, ys: [cursor0 - CHAIN_GAP, axisEndY], conn: [startConn, ...conn, lastConn] }], moves, clearBoxes)) break;
-        if (!fits) break; // lifting only shrinks the room below; no retry can help
-      }
-    }
 
-    const memberRefs = [...members.map((m) => m.key), ...capRefs];
-    const cells = memberRefs.map((r) => placed.get(r)!);
-    if (cells.length) {
-      const minX = Math.min(...cells.map((c) => c.body.minX)) - MARGIN * U;
-      const maxX = Math.max(...cells.map((c) => c.body.maxX)) + MARGIN * U;
-      const minY = Math.min(...cells.map((c) => c.body.minY)) - (MARGIN + 4) * U;
-      const maxY = Math.max(...cells.map((c) => c.body.maxY)) + (MARGIN + 2) * U;
-      groupRects.push({ name: gname, x1: minX, y1: minY, x2: maxX, y2: maxY });
-      groupX = Math.round(maxX / U) + GROUP_GAP;
-      prevGroup = gname;
+      // ---------- idiom micro-templates and the alignment pass (7.5/7.5a) ----------
+      // Column placement is correct but reads machine-made for the small
+      // structures a human drafter draws by reflex: a pull-up sits directly on
+      // the pin it pulls with its rail above, a series RC hangs as one straight
+      // vertical run, crystal load caps mirror about their crystal. Two passes
+      // rearrange exactly those shapes after column placement, both no-ops
+      // unless the textbook topology is present, and both collision-checked so
+      // a failed fit falls back to the column position rather than overlapping.
+      const inGroup = new Set(members.map((m) => m.key));
+      const idiomPlaced = new Set<string>();
+      const CHAIN_GAP = 4 * U;
+      /** The two pins of a vertically-pinned two-lead instance, or null. */
+      const vertPins = (key: string): { top: DraftPin; bot: DraftPin } | null => {
+        const pins = placed.get(key)?.sym.pins ?? [];
+        if (pins.length !== 2) return null;
+        const top = pins.find((p) => outward(p).dy === -1);
+        const bot = pins.find((p) => outward(p).dy === 1);
+        return top && bot ? { top, bot } : null;
+      };
+      const isCrystal = (key: string): boolean => /crystal|reson/i.test(placed.get(key)?.part.libId ?? '');
+      /** An instance the chain pass may move: two vertical leads, in this group,
+       * not already spoken for by the decap row or the crystal template. */
+      const chainable = (key: string): boolean =>
+        inGroup.has(key) && !decapOwner.has(key) && !idiomPlaced.has(key) && !isCrystal(key) && vertPins(key) !== null;
+      /** Endpoint REF.PIN for an instance's pin (the base refdes, never the key). */
+      const epOf = (key: string, pin: string): string => `${placed.get(key)?.refDes ?? key}.${pin}`;
+      const parseEp = (ep: string): { ref: string; pin: string; key: string } | null => {
+        const m = /^([^.]+)\.(.+)$/.exec(ep);
+        return m ? { ref: m[1]!, pin: m[2]!, key: instKeyOf(m[1]!, m[2]!) } : null;
+      };
+      const classOf = (name: string): NetClass => netClasses.get(name)?.cls ?? 'signal';
+      const padOverlap = (a: Bounds, b: Bounds, pad: number): boolean =>
+        a.minX < b.maxX + pad && a.maxX > b.minX - pad && a.minY < b.maxY + pad && a.maxY > b.minY - pad;
+      /** Candidate placement putting `key`'s TOP pin connection point at (x, y). */
+      const candidateAt = (key: string, x: number, y: number): Placed => {
+        const prev = placed.get(key)!;
+        const v = vertPins(key)!;
+        const b = bodyBoundsOf(prev.sym);
+        const ox = x - v.top.x;
+        const oy = y + v.top.y;
+        return {
+          part: prev.part,
+          refDes: prev.refDes,
+          unit: prev.unit,
+          sym: prev.sym,
+          x: ox,
+          y: oy,
+          body: { minX: ox + b.minX, minY: oy - b.maxY, maxX: ox + b.maxX, maxY: oy - b.minY },
+          cellW: prev.cellW,
+          cellH: prev.cellH,
+        };
+      };
+      /** Apply candidate moves unless any moved body lands within a grid unit of
+       * an unmoved one; all-or-nothing so a failed fit changes nothing. */
+      const applyMoves = (moves: Map<string, Placed>): boolean => {
+        for (const cand of moves.values()) {
+          for (const [oref, op] of placed) {
+            if (moves.has(oref)) continue;
+            if (padOverlap(cand.body, op.body, U)) return false;
+          }
+        }
+        for (const [ref, cand] of moves) placed.set(ref, cand);
+        return true;
+      };
+      /** Every endpoint of every net a set of parts touches (the chain's own
+       * connection points, allowed to sit on its axis by definition). */
+      const ownEndpoints = (keys: Iterable<string>): Set<string> => {
+        const eps = new Set<string>();
+        for (const key of keys) {
+          for (const pin of placed.get(key)?.sym.pins ?? []) {
+            const net = netByEndpoint.get(epOf(key, pin.number));
+            for (const ep of net?.pins ?? []) eps.add(ep);
+          }
+        }
+        return eps;
+      };
+      /**
+       * A chain's wires run vertically along one x. No FOREIGN connected pin or
+       * stub end may sit on that line within the chain's y-range: KiCad joins
+       * wires at coincident endpoints, so a chain routed down a column of
+       * neighbouring stub ends silently merges nets. The first npn-switch run
+       * of this pass did exactly that — the reset pull-up's run down U1's
+       * left-pin stub column attached 5V to DRIVE. Body boxes cannot catch
+       * this; the check must be against connection points.
+       */
+      const axisClear = (
+        axisX: number,
+        yMin: number,
+        yMax: number,
+        ownEps: Set<string>,
+        conn: { y: number; net: string }[] = [],
+        movedRefs: Set<string> = new Set<string>(),
+      ): boolean => {
+        for (const [oref, opl] of placed) {
+          for (const pin of opl.sym.pins) {
+            const ep = `${opl.refDes}.${pin.number}`;
+            const net = netByEndpoint.get(ep);
+            if (!net) continue;
+            const o = outward(pin);
+            const len = classOf(net.name) !== 'signal' && o.dx !== 0 ? STUB + 2 : STUB;
+            const p = pinAt(opl, pin);
+            const end = { x: p.x + o.dx * len * U, y: p.y + o.dy * len * U };
+            if (!ownEps.has(ep)) {
+              for (const q of [p, end]) {
+                if (sameCoord(q.x, axisX) && q.y > yMin - U && q.y < yMax + U) return false;
+              }
+            }
+            // A horizontal stub SEGMENT crossing the axis exactly at a chain
+            // CONNECTION row of a DIFFERENT net passes through that connection
+            // point — a mid-segment crossing elsewhere is harmless, but a lead
+            // parked on the crossing row is a KiCad join. The pull-up idiom
+            // parked R1's bottom lead on U1's power-pin row and the VCC stub
+            // ran straight through the pulled SIG node (I22's chain-pass face,
+            // #204). Net-aware, because ownEps is too coarse here: U1's VCC pin
+            // shares a net with the chain's rail end, yet its stub through a
+            // SIG row still merges. Moved parts are skipped — `placed` holds
+            // their stale pre-move positions.
+            if (o.dx !== 0 && !movedRefs.has(oref)) {
+              const row = conn.find((c) => sameCoord(c.y, p.y));
+              if (row && row.net !== net.name) {
+                const lo = Math.min(p.x, end.x) - 0.001;
+                const hi = Math.max(p.x, end.x) + 0.001;
+                if (axisX >= lo && axisX <= hi) return false;
+              }
+            }
+          }
+        }
+        return true;
+      };
+      /** The room a rail/ground end grows past its pin: stub, bar, value text. */
+      const POWER_CLEAR = 8 * U;
+      const powerEndBox = (axisX: number, pinY: number, dir: -1 | 1): Bounds => ({
+        minX: axisX - 3 * U,
+        maxX: axisX + 3 * U,
+        minY: dir === -1 ? pinY - POWER_CLEAR : pinY,
+        maxY: dir === -1 ? pinY : pinY + POWER_CLEAR,
+      });
+      /** Clearance-check a chain (or flank) move set against its axis and its
+       * power-end growth, then apply; marks the parts idiom-placed only when
+       * everything held. */
+      const finalizeMoves = (
+        segments: { axisX: number; ys: number[]; conn?: { y: number; net: string }[] }[],
+        moves: Map<string, Placed>,
+        clearBoxes: Bounds[] = [],
+      ): boolean => {
+        const own = ownEndpoints(moves.keys());
+        const movedRefs = new Set(moves.keys());
+        for (const seg of segments) {
+          // the pad covers the power stub and symbol a rail/ground end grows
+          if (!axisClear(seg.axisX, Math.min(...seg.ys) - 4 * U, Math.max(...seg.ys) + 4 * U, own, seg.conn ?? [], movedRefs)) return false;
+        }
+        // a power symbol is not a body, so the body check cannot see it: the
+        // divider repro grew R2's GND bar and value text straight into the body
+        // of the part below until these boxes were checked explicitly
+        for (const box of clearBoxes) {
+          for (const [oref, op] of placed) {
+            if (moves.has(oref)) continue;
+            if (padOverlap(box, op.body, 0)) return false;
+          }
+        }
+        if (!applyMoves(moves)) return false;
+        for (const ref of moves.keys()) idiomPlaced.add(ref);
+        return true;
+      };
+
+      // Crystal flanking: each horizontal crystal pin whose net also reaches a
+      // two-lead cap-to-ground drops that cap below the pin's stub end. The
+      // crystal's pins are symmetric about its body, so the two caps come out
+      // mirror-placed at equal offsets and a common height by construction.
+      for (const m of members) {
+        if (!isCrystal(m.key)) continue;
+        const xpl = placed.get(m.key);
+        if (!xpl || xpl.sym.pins.length !== 2) continue;
+        const moves = new Map<string, Placed>();
+        const segments: { axisX: number; ys: number[] }[] = [];
+        const clearBoxes: Bounds[] = [];
+        for (const pin of xpl.sym.pins) {
+          const o = outward(pin);
+          if (o.dx === 0) continue;
+          const net = netByEndpoint.get(`${m.ref}.${pin.number}`);
+          if (!net || classOf(net.name) !== 'signal') continue;
+          const cap = net.pins
+            .map(parseEp)
+            .find((e): e is { ref: string; pin: string; key: string } => {
+              if (!e || e.key === m.key || !chainable(e.key) || moves.has(e.key)) return false;
+              const v = vertPins(e.key)!;
+              if (e.pin !== v.top.number) return false; // crystal node must enter the cap's top lead
+              const other = netByEndpoint.get(`${e.ref}.${v.bot.number}`);
+              return other !== undefined && classOf(other.name) !== 'signal';
+            });
+          if (!cap) continue;
+          const at = pinAt(xpl, pin);
+          const axisX = at.x + o.dx * STUB * U;
+          const cand = candidateAt(cap.key, axisX, at.y + CHAIN_GAP);
+          const v = vertPins(cap.key)!;
+          moves.set(cap.key, cand);
+          segments.push({ axisX, ys: [at.y, cand.y - v.bot.y] });
+          clearBoxes.push(powerEndBox(axisX, cand.y - v.bot.y, 1)); // the ground symbol below the cap
+        }
+        // all-or-nothing per crystal: one dropped cap and one column cap would
+        // read worse than the plain columns the pass is improving on
+        if (moves.size) finalizeMoves(segments, moves, clearBoxes);
+      }
+
+      // Drop chains: a maximal run of two-lead vertical parts linked pin-to-pin
+      // by two-endpoint signal nets, ended on each side by an anchor pin (any
+      // other part) or a power-class net. The run is restacked as one straight
+      // vertical line: on the anchor's stub-end axis when there is an anchor
+      // (the wire from the anchor continues dead straight into the chain), on
+      // its own column axis when both ends are rails (a divider). Uniform gaps,
+      // top-to-bottom in connectivity order — AC-16.31's zero-bend contract.
+      type ChainEnd =
+        | { kind: 'power' | 'open' | 'invalid' }
+        | { kind: 'anchor'; ref: string; pin: DraftPin };
+      const walk = (start: string, dir: 'up' | 'down', chain: string[]): ChainEnd => {
+        let current = start;
+        for (;;) {
+          const v = vertPins(current)!;
+          const pinN = dir === 'up' ? v.top.number : v.bot.number;
+          const net = netByEndpoint.get(epOf(current, pinN));
+          if (!net) return { kind: 'open' }; // declared no-connect or unused
+          if (classOf(net.name) !== 'signal') return { kind: 'power' };
+          if (net.pins.length !== 2) return { kind: 'invalid' }; // a tapped node is not a series chain
+          const otherEp = net.pins.map(parseEp).find((e) => e !== null && e.key !== current);
+          if (!otherEp) return { kind: 'invalid' };
+          const opl = placed.get(otherEp.key);
+          if (!opl || groupOf.get(otherEp.key) !== gname) return { kind: 'invalid' };
+          if (chainable(otherEp.key) && !chain.includes(otherEp.key)) {
+            const ov = vertPins(otherEp.key)!;
+            // the link must enter through the lead facing the chain, or the
+            // drawn run would have to cross the part's own body
+            if (otherEp.pin !== (dir === 'up' ? ov.bot.number : ov.top.number)) return { kind: 'invalid' };
+            if (dir === 'up') chain.unshift(otherEp.key);
+            else chain.push(otherEp.key);
+            current = otherEp.key;
+            continue;
+          }
+          const pin = opl.sym.pins.find((p) => p.number === otherEp.pin);
+          if (!pin || chain.includes(otherEp.key)) return { kind: 'invalid' };
+          return { kind: 'anchor', ref: otherEp.key, pin };
+        }
+      };
+      const chained = new Set<string>();
+      for (const m of members) {
+        if (!chainable(m.key) || chained.has(m.key)) continue;
+        const chain = [m.key];
+        const topEnd = walk(m.key, 'up', chain);
+        const bottomEnd = walk(chain[chain.length - 1]!, 'down', chain);
+        for (const ref of chain) chained.add(ref);
+        if (topEnd.kind === 'invalid' || bottomEnd.kind === 'invalid') continue;
+        if (chain.length > 4) continue; // beyond four parts this is a network, not an idiom
+        const anchors = [topEnd, bottomEnd].filter((e): e is Extract<ChainEnd, { kind: 'anchor' }> => e.kind === 'anchor');
+        if (anchors.length === 0 && chain.length < 2) continue; // a lone floating part has nothing to align to
+        if (topEnd.kind === 'open' && bottomEnd.kind === 'open') continue;
+
+        const stubEndOf = (a: Extract<ChainEnd, { kind: 'anchor' }>): { x: number; y: number; o: { dx: number; dy: number } } => {
+          const at = pinAt(placed.get(a.ref)!, a.pin);
+          const o = outward(a.pin);
+          return { x: at.x + o.dx * STUB * U, y: at.y + o.dy * STUB * U, o };
+        };
+        let axisX: number;
+        let cursor: number; // y of the next TOP pin to place
+        let order = chain;
+        if (topEnd.kind === 'anchor') {
+          const s = stubEndOf(topEnd);
+          if (s.o.dy === -1) continue; // an up-facing pin cannot feed a downward run
+          if (bottomEnd.kind === 'anchor') {
+            const b = stubEndOf(bottomEnd);
+            // both ends must sit on one axis with the second anchor below and
+            // able to receive from above, else leave the columns alone
+            if (!sameCoord(s.x, b.x) || b.y <= s.y || b.o.dy === 1) continue;
+          }
+          axisX = s.x;
+          cursor = s.y + CHAIN_GAP;
+        } else if (bottomEnd.kind === 'anchor') {
+          // rail above, anchor below (a pull-up): stack upward from the anchor
+          const s = stubEndOf(bottomEnd);
+          if (s.o.dy === 1) continue; // a down-facing pin cannot feed an upward run
+          axisX = s.x;
+          order = [...chain].reverse();
+          // Bounded lift: when a connection row would sit on a foreign stub's
+          // crossing (axisClear's segment check), raise the whole stack a grid
+          // row at a time rather than shipping the contact or losing the idiom.
+          const netOf = (key: string, pinN: string): string => netByEndpoint.get(epOf(key, pinN))?.name ?? '';
+          for (let lift = 0; lift < 3; lift++) {
+            let up = s.y - CHAIN_GAP - lift * 2 * U;
+            const moves = new Map<string, Placed>();
+            const conn: { y: number; net: string }[] = [{ y: s.y, net: netOf(bottomEnd.ref, bottomEnd.pin.number) }];
+            for (const ref of order) {
+              const v = vertPins(ref)!;
+              const span = v.top.y - v.bot.y; // symbol-space lead separation
+              const cand = candidateAt(ref, axisX, up - span);
+              moves.set(ref, cand);
+              conn.push({ y: up, net: netOf(ref, v.bot.number) }, { y: up - span, net: netOf(ref, v.top.number) });
+              up = up - span - CHAIN_GAP;
+            }
+            const topY = up + CHAIN_GAP;
+            const topRef = order[order.length - 1]!;
+            const done = finalizeMoves(
+              [{ axisX, ys: [s.y, topY], conn: [...conn, { y: topY, net: netOf(topRef, vertPins(topRef)!.top.number) }] }],
+              moves,
+              topEnd.kind === 'power' ? [powerEndBox(axisX, topY, -1)] : [],
+            );
+            if (done) break;
+          }
+          continue;
+        } else {
+          // both ends are rails: a divider — straighten in place on its own axis
+          const first = placed.get(chain[0]!)!;
+          const v = vertPins(chain[0]!)!;
+          const topAt = pinAt(first, v.top);
+          axisX = topAt.x;
+          cursor = topAt.y;
+        }
+        const cursor0 = cursor;
+        const netOf2 = (key: string, pinN: string): string => netByEndpoint.get(epOf(key, pinN))?.name ?? '';
+        for (let lift = 0; lift < 3; lift++) {
+          cursor = cursor0 + lift * 2 * U;
+          const moves = new Map<string, Placed>();
+          const startY = cursor;
+          const conn: { y: number; net: string }[] = [];
+          let fits = true;
+          for (const ref of order) {
+            const cand = candidateAt(ref, axisX, cursor);
+            moves.set(ref, cand);
+            const v = vertPins(ref)!;
+            conn.push({ y: cursor, net: netOf2(ref, v.top.number) }, { y: cursor + (v.top.y - v.bot.y), net: netOf2(ref, v.bot.number) });
+            cursor = cursor + (v.top.y - v.bot.y) + CHAIN_GAP;
+          }
+          let axisEndY = cursor - CHAIN_GAP;
+          if (bottomEnd.kind === 'anchor') {
+            // cursor now sits one gap below the last lead; it may not pass the
+            // lower anchor's stub end or the closing wire would run backwards
+            const b = stubEndOf(bottomEnd);
+            if (cursor > b.y + 0.001) fits = false;
+            axisEndY = b.y;
+          }
+          const clearBoxes: Bounds[] = [];
+          if (topEnd.kind === 'power') clearBoxes.push(powerEndBox(axisX, startY, -1));
+          if (bottomEnd.kind === 'power') clearBoxes.push(powerEndBox(axisX, cursor - CHAIN_GAP, 1));
+          const endNet = conn.length ? conn[0]!.net : '';
+          const startConn = { y: cursor0 - CHAIN_GAP, net: topEnd.kind === 'anchor' ? netOf2(topEnd.ref, topEnd.pin.number) : endNet };
+          const lastConn = { y: axisEndY, net: bottomEnd.kind === 'anchor' ? netOf2(bottomEnd.ref, bottomEnd.pin.number) : (conn.length ? conn[conn.length - 1]!.net : '') };
+          if (fits && finalizeMoves([{ axisX, ys: [cursor0 - CHAIN_GAP, axisEndY], conn: [startConn, ...conn, lastConn] }], moves, clearBoxes)) break;
+          if (!fits) break; // lifting only shrinks the room below; no retry can help
+        }
+      }
+
+      const memberRefs = [...members.map((m) => m.key), ...capRefs];
+      const cells = memberRefs.map((r) => placed.get(r)!);
+      if (cells.length) {
+        const minX = Math.min(...cells.map((c) => c.body.minX)) - MARGIN * U;
+        const maxX = Math.max(...cells.map((c) => c.body.maxX)) + MARGIN * U;
+        const minY = Math.min(...cells.map((c) => c.body.minY)) - (MARGIN + 4) * U;
+        const maxY = Math.max(...cells.map((c) => c.body.maxY)) + (MARGIN + 2) * U;
+        groupRects.push({ name: gname, x1: minX, y1: minY, x2: maxX, y2: maxY });
+        groupX = Math.round(maxX / U) + GROUP_GAP;
+        prevGroup = gname;
+        bandsOf.set(gname, bandCount);
+      }
     }
-  }
+    return bandsOf;
+  };
 
   // ---------- shelf-wrap: reflow the group ribbon into rows (design D12) ----------
   // Groups tile left-to-right above, which on a design with many subsystems
@@ -1005,50 +1040,94 @@ export function draftSchematicPlacement(validated: ValidatedIntent, projectName:
   // A hint pins the width budget; otherwise try every sheet, smallest first.
   const candidates = hinted ? [hinted] : PAPERS;
   const gap = GROUP_GAP * U;
+  const usableW = (p: { w: number }): number => p.w - 2 * FRAME;
+  const usableH = (p: { h: number }): number => p.h - 2 * FRAME - TITLE_STRIP;
 
-  // Nothing to reflow below two groups: one group is already its own row, and
-  // an intent whose parts are all power symbols has no group rect to measure
-  // from at all.
-  if (groupRects.length > 1) {
-    /**
-     * Shelf-wrap the group rects to a width budget; returns per-group offsets.
-     *
-     * Offsets are relative to where the single-row pass already put each group,
-     * never absolute targets: a row that does not wrap gets dx = dy = 0 and its
-     * geometry is bit-for-bit what it was. Re-deriving absolute positions here
-     * would re-round every group's width through the grid and shift
-     * long-standing layouts by a unit for no reason.
-     */
-    const wrapTo = (budgetW: number): { deltas: { dx: number; dy: number }[]; w: number; h: number } => {
-      const originX = groupRects[0]!.x1;
-      const deltas: { dx: number; dy: number }[] = [];
-      let rowOriginX = originX;
-      let dyUnits = 0;
-      let rowH = 0;
-      for (const r of groupRects) {
-        // A group wider than the whole budget still starts its own row; it will
-        // overflow, and the caller rejects this paper for it.
-        if (r.x1 > rowOriginX && r.x2 - rowOriginX > budgetW) {
-          dyUnits += Math.ceil((rowH + gap) / U);
-          rowOriginX = r.x1;
-          rowH = 0;
-        }
-        deltas.push({ dx: grid(Math.round((originX - rowOriginX) / U)), dy: dyUnits * U });
-        rowH = Math.max(rowH, r.y2 - r.y1);
+  /**
+   * Shelf-wrap the group rects to a width budget; returns per-group offsets.
+   *
+   * Offsets are relative to where the single-row pass already put each group,
+   * never absolute targets: a row that does not wrap gets dx = dy = 0 and its
+   * geometry is bit-for-bit what it was. Re-deriving absolute positions here
+   * would re-round every group's width through the grid and shift
+   * long-standing layouts by a unit for no reason.
+   */
+  const wrapTo = (budgetW: number): { deltas: { dx: number; dy: number }[]; w: number; h: number } => {
+    const originX = groupRects[0]!.x1;
+    const deltas: { dx: number; dy: number }[] = [];
+    let rowOriginX = originX;
+    let dyUnits = 0;
+    let rowH = 0;
+    for (const r of groupRects) {
+      // A group wider than the whole budget still starts its own row; it will
+      // overflow, and the caller rejects this paper for it.
+      if (r.x1 > rowOriginX && r.x2 - rowOriginX > budgetW) {
+        dyUnits += Math.ceil((rowH + gap) / U);
+        rowOriginX = r.x1;
+        rowH = 0;
       }
-      const xs = groupRects.flatMap((r, i) => [r.x1 + deltas[i]!.dx, r.x2 + deltas[i]!.dx]);
-      const ys = groupRects.flatMap((r, i) => [r.y1 + deltas[i]!.dy, r.y2 + deltas[i]!.dy]);
-      return { deltas, w: Math.max(...xs) - Math.min(...xs), h: Math.max(...ys) - Math.min(...ys) };
-    };
-
-    let wrap = wrapTo(candidates[candidates.length - 1]!.w - 2 * FRAME);
-    for (const p of candidates) {
-      const w = wrapTo(p.w - 2 * FRAME);
-      if (w.w <= p.w - 2 * FRAME && w.h <= p.h - 2 * FRAME - TITLE_STRIP) {
-        wrap = w;
-        break;
-      }
+      deltas.push({ dx: grid(Math.round((originX - rowOriginX) / U)), dy: dyUnits * U });
+      rowH = Math.max(rowH, r.y2 - r.y1);
     }
+    const xs = groupRects.flatMap((r, i) => [r.x1 + deltas[i]!.dx, r.x2 + deltas[i]!.dx]);
+    const ys = groupRects.flatMap((r, i) => [r.y1 + deltas[i]!.dy, r.y2 + deltas[i]!.dy]);
+    return { deltas, w: Math.max(...xs) - Math.min(...xs), h: Math.max(...ys) - Math.min(...ys) };
+  };
+
+  type SheetFit = { paper: (typeof PAPERS)[number]; wrap: { deltas: { dx: number; dy: number }[]; w: number; h: number } | null };
+  /**
+   * Whether the current placement fits sheet `p`, with the group shelf-wrap
+   * deltas that make it fit. `wrap` is null when there is nothing to reflow:
+   * one group is already its own row, and an intent whose parts are all power
+   * symbols has no group rect to measure from at all.
+   */
+  const fitsOn = (p: (typeof PAPERS)[number]): SheetFit | null => {
+    if (groupRects.length > 1) {
+      const w = wrapTo(usableW(p));
+      return w.w <= usableW(p) && w.h <= usableH(p) ? { paper: p, wrap: w } : null;
+    }
+    const r = groupRects[0];
+    return !r || (r.x2 - r.x1 <= usableW(p) && r.y2 - r.y1 <= usableH(p)) ? { paper: p, wrap: null } : null;
+  };
+  /** The smallest candidate sheet the current placement fits, or null. */
+  const bestFit = (): SheetFit | null => {
+    for (const p of candidates) {
+      const f = fitsOn(p);
+      if (f) return f;
+    }
+    return null;
+  };
+
+  let bands = placeAllGroups(Infinity);
+  let fit = bestFit();
+  if (!fit) {
+    // No sheet holds the natural ribbon even with whole groups wrapped into
+    // rows: some group is by itself wider than the widest usable frame (#219
+    // drew 94 parts as one strip four sizes past the designer's A3, with 367
+    // out-of-frame findings — a sheet that would not plot). Growing the paper
+    // cannot fix that, so instead wrap COLUMNS into bands inside the oversized
+    // groups, targeting the smallest sheet that fits. Each attempt must fit
+    // the sheet whose width it banded to: accepting a narrow banding on a
+    // larger sheet would re-create the empty-ribbon failure, rotated 90°.
+    for (const p of candidates) {
+      bands = placeAllGroups(Math.floor(usableW(p) / U));
+      fit = fitsOn(p);
+      if (fit) break;
+    }
+    if (!fit) {
+      const largest = candidates[candidates.length - 1]!;
+      bands = placeAllGroups(Math.floor(usableW(largest) / U));
+      fit = { paper: largest, wrap: groupRects.length > 1 ? wrapTo(usableW(largest)) : null };
+      notes.push(
+        `content does not fit the ${hinted ? 'hinted' : 'largest standard'} sheet (${largest.name}) even with groups and columns wrapped; the drawing will overflow the frame`,
+      );
+    }
+    for (const [g, n] of bands) {
+      if (n > 1) notes.push(`group "${g}" was wider than the sheet; its columns wrapped onto ${n} bands`);
+    }
+  }
+  if (fit.wrap) {
+    const wrap = fit.wrap;
     const rows = new Set(wrap.deltas.map((d) => d.dy)).size;
     if (rows > 1) notes.push(`groups wrapped onto ${rows} rows to fit the sheet`);
     groupRects.forEach((r, i) => {
@@ -1745,12 +1824,11 @@ export function draftSchematicPlacement(validated: ValidatedIntent, projectName:
   const allY = [...groupRects.map((r) => r.y1), ...groupRects.map((r) => r.y2)];
   const contentW = allX.length ? Math.max(...allX) - Math.min(...allX) : 0;
   const contentH = allY.length ? Math.max(...allY) - Math.min(...allY) : 0;
-  // `hinted` and the note for an unknown hint are resolved by the shelf-wrap
-  // above, which needed the width budget to reflow against.
-  const paper =
-    hinted ??
-    PAPERS.find((p) => contentW <= p.w - 2 * FRAME && contentH <= p.h - 2 * FRAME - TITLE_STRIP) ??
-    PAPERS[PAPERS.length - 1]!;
+  // The sheet was already decided by the wrap-and-band pass above: `fit` names
+  // the smallest candidate the final group rects fit (or the largest, noted,
+  // when nothing holds them). Re-deriving it from content here could only
+  // disagree with the budget the columns were banded to.
+  const paper = fit.paper;
 
   // offset so content sits centered in the usable area (whitespace balance,
   // design D11), snapped to the grid so origins stay grid-true
