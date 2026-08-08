@@ -131,6 +131,69 @@ export function findMergedNets(
     .sort((a, b) => a.nets[0]!.localeCompare(b.nets[0]!));
 }
 
+/** True when (px,py) lies on the horizontal/vertical segment, endpoints
+ * included. The same dust tolerance as `sameCoord` for the fixed coordinate;
+ * the along-segment range check uses a plain epsilon. */
+const SEG_EPS = 0.005;
+const pointOnSeg = (
+  px: number,
+  py: number,
+  s: { x1: number; y1: number; x2: number; y2: number },
+): boolean => {
+  if (sameCoord(s.x1, s.x2)) {
+    return sameCoord(px, s.x1) && py >= Math.min(s.y1, s.y2) - SEG_EPS && py <= Math.max(s.y1, s.y2) + SEG_EPS;
+  }
+  if (sameCoord(s.y1, s.y2)) {
+    return sameCoord(py, s.y1) && px >= Math.min(s.x1, s.x2) - SEG_EPS && px <= Math.max(s.x1, s.x2) + SEG_EPS;
+  }
+  return false;
+};
+
+/**
+ * Cross-net wire contact is a merged net the co-located-label check cannot
+ * see: KiCad joins wires at coincident endpoints and at an endpoint on
+ * another wire's interior, whatever the labels say. The lemondrop run routed
+ * a local net's trunk down a column of neighbouring stub ends and shorted the
+ * crystal drive onto TOUCH_IRQ exactly this way (I22, #204) — ERC demoted it
+ * to a warning and it would have flowed into layout. The router now avoids
+ * foreign contact; this check gates whatever geometry any pass produces, so
+ * a merge can never again leave the engine silently. A label whose anchor
+ * sits on a foreign net's wire attaches to that wire in KiCad and is the
+ * same defect.
+ */
+export function findWireContactMerges(
+  wires: { x1: number; y1: number; x2: number; y2: number; net: string }[],
+  labels: { name: string; x: number; y: number }[],
+): { x: number; y: number; nets: string[] }[] {
+  const out = new Map<string, { x: number; y: number; nets: string[] }>();
+  const add = (x: number, y: number, a: string, b: string): void => {
+    if (a === b) return;
+    const nets = [a, b].sort();
+    const key = `${nets[0]}/${nets[1]}@${pointKey(x, y)}`;
+    if (!out.has(key)) out.set(key, { x, y, nets });
+  };
+  for (let i = 0; i < wires.length; i++) {
+    for (let j = i + 1; j < wires.length; j++) {
+      const a = wires[i]!;
+      const b = wires[j]!;
+      if (a.net === b.net) continue;
+      if (pointOnSeg(a.x1, a.y1, b)) add(a.x1, a.y1, a.net, b.net);
+      if (pointOnSeg(a.x2, a.y2, b)) add(a.x2, a.y2, a.net, b.net);
+      if (pointOnSeg(b.x1, b.y1, a)) add(b.x1, b.y1, a.net, b.net);
+      if (pointOnSeg(b.x2, b.y2, a)) add(b.x2, b.y2, a.net, b.net);
+    }
+  }
+  for (const l of labels) {
+    for (const w of wires) {
+      if (w.net === l.name) continue;
+      if (pointOnSeg(l.x, l.y, w)) add(l.x, l.y, l.name, w.net);
+    }
+  }
+  return [...out.values()].sort(
+    (a, b) => a.nets[0]!.localeCompare(b.nets[0]!) || a.x - b.x || a.y - b.y,
+  );
+}
+
 interface Placed {
   part: IntentPart;
   sym: ResolvedSymbol;
@@ -550,18 +613,45 @@ export function draftSchematicPlacement(validated: ValidatedIntent, projectName:
      * left-pin stub column attached 5V to DRIVE. Body boxes cannot catch
      * this; the check must be against connection points.
      */
-    const axisClear = (axisX: number, yMin: number, yMax: number, ownEps: Set<string>): boolean => {
+    const axisClear = (
+      axisX: number,
+      yMin: number,
+      yMax: number,
+      ownEps: Set<string>,
+      conn: { y: number; net: string }[] = [],
+      movedRefs: Set<string> = new Set<string>(),
+    ): boolean => {
       for (const [oref, opl] of placed) {
         for (const pin of opl.sym.pins) {
           const ep = `${oref}.${pin.number}`;
           const net = netByEndpoint.get(ep);
-          if (!net || ownEps.has(ep)) continue;
+          if (!net) continue;
           const o = outward(pin);
           const len = classOf(net.name) !== 'signal' && o.dx !== 0 ? STUB + 2 : STUB;
           const p = pinAt(opl, pin);
           const end = { x: p.x + o.dx * len * U, y: p.y + o.dy * len * U };
-          for (const q of [p, end]) {
-            if (sameCoord(q.x, axisX) && q.y > yMin - U && q.y < yMax + U) return false;
+          if (!ownEps.has(ep)) {
+            for (const q of [p, end]) {
+              if (sameCoord(q.x, axisX) && q.y > yMin - U && q.y < yMax + U) return false;
+            }
+          }
+          // A horizontal stub SEGMENT crossing the axis exactly at a chain
+          // CONNECTION row of a DIFFERENT net passes through that connection
+          // point — a mid-segment crossing elsewhere is harmless, but a lead
+          // parked on the crossing row is a KiCad join. The pull-up idiom
+          // parked R1's bottom lead on U1's power-pin row and the VCC stub
+          // ran straight through the pulled SIG node (I22's chain-pass face,
+          // #204). Net-aware, because ownEps is too coarse here: U1's VCC pin
+          // shares a net with the chain's rail end, yet its stub through a
+          // SIG row still merges. Moved parts are skipped — `placed` holds
+          // their stale pre-move positions.
+          if (o.dx !== 0 && !movedRefs.has(oref)) {
+            const row = conn.find((c) => sameCoord(c.y, p.y));
+            if (row && row.net !== net.name) {
+              const lo = Math.min(p.x, end.x) - 0.001;
+              const hi = Math.max(p.x, end.x) + 0.001;
+              if (axisX >= lo && axisX <= hi) return false;
+            }
           }
         }
       }
@@ -579,14 +669,15 @@ export function draftSchematicPlacement(validated: ValidatedIntent, projectName:
      * power-end growth, then apply; marks the parts idiom-placed only when
      * everything held. */
     const finalizeMoves = (
-      segments: { axisX: number; ys: number[] }[],
+      segments: { axisX: number; ys: number[]; conn?: { y: number; net: string }[] }[],
       moves: Map<string, Placed>,
       clearBoxes: Bounds[] = [],
     ): boolean => {
       const own = ownEndpoints(moves.keys());
+      const movedRefs = new Set(moves.keys());
       for (const seg of segments) {
         // the pad covers the power stub and symbol a rail/ground end grows
-        if (!axisClear(seg.axisX, Math.min(...seg.ys) - 4 * U, Math.max(...seg.ys) + 4 * U, own)) return false;
+        if (!axisClear(seg.axisX, Math.min(...seg.ys) - 4 * U, Math.max(...seg.ys) + 4 * U, own, seg.conn ?? [], movedRefs)) return false;
       }
       // a power symbol is not a body, so the body check cannot see it: the
       // divider repro grew R2's GND bar and value text straight into the body
@@ -717,22 +808,32 @@ export function draftSchematicPlacement(validated: ValidatedIntent, projectName:
         const s = stubEndOf(bottomEnd);
         if (s.o.dy === 1) continue; // a down-facing pin cannot feed an upward run
         axisX = s.x;
-        let up = s.y - CHAIN_GAP;
         order = [...chain].reverse();
-        const moves = new Map<string, Placed>();
-        for (const ref of order) {
-          const v = vertPins(ref)!;
-          const span = v.top.y - v.bot.y; // symbol-space lead separation
-          const cand = candidateAt(ref, axisX, up - span);
-          moves.set(ref, cand);
-          up = up - span - CHAIN_GAP;
+        // Bounded lift: when a connection row would sit on a foreign stub's
+        // crossing (axisClear's segment check), raise the whole stack a grid
+        // row at a time rather than shipping the contact or losing the idiom.
+        const netOf = (ref: string, pinN: string): string => netByEndpoint.get(`${ref}.${pinN}`)?.name ?? '';
+        for (let lift = 0; lift < 3; lift++) {
+          let up = s.y - CHAIN_GAP - lift * 2 * U;
+          const moves = new Map<string, Placed>();
+          const conn: { y: number; net: string }[] = [{ y: s.y, net: netOf(bottomEnd.ref, bottomEnd.pin.number) }];
+          for (const ref of order) {
+            const v = vertPins(ref)!;
+            const span = v.top.y - v.bot.y; // symbol-space lead separation
+            const cand = candidateAt(ref, axisX, up - span);
+            moves.set(ref, cand);
+            conn.push({ y: up, net: netOf(ref, v.bot.number) }, { y: up - span, net: netOf(ref, v.top.number) });
+            up = up - span - CHAIN_GAP;
+          }
+          const topY = up + CHAIN_GAP;
+          const topRef = order[order.length - 1]!;
+          const done = finalizeMoves(
+            [{ axisX, ys: [s.y, topY], conn: [...conn, { y: topY, net: netOf(topRef, vertPins(topRef)!.top.number) }] }],
+            moves,
+            topEnd.kind === 'power' ? [powerEndBox(axisX, topY, -1)] : [],
+          );
+          if (done) break;
         }
-        const topY = up + CHAIN_GAP;
-        finalizeMoves(
-          [{ axisX, ys: [s.y, topY] }],
-          moves,
-          topEnd.kind === 'power' ? [powerEndBox(axisX, topY, -1)] : [],
-        );
         continue;
       } else {
         // both ends are rails: a divider — straighten in place on its own axis
@@ -742,27 +843,38 @@ export function draftSchematicPlacement(validated: ValidatedIntent, projectName:
         axisX = topAt.x;
         cursor = topAt.y;
       }
-      const moves = new Map<string, Placed>();
-      const startY = cursor;
-      let fits = true;
-      for (const ref of order) {
-        const cand = candidateAt(ref, axisX, cursor);
-        moves.set(ref, cand);
-        const v = vertPins(ref)!;
-        cursor = cursor + (v.top.y - v.bot.y) + CHAIN_GAP;
+      const cursor0 = cursor;
+      const netOf2 = (ref: string, pinN: string): string => netByEndpoint.get(`${ref}.${pinN}`)?.name ?? '';
+      for (let lift = 0; lift < 3; lift++) {
+        cursor = cursor0 + lift * 2 * U;
+        const moves = new Map<string, Placed>();
+        const startY = cursor;
+        const conn: { y: number; net: string }[] = [];
+        let fits = true;
+        for (const ref of order) {
+          const cand = candidateAt(ref, axisX, cursor);
+          moves.set(ref, cand);
+          const v = vertPins(ref)!;
+          conn.push({ y: cursor, net: netOf2(ref, v.top.number) }, { y: cursor + (v.top.y - v.bot.y), net: netOf2(ref, v.bot.number) });
+          cursor = cursor + (v.top.y - v.bot.y) + CHAIN_GAP;
+        }
+        let axisEndY = cursor - CHAIN_GAP;
+        if (bottomEnd.kind === 'anchor') {
+          // cursor now sits one gap below the last lead; it may not pass the
+          // lower anchor's stub end or the closing wire would run backwards
+          const b = stubEndOf(bottomEnd);
+          if (cursor > b.y + 0.001) fits = false;
+          axisEndY = b.y;
+        }
+        const clearBoxes: Bounds[] = [];
+        if (topEnd.kind === 'power') clearBoxes.push(powerEndBox(axisX, startY, -1));
+        if (bottomEnd.kind === 'power') clearBoxes.push(powerEndBox(axisX, cursor - CHAIN_GAP, 1));
+        const endNet = conn.length ? conn[0]!.net : '';
+        const startConn = { y: cursor0 - CHAIN_GAP, net: topEnd.kind === 'anchor' ? netOf2(topEnd.ref, topEnd.pin.number) : endNet };
+        const lastConn = { y: axisEndY, net: bottomEnd.kind === 'anchor' ? netOf2(bottomEnd.ref, bottomEnd.pin.number) : (conn.length ? conn[conn.length - 1]!.net : '') };
+        if (fits && finalizeMoves([{ axisX, ys: [cursor0 - CHAIN_GAP, axisEndY], conn: [startConn, ...conn, lastConn] }], moves, clearBoxes)) break;
+        if (!fits) break; // lifting only shrinks the room below; no retry can help
       }
-      let axisEndY = cursor - CHAIN_GAP;
-      if (bottomEnd.kind === 'anchor') {
-        // cursor now sits one gap below the last lead; it may not pass the
-        // lower anchor's stub end or the closing wire would run backwards
-        const b = stubEndOf(bottomEnd);
-        if (cursor > b.y + 0.001) fits = false;
-        axisEndY = b.y;
-      }
-      const clearBoxes: Bounds[] = [];
-      if (topEnd.kind === 'power') clearBoxes.push(powerEndBox(axisX, startY, -1));
-      if (bottomEnd.kind === 'power') clearBoxes.push(powerEndBox(axisX, cursor - CHAIN_GAP, 1));
-      if (fits) finalizeMoves([{ axisX, ys: [startY - CHAIN_GAP, axisEndY] }], moves, clearBoxes);
     }
 
     const memberRefs = [...members.map((m) => m.ref), ...capRefs];
@@ -1048,6 +1160,53 @@ export function draftSchematicPlacement(validated: ValidatedIntent, projectName:
           candidate.push({ x1: trunkX, y1: meetYs[i - 1]!, x2: trunkX, y2: meetYs[i]! });
         }
         if (candidate.some((c) => bodies.some((b) => segCrossesBody(c.x1, c.y1, c.x2, c.y2, b)))) continue;
+        // No candidate segment may touch a FOREIGN connection point: a pin,
+        // the stub end every connected pin grows (labelled stubs of nets
+        // sorted later are not emitted yet, so they must be predicted), or an
+        // already-emitted wire of another net. KiCad joins wires at coincident
+        // endpoints and at an endpoint on a wire's interior, so a trunk
+        // routed down a column of neighbouring stub ends silently merges
+        // nets — the lemondrop run drew the crystal drive onto TOUCH_IRQ
+        // exactly this way (I22, #204). Mirrors the chain pass's axisClear,
+        // generalized to every candidate segment.
+        const ownEps = new Set(net.pins);
+        let touchesForeign = false;
+        for (const [oref, opl] of placed) {
+          if (touchesForeign) break;
+          for (const pin of opl.sym.pins) {
+            const ep = `${oref}.${pin.number}`;
+            const onet = netByEndpoint.get(ep);
+            if (!onet || onet.name === net.name || ownEps.has(ep)) continue;
+            const o = outward(pin);
+            const len = (netClasses.get(onet.name)?.cls ?? 'signal') !== 'signal' && o.dx !== 0 ? STUB + 2 : STUB;
+            const p = pinAt(opl, pin);
+            const end = { x: p.x + o.dx * len * U, y: p.y + o.dy * len * U };
+            if (candidate.some((c) => pointOnSeg(p.x, p.y, c) || pointOnSeg(end.x, end.y, c))) {
+              if (process.env.COPPERHEAD_DEBUG_VETO) console.error(`VETO ${net.name}: foreign pin/stub ${ep} (${onet.name}) pin(${p.x},${p.y}) end(${end.x},${end.y})`);
+              touchesForeign = true;
+              break;
+            }
+          }
+        }
+        if (!touchesForeign) {
+          for (const w of wires) {
+            if (w.net === net.name) continue;
+            if (
+              candidate.some(
+                (c) =>
+                  pointOnSeg(w.x1, w.y1, c) ||
+                  pointOnSeg(w.x2, w.y2, c) ||
+                  pointOnSeg(c.x1, c.y1, w) ||
+                  pointOnSeg(c.x2, c.y2, w),
+              )
+            ) {
+              if (process.env.COPPERHEAD_DEBUG_VETO) console.error(`VETO ${net.name}: emitted wire of ${w.net} (${w.x1},${w.y1})-(${w.x2},${w.y2})`);
+              touchesForeign = true;
+              break;
+            }
+          }
+        }
+        if (touchesForeign) continue;
         for (const c of candidate) addWire(net.name, c.x1, c.y1, c.x2, c.y2);
         // one label names the wired net (topmost-leftmost wire point): the net
         // stays identifiable to PINOUT/drift and to a reviewer without a
@@ -1328,7 +1487,7 @@ export function draftSchematicPlacement(validated: ValidatedIntent, projectName:
   // pipeline loudly, while a merged net passes ERC-as-warning and flows into
   // layout and fabrication outputs. Reported as a hard finding — the netlist
   // the IR declared is not the netlist that got drawn.
-  const mergedNets = findMergedNets(labels);
+  const mergedNets = [...findMergedNets(labels), ...findWireContactMerges(wires, labels)];
 
   // Overlapping label TEXT is the other half of the same pass and deliberately
   // not a gate. The de-collision loop clears what it can and, where it cannot,

@@ -107,11 +107,15 @@ describe('drafting engine: the reference IR end to end', () => {
       expect(res.report.noConnects).toBe(5);
       expect(text).toContain('(no_connect');
 
-      // the local three-endpoint divider is wired with a junction and exactly
-      // one naming label (a per-pin label triplet would mean it fell back)
+      // DIV falls back to per-stub labels: every collision-free trunk for it
+      // contacts a foreign connection point (the median crosses R2's body, the
+      // right-of-everything branch runs through R2's GND stub end, the
+      // left-of-everything branch through R1's SIG_IN stub end). The old wired
+      // routing shipped exactly that contact — the pinned golden had DIV
+      // shorted to GND at R2.2's stub end (I22, #204) — so labelled is the
+      // correct drawing here, not a regression.
       expect(res.report.netClasses.find((n) => n.name === 'DIV')?.class).toBe('signal');
-      expect(text.match(/\(label "DIV"/g) ?? []).toHaveLength(1);
-      expect(text).toContain('(junction');
+      expect(text.match(/\(label "DIV"/g) ?? []).toHaveLength(3);
     } finally {
       await cleanup();
     }
