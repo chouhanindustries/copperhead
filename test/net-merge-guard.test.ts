@@ -166,3 +166,46 @@ Connector.
     }
   });
 });
+
+describe('labelled-stub fallback avoids foreign contact (I22 third face)', () => {
+  // BUCK_SS shape from lemondrop attempt-06: a two-pin net from an IC pin to
+  // a cap whose other terminal is GND. The chain drop places the cap below
+  // the stub axis, the wired route is correctly vetoed, and the fallback
+  // stub's 2-unit endpoint would land exactly on the neighbouring power
+  // pin's stub interior. The stub must grow past the contact (its interior
+  // then crosses the foreign wire mid-segment, which does not connect), and
+  // the draft must succeed with disjoint nets.
+  it('grows the stub past a foreign power-stub row instead of merging', async () => {
+    const repo = await mkdtemp(path.join(tmpdir(), 'copperhead-capdrop-'));
+    try {
+      await mkdir(path.join(repo, 'docs'), { recursive: true });
+      await writeFile(path.join(repo, 'docs', 'SUBSYSTEMS.md'), '## Main\n', 'utf8');
+      await writeFile(
+        path.join(repo, 'schematic.intent.json'),
+        JSON.stringify({
+          version: 1,
+          parts: [
+            { ref: 'U1', libId: 'CopperMCU:MCU8', value: 'MCU8', footprint: 'X:Y', group: 'Main' },
+            { ref: 'C9', libId: 'Device:C', value: '100n', footprint: 'X:Y', group: 'Main' },
+          ],
+          nets: [
+            { name: 'BUCK_SS', pins: ['U1.3', 'C9.1'] },
+            { name: 'GND', pins: ['C9.2', 'U1.2'] },
+          ],
+          noConnect: ['U1.1', 'U1.4', 'U1.5', 'U1.6', 'U1.7', 'U1.8'],
+        }),
+        'utf8',
+      );
+      const res = await draftSchematicToText({
+        repoRoot: repo,
+        schematic: 'board.kicad_sch',
+        intentPath: 'schematic.intent.json',
+        docsDir: 'docs',
+        symbolDirs: [SYMLIB],
+      });
+      expect(res.ok, res.ok ? '' : (res as { message: string }).message).toBe(true);
+    } finally {
+      await rm(repo, { recursive: true, force: true });
+    }
+  });
+});
