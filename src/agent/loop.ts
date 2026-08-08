@@ -2,7 +2,7 @@ import path from 'node:path';
 import { readFile, writeFile } from 'node:fs/promises';
 import { execa } from 'execa';
 import type { Msg, Provider, Turn } from './types.js';
-import { availableTools, dispatchTool, type RunContext } from './tools.js';
+import { availableTools, dispatchToolResult, type RunContext } from './tools.js';
 import { CachingProvider } from './response-cache.js';
 import { capHistory } from './history.js';
 import { withTimeout, TurnTimeoutError } from './recovery.js';
@@ -630,10 +630,13 @@ async function runWithMemory(
     nudges = 0;
 
     for (const call of res.toolCalls) {
-      const result = await dispatchTool(ctx, call.name, call.args);
-      await transcript.event('tool', { name: call.name, args: call.args, result });
+      const { text: result, ok } = await dispatchToolResult(ctx, call.name, call.args);
+      await transcript.event('tool', { name: call.name, args: call.args, result, ...(ok ? {} : { failed: true }) });
       r.toolResult(call.name, result.split('\n')[0] ?? '');
-      messages.push({ role: 'tool', toolCallId: call.id, content: result });
+      // Carry the failure status on the message rather than leaving later
+      // readers to infer it from the text: a file can legitimately begin with
+      // the same words a tool error does.
+      messages.push({ role: 'tool', toolCallId: call.id, content: result, ...(ok ? {} : { failed: true }) });
     }
 
     if (ctx.repairCycles > config.maxRepairCycles) {

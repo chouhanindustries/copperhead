@@ -121,18 +121,6 @@ function rangeOf(call: ToolCall): { start: number; end: number } {
   return { start: s, end: typeof e === 'number' && Number.isFinite(e) ? e : Infinity };
 }
 
-/**
- * A tool result that reports a failure rather than returning content.
- *
- * `dispatchTool` catches a throwing handler and returns `error: <message>` as an
- * ordinary tool result, so a `read_file` that failed (missing path, outside the
- * repo) is indistinguishable from a successful one by shape alone. Such a result
- * carries no file content, so it must never be treated as replacing a read that
- * did return content.
- */
-function isFailedResult(content: string): boolean {
-  return content.startsWith('error: ') || content.startsWith('tool "');
-}
 
 /** Every message returned gets fresh objects, so a provider that mutates what it
  *  is handed cannot reach the run's own history. Strings are immutable and
@@ -191,8 +179,10 @@ export function capHistory(
     if (!call || call.name !== 'read_file') return;
     // A read that failed returned no content, so it cannot stand in for one
     // that succeeded; letting it supersede would swap real file content for a
-    // stub pointing at a read the model never actually received.
-    if (isFailedResult(m.content)) return;
+    // stub pointing at a read the model never actually received. The loop
+    // records this from the dispatch outcome, so a file that merely *looks*
+    // like an error message is not mistaken for one.
+    if (m.failed) return;
     const p = pathOf(call);
     if (!p) return;
     const { start, end } = rangeOf(call);

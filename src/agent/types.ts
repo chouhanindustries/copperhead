@@ -15,7 +15,20 @@ export type Msg =
   | { role: 'system'; content: string }
   | { role: 'user'; content: string }
   | { role: 'assistant'; content: string | null; toolCalls?: ToolCall[] }
-  | { role: 'tool'; toolCallId: string; content: string };
+  | {
+      role: 'tool';
+      toolCallId: string;
+      content: string;
+      /**
+       * The call reported a failure rather than returning a result. Set by the
+       * loop from the dispatch outcome, because the text alone cannot say: a
+       * tool's error string and a file whose contents happen to start the same
+       * way are indistinguishable once both are just `content`. Providers ignore
+       * this field; it exists so local reasoning about the conversation (history
+       * capping) can tell a result from a failure without guessing.
+       */
+      failed?: boolean;
+    };
 
 export interface Turn {
   text: string | null;

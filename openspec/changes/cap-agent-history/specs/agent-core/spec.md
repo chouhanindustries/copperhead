@@ -65,3 +65,8 @@ When a `read_file` result is followed later in the same conversation by another 
 - **GIVEN** a conversation that reads a file successfully, then attempts the same path again and gets a failure result
 - **WHEN** the capped view is built
 - **THEN** the successful result is sent unchanged, because a failed read returned no content to replace it with
+
+#### Scenario: a file whose contents resemble an error is still a successful read
+- **GIVEN** a conversation that twice reads a file whose contents begin with the same words a tool failure would
+- **WHEN** the capped view is built
+- **THEN** the earlier read is superseded as normal, because failure is recorded from the call's outcome rather than inferred from its text

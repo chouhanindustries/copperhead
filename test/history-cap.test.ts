@@ -16,13 +16,18 @@ import type { Msg, Provider, Turn } from '../src/agent/types.js';
  */
 const opts: HistoryCapOptions = { maxToolResultChars: 400, maxToolArgChars: 300, keepRecent: 2 };
 
-function read(id: string, path: string, body: string, range?: { start?: number; end?: number }): Msg[] {
+function read(
+  id: string,
+  path: string,
+  body: string,
+  range?: { start?: number; end?: number; failed?: boolean },
+): Msg[] {
   const args: Record<string, unknown> = { path };
   if (range?.start !== undefined) args.start_line = range.start;
   if (range?.end !== undefined) args.end_line = range.end;
   return [
     { role: 'assistant', content: null, toolCalls: [{ id, name: 'read_file', args }] },
-    { role: 'tool', toolCallId: id, content: body },
+    { role: 'tool', toolCallId: id, content: body, ...(range?.failed ? { failed: true } : {}) },
   ];
 }
 
@@ -163,19 +168,32 @@ describe('capHistory — what it actually trims', () => {
   });
 
   it('does not let a failed later read supersede a successful earlier one', () => {
-    // dispatchTool turns a throwing handler into an `error: ...` tool result, so
-    // a read that failed looks structurally identical to one that succeeded.
-    // Superseding on it would swap real content for a stub pointing at a read
-    // the model never received.
+    // A read that failed returned no file content, so it cannot stand in for
+    // one that succeeded. The loop marks this from the dispatch outcome.
     const good = 'GOOD'.repeat(2000);
     const msgs: Msg[] = [
       ...read('c1', 'a.kicad_sch', good),
-      ...read('c2', 'a.kicad_sch', 'error: ENOENT: no such file or directory'),
+      ...read('c2', 'a.kicad_sch', 'error: ENOENT: no such file or directory', { failed: true }),
       ...filler(2),
     ];
     const { messages: out, stats } = capHistory(msgs, { ...opts, maxToolResultChars: 100000 });
     expect(out[1].role === 'tool' && out[1].content).toBe(good);
     expect(stats.superseded).toBe(0);
+  });
+
+  it('supersedes normally when a file\'s own contents look like an error message', () => {
+    // The failure status comes from the dispatch outcome, never from sniffing
+    // the text, so a real file that happens to start with "error: " (a log, a
+    // pasted traceback) is still a successful read and still supersedes.
+    const looksLikeAnError = `error: ${'something went wrong\n'.repeat(500)}`;
+    const msgs: Msg[] = [
+      ...read('c1', 'logs/build.log', looksLikeAnError),
+      ...read('c2', 'logs/build.log', 'error: newer contents'),
+      ...filler(2),
+    ];
+    const { messages: out, stats } = capHistory(msgs, { ...opts, maxToolResultChars: 100000 });
+    expect(out[1].role === 'tool' && out[1].content).toContain('superseded');
+    expect(stats.superseded).toBe(1);
   });
 
   it('treats a read with end_line but no start_line as a whole-file read', () => {
@@ -369,6 +387,64 @@ describe('capHistory in the agent loop', () => {
       },
     };
   }
+
+  it('marks a genuinely failed tool call, and only that call, as failed', async () => {
+    // Proves the flag is set from the real dispatch outcome end to end, rather
+    // than by any inspection of the result text.
+    const { repo, cleanup } = await tempFixtureRepo();
+    try {
+      await runInit({ repoRoot: repo, installHooks: false });
+      // A file whose contents start exactly like a tool error string.
+      await writeFile(path.join(repo, 'looks-like-an-error.txt'), 'error: not really\n', 'utf8');
+      await execa('git', ['add', '-A'], { cwd: repo });
+      await execa('git', ['commit', '-q', '-m', 'fixture'], { cwd: repo });
+
+      const seen: Msg[][] = [];
+      let turn = 0;
+      const provider: Provider = {
+        name: 'scripted-mixed',
+        async chat(messages: Msg[]): Promise<Turn> {
+          seen.push(messages.map((m) => JSON.parse(JSON.stringify(m)) as Msg));
+          turn++;
+          const usage = { inputTokens: 10, outputTokens: 1 };
+          if (turn === 1) {
+            return {
+              text: null,
+              usage,
+              toolCalls: [
+                // Succeeds, despite content that looks like an error.
+                { id: 'ok', name: 'read_file', args: { path: 'looks-like-an-error.txt' } },
+                // Genuinely fails: the file does not exist.
+                { id: 'bad', name: 'read_file', args: { path: 'no-such-file.txt' } },
+              ],
+            };
+          }
+          return {
+            text: null,
+            usage,
+            toolCalls: [{ id: 'fin', name: 'finish', args: { outcome: 'done', summary: 'done' } }],
+          };
+        },
+      };
+
+      await runAgentLoop({
+        repoRoot: repo,
+        request: 'one good read, one failing read',
+        model: 'gpt-5',
+        provider,
+        maxTurns: 20,
+        log: () => {},
+        meta: { command: 'do', modelSource: 'flag', version: '0.0.0-test', kicadCliVersion: '0.0.0' },
+      });
+
+      const lastRequest = seen[seen.length - 1]!;
+      const byId = new Map(lastRequest.flatMap((m) => (m.role === 'tool' ? [[m.toolCallId, m] as const] : [])));
+      expect(byId.get('ok')?.failed).toBeUndefined(); // succeeded, text notwithstanding
+      expect(byId.get('bad')?.failed).toBe(true); // really failed
+    } finally {
+      await cleanup();
+    }
+  }, 20000);
 
   it('counts the saving once per attempt, so a retried turn is not under-reported', async () => {
     const { repo, cleanup } = await tempFixtureRepo();

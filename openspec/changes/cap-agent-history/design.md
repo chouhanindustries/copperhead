@@ -34,7 +34,17 @@ A read is now recorded with the span it returned, an absent bound meaning "to th
 
 Containment is checked against *any* later read, not merely the most recent one, so a narrow read late in a conversation does not resurrect earlier copies that a wider intervening read had already made redundant.
 
-Two details follow from mirroring the tool rather than its schema. `toolReadFile` returns the whole file whenever `start_line` is absent, ignoring `end_line`, so such a read is recorded as whole-file rather than as `[1, end_line]`; recording the narrower span would understate what the model actually received. And `dispatchTool` turns a throwing handler into an ordinary `error: ...` result, so a read that failed is shape-identical to one that succeeded: failed results are excluded from the candidate set entirely, since replacing real content with a pointer to a read that returned nothing is strictly worse than sending the content again.
+One detail follows from mirroring the tool rather than its schema: `toolReadFile` returns the whole file whenever `start_line` is absent, ignoring `end_line`, so such a read is recorded as whole-file rather than as `[1, end_line]`; recording the narrower span would understate what the model actually received.
+
+Failed reads are excluded from the candidate set as well, since replacing real content with a pointer to a read that returned nothing is strictly worse than sending the content again. See D3c for why that status cannot be read off the text.
+
+## D3c. Failure is carried as status, not inferred from the text
+
+A tool's failure text is just text. `dispatchTool` turns a throwing handler into an ordinary `error: ...` result, and the tool message that reaches the conversation holds nothing but a string, so any caller wanting to know "did this call fail?" is tempted to sniff prefixes. That is wrong in a way that is easy to miss: a repository can legitimately contain a file whose contents begin `error: ` (a build log, a pasted traceback), and reading it successfully would then be classified as a failure.
+
+So `dispatchToolResult` returns `{ text, ok }` and the loop records `failed` on the tool message. Capping reads that flag and never inspects the text. The existing string-returning `dispatchTool` is kept as a thin wrapper, so the many call sites that only ever want what the model would see are unchanged.
+
+The direction of the old bug matters less than its shape: misclassifying a real read as failed only cost savings, never correctness. But the fix removes a class of guess rather than narrowing one heuristic, and it puts the status where a future reader of the conversation can rely on it.
 
 ## D3b. The request view is structurally independent, not merely a fresh array
 

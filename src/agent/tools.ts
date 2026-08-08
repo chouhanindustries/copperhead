@@ -632,12 +632,40 @@ export function availableTools(ctx: RunContext): ToolDef[] {
   return TOOLS.filter((t) => !t.requiresUnlock || ctx.editsUnlocked);
 }
 
-export async function dispatchTool(ctx: RunContext, name: string, args: Record<string, unknown>): Promise<string> {
+/** A tool call's outcome: its text, and whether that text is a result or a failure. */
+export interface ToolOutcome {
+  text: string;
+  ok: boolean;
+}
+
+/**
+ * Run a tool and report both its text and whether it succeeded.
+ *
+ * The status has to travel alongside the text rather than be recovered from it:
+ * a handler's error string is just a string, so a file whose contents begin the
+ * same way is indistinguishable from a failure to any caller that sniffs
+ * prefixes.
+ */
+export async function dispatchToolResult(
+  ctx: RunContext,
+  name: string,
+  args: Record<string, unknown>,
+): Promise<ToolOutcome> {
   const tool = availableTools(ctx).find((t) => t.schema.name === name);
-  if (!tool) return `tool "${name}" is not available${ctx.editsUnlocked ? '' : ' (edit tools unlock after the proposal validates)'}`;
-  try {
-    return await tool.handler(ctx, args);
-  } catch (err) {
-    return `error: ${(err as Error).message}`;
+  if (!tool) {
+    return {
+      text: `tool "${name}" is not available${ctx.editsUnlocked ? '' : ' (edit tools unlock after the proposal validates)'}`,
+      ok: false,
+    };
   }
+  try {
+    return { text: await tool.handler(ctx, args), ok: true };
+  } catch (err) {
+    return { text: `error: ${(err as Error).message}`, ok: false };
+  }
+}
+
+/** Text-only form, for callers that only consume what the model would see. */
+export async function dispatchTool(ctx: RunContext, name: string, args: Record<string, unknown>): Promise<string> {
+  return (await dispatchToolResult(ctx, name, args)).text;
 }
