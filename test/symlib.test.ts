@@ -491,6 +491,22 @@ describe('stale symbol-dir env override (#212)', () => {
     }
   });
 
+  it('falls back when the override names a file rather than a directory', async () => {
+    // `access` succeeds on a regular file, so a path like
+    // KICAD_SYMBOL_DIR=/etc/kicad.conf used to count as a resolved override:
+    // it suppressed the fallback and then satisfied no lookup, because every
+    // search joins `<lib>.kicad_sym` onto these entries.
+    const file = path.join(root, 'not-a-directory.txt');
+    await writeFile(file, 'x', 'utf8');
+    try {
+      const dirs = await symbolSearchDirs({ KICAD_SYMBOL_DIR: file }, root);
+      expect(dirs).not.toContain(file);
+      expect(dirs).toContain(versionDir);
+    } finally {
+      await rm(file, { force: true }).catch(() => {});
+    }
+  });
+
   it('falls back when every one of several overrides is stale', async () => {
     const dirs = await symbolSearchDirs(
       { KICAD_SYMBOL_DIR: `${root}/gone`, KICAD9_SYMBOL_DIR: `${root}/also-gone` },

@@ -133,6 +133,27 @@ describe('derived (extends) symbols', () => {
     const repo = await mkdtemp(path.join(tmpdir(), 'copperhead-irpower-'));
     const libs = await mkdtemp(path.join(tmpdir(), 'copperhead-irpower-libs-'));
     try {
+      // Real docs, and docsDir passed below, so the group and BOM cross-checks
+      // actually run. Without them this test passes even if the refusal stops
+      // recording the symbol first, because neither check would fire: the
+      // "exactly one finding" assertion is only meaningful when the paths that
+      // would produce the extra findings are live. PG1 is deliberately absent
+      // from BOM.md, which is what the isPower skip has to swallow.
+      await mkdir(path.join(repo, 'docs'), { recursive: true });
+      await writeFile(path.join(repo, 'docs', 'SUBSYSTEMS.md'), '# Subsystems\n\n## A\n\nThe only block.\n', 'utf8');
+      await writeFile(
+        path.join(repo, 'docs', 'BOM.md'),
+        [
+          '# BOM',
+          '',
+          '| Refdes | Value | Footprint | MPN | Rationale |',
+          '| --- | --- | --- | --- | --- |',
+          '| R1 | 1k | R_0603 | RC0603 | divider top |',
+          '| R2 | 1k | R_0603 | RC0603 | divider bottom |',
+          '',
+        ].join('\n'),
+        'utf8',
+      );
       await writeFile(
         path.join(libs, 'power.kicad_sym'),
         `(kicad_symbol_lib (version 20251024) (generator test)
@@ -149,8 +170,8 @@ describe('derived (extends) symbols', () => {
         JSON.stringify({
           version: 1,
           parts: [
-            { ref: 'R1', libId: 'Device:R', value: '1k', group: 'A' },
-            { ref: 'R2', libId: 'Device:R', value: '1k', group: 'A' },
+            { ref: 'R1', libId: 'Device:R', value: '1k', footprint: 'R_0603', group: 'A' },
+            { ref: 'R2', libId: 'Device:R', value: '1k', footprint: 'R_0603', group: 'A' },
             { ref: 'PG1', libId: 'power:GND', value: 'GND', group: 'A' },
           ],
           nets: [
@@ -163,6 +184,7 @@ describe('derived (extends) symbols', () => {
       const res = await draftSchematicToText({
         repoRoot: repo,
         schematic: 'b.kicad_sch',
+        docsDir: 'docs',
         symbolDirs: [SYMLIB, libs],
       });
       expect(res.ok).toBe(false);

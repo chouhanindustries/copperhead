@@ -93,10 +93,13 @@ export async function symbolSearchDirs(env = process.env, winRoot = 'C:/Program 
     // single fixed path here. Discovered below instead.
   ];
   const out: string[] = [];
+  // A DIRECTORY, not merely an existing path: `access` also succeeds on a
+  // regular file, and an override naming one would count as resolved, suppress
+  // the fallback below, and then satisfy no lookup at all, since every search
+  // joins `<lib>.kicad_sym` onto these entries.
   const addIfPresent = async (dir: string): Promise<void> => {
     try {
-      await access(dir);
-      if (!out.includes(dir)) out.push(dir);
+      if ((await stat(dir)).isDirectory() && !out.includes(dir)) out.push(dir);
     } catch {
       // not present on this machine; skip
     }
@@ -547,7 +550,9 @@ function schematicLibSymbols(root: SexpNode[]): { libId: string; pins: LibPin[] 
 }
 
 /**
- * Compare every lib_symbols entry in a schematic against the installed library.
+ * Compare every lib_symbols entry in a schematic against the installed library,
+ * falling back to the project's vendored cache for lib_ids no installed library
+ * provides (#212).
  * Returns one finding per divergence; an empty array means every resolvable
  * symbol matched. A part whose library is not installed is reported once (so
  * the model knows the check could not run for it) but never treated as a
@@ -607,8 +612,11 @@ export async function verifySchematicSymbols(
         libId: entry.libId,
         kind: 'no-symbol',
         detail: resolved.candidates.length
-          ? `"${entry.libId}" does not exist in the installed library — closest real symbols: ${resolved.candidates.join(', ')}. Use one of these lib_ids (KiCad renames symbols across versions).`
-          : `"${entry.libId}" does not exist in the installed library and no close match was found; confirm the lib_id.`,
+          // "installed or vendored": since #212 this search also covers the
+          // project's own sym-lib-cache, so a library found there would make
+          // "the installed library" name the wrong file to go fix.
+          ? `"${entry.libId}" does not exist in the installed or vendored symbol library. Closest real symbols: ${resolved.candidates.join(', ')}. Use one of these lib_ids (KiCad renames symbols across versions).`
+          : `"${entry.libId}" does not exist in the installed or vendored symbol library and no close match was found; confirm the lib_id.`,
       });
       continue;
     }
