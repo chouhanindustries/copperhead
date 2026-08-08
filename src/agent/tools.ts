@@ -354,6 +354,8 @@ export const TOOLS: ToolDef[] = [
         return 'no schematic configured; verify_symbols does not apply yet';
       const { findings, checked, skipped } = await verifySchematicSymbols(
         path.join(ctx.repoRoot, ctx.config.schematic),
+        process.env,
+        ctx.repoRoot,
       );
       if (!findings.length) {
         return `verify_symbols: ${checked} symbol(s) match the installed KiCad library. No divergences.`;

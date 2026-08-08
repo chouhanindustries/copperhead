@@ -2,7 +2,7 @@ import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { parseSexp, children, child, isList, type SexpNode, type Bounds } from '../sexp.js';
-import { symbolSearchDirs, findLibraryFile, findSymbolAcrossLibraries } from '../symlib.js';
+import { symbolSearchDirs, findLibraryFile, findSymbolAcrossLibraries, crossLibraryIds } from '../symlib.js';
 import { EMIT_VERSION, renameSymbolBlock } from '../emit.js';
 
 /**
@@ -201,21 +201,6 @@ export class SymbolResolutionError extends Error {
   }
 }
 
-/**
- * A part's library file is guessed wrong more often than the part itself is
- * misspelled (a chip's stock library nickname is not derivable from its part
- * number). Before failing outright, check every other stock/vendored library
- * for this exact part name; an exact hit elsewhere is a stronger signal than
- * a same-file substring guess, so it takes priority over `candidates`.
- * Returns corrected `lib_id`s (exact matches first) or an empty array.
- */
-async function crossLibrarySuggestions(name: string, lib: string, dirs: string[]): Promise<string[]> {
-  const matches = await findSymbolAcrossLibraries(name, dirs, lib);
-  const exact = matches.filter((m) => m.exact).map((m) => `${m.lib}:${m.name}`);
-  if (exact.length) return exact;
-  return matches.map((m) => `${m.lib}:${m.name}`);
-}
-
 export class SymbolSource {
   private cache = new Map<string, ResolvedSymbol>();
 
@@ -314,25 +299,30 @@ export class SymbolSource {
       const dirs = this.searchDirs ?? (await symbolSearchDirs());
       const file = await findLibraryFile(lib, dirs);
       if (!file) {
-        const elsewhere = await crossLibrarySuggestions(name, lib, dirs);
-        if (elsewhere.length) throw new SymbolResolutionError(libId, 'found-elsewhere', elsewhere);
+        const elsewhere = await findSymbolAcrossLibraries(name, dirs, lib);
+        const exactElsewhere = elsewhere.filter((m) => m.exact);
+        if (exactElsewhere.length) throw new SymbolResolutionError(libId, 'found-elsewhere', crossLibraryIds(exactElsewhere));
+        if (elsewhere.length) throw new SymbolResolutionError(libId, 'found-elsewhere', crossLibraryIds(elsewhere));
         throw new SymbolResolutionError(libId, 'no-library');
       }
       const libText = await readFile(file, 'utf8');
       block = extractSymbolBlock(libText, name);
       if (!block) {
-        // The guessed library exists and simply lacks this name, so its own
-        // near-matches are the most useful answer and come first: the caller
-        // named the right file and mistyped the part. Only when that file
-        // offers nothing is a different library worth suggesting — and only
-        // an exact hit there, since a cross-library *fuzzy* guess is weaker
-        // evidence than "you were close, in the right file".
+        // Evidence, strongest first: an exact match in a different library is
+        // unambiguous, so it outranks even a same-file substring guess — the
+        // guessed library is often full of single-letter generics ("R", "C",
+        // "L") that trivially substring-match almost any query, and would
+        // otherwise silently outrank a real cross-library answer. Same-file
+        // candidates come next (the caller named the right file and mistyped
+        // the part); a cross-library fuzzy hit is last resort.
+        const elsewhere = await findSymbolAcrossLibraries(name, dirs, lib);
+        const exactElsewhere = elsewhere.filter((m) => m.exact);
+        if (exactElsewhere.length) throw new SymbolResolutionError(libId, 'found-elsewhere', crossLibraryIds(exactElsewhere));
         const names = [...libText.matchAll(/^\s*\(symbol\s+"([^"]+)"/gm)].map((m) => m[1]!);
         const q = name.toLowerCase();
         const candidates = names.filter((k) => k.toLowerCase().includes(q) || q.includes(k.toLowerCase())).slice(0, 8);
         if (candidates.length) throw new SymbolResolutionError(libId, 'no-symbol', candidates);
-        const elsewhere = await crossLibrarySuggestions(name, lib, dirs);
-        if (elsewhere.length) throw new SymbolResolutionError(libId, 'found-elsewhere', elsewhere);
+        if (elsewhere.length) throw new SymbolResolutionError(libId, 'found-elsewhere', crossLibraryIds(elsewhere));
         throw new SymbolResolutionError(libId, 'no-symbol', candidates);
       }
       fromInstalled = true;

@@ -152,6 +152,24 @@ export interface CrossLibraryMatch {
   exact: boolean;
 }
 
+/** Cross-library matches, most-caller-useful first. */
+const CROSS_LIBRARY_CAP = 8;
+
+/**
+ * Reduce raw cross-library matches to the lib_ids worth suggesting: any exact
+ * hit is unambiguous evidence and crowds out fuzzy noise entirely (a query
+ * with one exact match and several fuzzy near-misses must report only the
+ * exact one, never a mix); with no exact hit, fuzzy candidates are offered but
+ * capped, matching the cap the same-file candidate list already uses, so a
+ * short or generic query (a single letter, a common prefix) cannot return
+ * dozens of unrelated libraries in one finding.
+ */
+export function crossLibraryIds(matches: CrossLibraryMatch[]): string[] {
+  const exact = matches.filter((m) => m.exact);
+  const chosen = exact.length ? exact : matches;
+  return chosen.slice(0, CROSS_LIBRARY_CAP).map((m) => `${m.lib}:${m.name}`);
+}
+
 /** Levenshtein edit distance, capped: returns `cap + 1` once the true distance
  * would exceed `cap`, so a caller doing a cheap "is this close enough" check
  * never pays for the full O(n·m) table on two names that are obviously
@@ -301,7 +319,7 @@ export async function resolveLibrarySymbol(
   const file = await findLibraryFile(lib, dirs);
   if (!file) {
     const elsewhere = await findSymbolAcrossLibraries(name, dirs, lib);
-    if (elsewhere.length) return { status: 'found-elsewhere', libIds: elsewhere.map((m) => `${m.lib}:${m.name}`) };
+    if (elsewhere.length) return { status: 'found-elsewhere', libIds: crossLibraryIds(elsewhere) };
     return { status: 'no-library' };
   }
   const root = parseSexp(await readFile(file, 'utf8'))[0];
@@ -322,10 +340,18 @@ export async function resolveLibrarySymbol(
     current = base;
   }
 
-  // The guessed library exists and simply lacks this name, so its own
-  // near-matches are the most useful answer and come first: the caller named
-  // the right file and mistyped the part. Only when that file offers nothing
-  // is a different library worth suggesting (mirrors SymbolSource.resolve).
+  // Evidence, strongest first: an exact match in a different library is
+  // unambiguous (the file name was the mistake, not the part), so it outranks
+  // even a same-file substring guess — the guessed library is often full of
+  // single-letter generics ("R", "C", "L") that trivially substring-match
+  // almost any query, and would otherwise silently outrank a real answer.
+  // Same-file candidates come next: the caller named the right file and
+  // mistyped the part, which is stronger evidence than a fuzzy guess in a
+  // library the caller never named. A cross-library fuzzy hit is last resort.
+  const elsewhere = await findSymbolAcrossLibraries(name, dirs, lib);
+  const exactElsewhere = elsewhere.filter((m) => m.exact);
+  if (exactElsewhere.length) return { status: 'found-elsewhere', libIds: crossLibraryIds(exactElsewhere) };
+
   const q = name.toLowerCase();
   const candidates = [...symbols.keys()]
     .filter((k) => {
@@ -335,15 +361,17 @@ export async function resolveLibrarySymbol(
     .slice(0, 8);
   if (candidates.length) return { status: 'no-symbol', candidates };
 
-  const elsewhere = await findSymbolAcrossLibraries(name, dirs, lib);
-  if (elsewhere.length) return { status: 'found-elsewhere', libIds: elsewhere.map((m) => `${m.lib}:${m.name}`) };
+  if (elsewhere.length) return { status: 'found-elsewhere', libIds: crossLibraryIds(elsewhere) };
 
   return { status: 'no-symbol', candidates };
 }
 
 export interface SymbolFinding {
   libId: string;
-  kind: 'no-library' | 'no-symbol' | 'pin-count' | 'pin-mismatch';
+  /** 'wrong-library' is a real issue to reconcile (an actionable correction),
+   * unlike 'no-library' (nothing could be checked) — keeping it distinct means
+   * a caller's issue count does not silently drop it into neither bucket. */
+  kind: 'no-library' | 'no-symbol' | 'wrong-library' | 'pin-count' | 'pin-mismatch';
   detail: string;
 }
 
@@ -357,18 +385,55 @@ function schematicLibSymbols(root: SexpNode[]): { libId: string; pins: LibPin[] 
   }));
 }
 
+// Must match SYM_CACHE_DIR in ../kicad/draft/symsource.ts. Not imported from
+// there: symsource.ts already imports from this module, and the constant is
+// stable enough (it is part of the on-disk project layout, D4) that a literal
+// here is safer than risking a cycle.
+const VENDOR_CACHE_DIR = 'sym-lib-cache';
+
+/**
+ * Library nicknames the project has vendored into `sym-lib-cache/` (the
+ * drafting engine's own generated power symbols, or a stock symbol it copied
+ * in on first use). A nickname absent from every installed search dir is not
+ * necessarily a *wrong* library: it may be deliberately absent, because the
+ * project vendors it instead. Returns an empty set (never throws) when the
+ * directory does not exist or is unreadable, so a caller that cannot check
+ * simply treats nothing as vendored rather than failing the whole check.
+ */
+async function vendoredLibNames(repoRoot: string): Promise<Set<string>> {
+  try {
+    const entries = await readdir(path.join(repoRoot, VENDOR_CACHE_DIR));
+    return new Set(entries.filter((e) => e.endsWith('.kicad_sym')).map((e) => e.slice(0, -'.kicad_sym'.length)));
+  } catch {
+    return new Set();
+  }
+}
+
 /**
  * Compare every lib_symbols entry in a schematic against the installed library.
  * Returns one finding per divergence; an empty array means every resolvable
  * symbol matched. A part whose library is not installed is reported once (so
  * the model knows the check could not run for it) but never treated as a
  * mismatch — absence of the library is not evidence of wrong pins.
+ *
+ * @param repoRoot project root, so a nickname the project deliberately vendors
+ *   (the drafting engine's generated power symbols, `copperhead_power`) is
+ *   never reported as "wrong library, use X instead": that library is absent
+ *   from the search dirs on purpose, and telling the agent to switch away from
+ *   its own vendored symbols would either churn for nothing or break the
+ *   deterministic-vendoring guarantee (design D4). Optional for callers that
+ *   cannot supply it (older call sites, ad hoc checks): those simply cannot
+ *   distinguish "deliberately vendored" from "genuinely wrong", so they get
+ *   the plain `no-library` treatment for every unresolvable nickname, which
+ *   is always safe, just less specific for the genuinely-wrong case.
  */
 export async function verifySchematicSymbols(
   schPath: string,
   env = process.env,
+  repoRoot?: string,
 ): Promise<{ findings: SymbolFinding[]; checked: number; skipped: number }> {
   const dirs = await symbolSearchDirs(env);
+  const vendored = repoRoot ? await vendoredLibNames(repoRoot) : new Set<string>();
   const root = parseSexp(await readFile(schPath, 'utf8'))[0];
   const findings: SymbolFinding[] = [];
   if (root === undefined || !isList(root)) return { findings, checked: 0, skipped: 0 };
@@ -377,7 +442,8 @@ export async function verifySchematicSymbols(
   let skipped = 0;
   for (const entry of schematicLibSymbols(root)) {
     if (!entry.libId) continue;
-    const resolved = await resolveLibrarySymbol(entry.libId, dirs);
+    const guessedLib = entry.libId.includes(':') ? entry.libId.slice(0, entry.libId.indexOf(':')) : '';
+    const resolved = vendored.has(guessedLib) ? ({ status: 'no-library' } as const) : await resolveLibrarySymbol(entry.libId, dirs);
     if (resolved.status === 'no-library') {
       skipped++;
       findings.push({
@@ -400,7 +466,7 @@ export async function verifySchematicSymbols(
     if (resolved.status === 'found-elsewhere') {
       findings.push({
         libId: entry.libId,
-        kind: 'no-library',
+        kind: 'wrong-library',
         detail: `"${entry.libId}" names the wrong library, not the wrong part: use ${resolved.libIds.join(' or ')} instead.`,
       });
       continue;
