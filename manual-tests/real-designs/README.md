@@ -58,9 +58,9 @@ That test tells you whether anything broke. This directory is for looking at wha
 
 ## What the corpus has found so far
 
-Against KiCad 10.0.4's demos, three boards draft with connectivity exact and the rest refuse. The refusals are worth reading, because they are the honest map of what the engine cannot yet do:
+Against KiCad 10.0.4's demos, eleven of fifteen boards draft with connectivity exact (the remaining four were still sweeping when this was written). Each class of refusal, once understood, became an engine or harness change:
 
-- **Multi-unit symbols** block seven of fifteen projects (opamps, gate packs, multi-gang jumpers). Correct as things stand, since a symbol's units share pin coordinates and drafting one would merge nets silently. Tracked in #218, with the finding that in all seven this was the *only* refusal.
+- **Multi-unit symbols** blocked seven of fifteen projects (opamps, gate packs, multi-gang jumpers), and in all seven it was the *only* refusal (#218). The engine now places each unit as its own instance, which cleared the whole set.
 - **Symbol resolution** blocked five, all boards drawn against private libraries that were never published. The harness now rebuilds those libraries from the copies every sheet embeds in its `lib_symbols` section ([test/support/embedded-libs.ts](../../test/support/embedded-libs.ts)), so they resolve without being installed; `royalblue54L_feather` and `cm5_minima` draft cleanly because of it.
 - **Merged nets at routing** blocked two, `cm5_minima` (+5V shorted to GND) and `interf_u` (/PC-RD to /WR_REG), until #217. Both now draft with connectivity exact.
 

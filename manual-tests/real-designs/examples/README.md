@@ -16,13 +16,20 @@ Each example holds:
 
 ## The boards, and why these
 
-Every board here drafts with connectivity exact (lost=0, gained=0), and every one carries a licence that permits redistribution:
+Every board here drafts with connectivity exact (lost=0, gained=0), and every one carries a licence that permits redistribution. "KiCad demo" means a board with no licence file of its own that the KiCad project distributes in the `kicad-demos` package; those are included on that provenance.
 
 | Board | Parts | Licence |
 | --- | --- | --- |
 | `cm5_minima` | 84 | CERN-OHL-S 2.0 (see its `LICENSE.txt`) |
-| `interf_u` | 24 | none in-tree; a KiCad-native demo, distributed with KiCad by the KiCad project |
+| `complex_hierarchy` | 68 | KiCad demo |
+| `ecc83` | 15 | KiCad demo |
+| `interf_u` | 24 | KiCad demo |
+| `kit-dev-coldfire-xilinx_5213` | 160 | KiCad demo |
+| `multichannel` | 114 | KiCad demo |
+| `pic_programmer` | 63 | KiCad demo |
 | `royalblue54L_feather` | 71 | CERN-OHL-P 2.0 (see its `LICENSE`) |
+| `sonde xilinx` | 25 | KiCad demo |
+| `tiny_tapeout` | 150 | Apache-2.0 (see its `LICENSE.txt`) |
 
 These licences apply to the boards' design content, including the renders and the drafted schematic derived from it, not to the rest of this repository. `stickhub`, the other board that drafts cleanly, is CC BY-NC-SA and stays out of the repo: run `npm run realdesigns -- stickhub` to reproduce it locally.
 
