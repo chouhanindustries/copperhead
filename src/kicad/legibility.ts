@@ -326,7 +326,12 @@ export async function checkLegibility(rootSch: string, opts: CheckLegibilityOpti
   const kept: LegibilityFinding[] = [];
   const perKey = new Map<string, number>();
   for (const f of raw) {
-    const key = `${f.kind} ${f.sheet}`;
+    // Separator written as an escape, never as a literal NUL byte: a raw NUL in
+    // the source makes git-grep, ripgrep and most editors classify this whole file
+    // as binary and silently skip it, so a search for anything in here comes back
+    // empty with no error rather than no match. Same string at runtime, and still a
+    // separator no kind or sheet name can contain.
+    const key = `${f.kind}\u0000${f.sheet}`;
     const n = (perKey.get(key) ?? 0) + 1;
     perKey.set(key, n);
     if (n <= th.familyCap) kept.push(f);
