@@ -4,6 +4,7 @@ import path from 'node:path';
 import {
   readSheetGeometry,
   pinAbsolute,
+  pinsOfUnit,
   type Bounds,
   type SheetGeometry,
   type TextItem,
@@ -371,8 +372,10 @@ function checkSheet(
 
   // --- geometry prep ---
   const syms: SymbolGeom[] = sheet.symbols.map((sym) => {
-    const lib = sheet.libBounds.get(sym.libId) ?? null;
-    const pins = (sheet.libPins.get(sym.libId) ?? []).map((p) => pinAbsolute(sym.at, sym.mirror, p));
+    // a placed unit of a multi-unit symbol draws only its own unit's body and
+    // pins; measuring it with the whole package would flag phantom collisions
+    const lib = sheet.libBounds.get(`${sym.libId}#${sym.unit}`) ?? sheet.libBounds.get(sym.libId) ?? null;
+    const pins = pinsOfUnit(sheet.libPins.get(sym.libId) ?? [], sym.unit).map((p) => pinAbsolute(sym.at, sym.mirror, p));
     // A body-less symbol (graphics-free lib entry) falls back to its pin extent
     // so geometric families still see it; a symbol with neither is skipped.
     const body = lib

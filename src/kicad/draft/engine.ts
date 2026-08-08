@@ -202,6 +202,10 @@ export function findWireContactMerges(
 
 interface Placed {
   part: IntentPart;
+  /** The drawn refdes (the part's ref, shared by every unit instance). */
+  refDes: string;
+  /** KiCad unit number for a multi-unit instance; null for single-unit parts. */
+  unit: number | null;
   sym: ResolvedSymbol;
   /** Origin, mm (grid multiple). */
   x: number;
@@ -209,6 +213,23 @@ interface Placed {
   body: Bounds; // schematic space, absolute
   cellW: number; // units
   cellH: number; // units
+}
+
+/**
+ * One placeable thing. A single-unit part is one instance whose key IS its
+ * refdes. A multi-unit part (an opamp, a gate pack) becomes one instance per
+ * unit, keyed `REF#unit`, each carrying only that unit's pins and body — the
+ * units share symbol-space pin coordinates, so placing the symbol once would
+ * overlay unrelated pins on one point and silently merge their nets (#218).
+ * Net endpoints stay `REF.PIN` strings; pin numbers are package-unique, so
+ * each endpoint resolves to exactly one instance.
+ */
+interface Instance {
+  key: string;
+  ref: string;
+  unit: number | null;
+  part: IntentPart;
+  sym: ResolvedSymbol;
 }
 
 const bodyBoundsOf = (sym: ResolvedSymbol): Bounds => {
@@ -310,6 +331,65 @@ export function draftSchematicPlacement(validated: ValidatedIntent, projectName:
 
   // ---------- net classification (deterministic, visible in the report) ----------
   const partByRef = new Map(intent.parts.map((p) => [p.ref, p]));
+
+  // ---------- instance expansion (multi-unit parts, #218) ----------
+  // Units none of whose OWN pins a net or no-connect references are left
+  // unplaced (the intent says nothing about them, and drawing them would add
+  // unconnected pins the intent never declared). Common (unit-0) pins do not
+  // count as a unit's own: they appear in every unit's view because KiCad
+  // draws them on every placed unit — an LM358's V+/V- reaching the rails
+  // must not drag an unused second opamp onto the sheet. A multi-unit part
+  // with NO referenced pins at all places all its units, so the part stays
+  // visible like an unwired single-unit part does.
+  const usedEps = new Set<string>();
+  for (const net of intent.nets) for (const ep of net.pins) if (typeof ep === 'string') usedEps.add(ep);
+  for (const ep of intent.noConnect ?? []) if (typeof ep === 'string') usedEps.add(ep);
+  /** Endpoints of common (unit-0) pins: drawn — and wired — on EVERY placed
+   * instance of their part. */
+  const commonEps = new Set<string>();
+  const instances: Instance[] = intent.parts.flatMap((p): Instance[] => {
+    const sym = symbols.get(p.ref);
+    if (!sym) return [];
+    if (!sym.multiUnit || !sym.units?.length) return [{ key: p.ref, ref: p.ref, unit: null, part: p, sym }];
+    const common = new Set(sym.commonUnitPins ?? []);
+    for (const n of common) commonEps.add(`${p.ref}.${n}`);
+    const referenced = sym.units.filter((u) =>
+      u.pins.some((pin) => !common.has(pin.number) && usedEps.has(`${p.ref}.${pin.number}`)),
+    );
+    return (referenced.length ? referenced : sym.units).map((u) => ({
+      key: `${p.ref}#${u.unit}`,
+      ref: p.ref,
+      unit: u.unit,
+      part: p,
+      sym: { ...sym, pins: u.pins, body: u.body },
+    }));
+  });
+  const instByKey = new Map(instances.map((i) => [i.key, i]));
+  /** Placed instances per refdes, for expanding a common pin's endpoint. */
+  const instancesOfRef = new Map<string, Instance[]>();
+  for (const inst of instances) instancesOfRef.set(inst.ref, [...(instancesOfRef.get(inst.ref) ?? []), inst]);
+  const epInstKey = new Map<string, string>();
+  for (const inst of instances) {
+    for (const pin of inst.sym.pins) {
+      const ep = `${inst.ref}.${pin.number}`;
+      if (!commonEps.has(ep)) epInstKey.set(ep, inst.key);
+    }
+  }
+  /** Placement-instance key owning endpoint REF.PIN. A common pin resolves to
+   * its part's FIRST placed instance (single-instance callers — layering,
+   * idiom passes — need one answer; the wiring passes use `expandEp` and
+   * reach every appearance). Falls back to the ref itself so lookups fail
+   * softly like before. */
+  const instKeyOf = (ref: string, pin: string): string =>
+    epInstKey.get(`${ref}.${pin}`) ?? instancesOfRef.get(ref)?.[0]?.key ?? ref;
+  /** Every placed instance carrying endpoint REF.PIN: one for a unit's own
+   * pin, all of the part's instances for a common pin. */
+  const expandEp = (ref: string, pin: string): Instance[] => {
+    if (commonEps.has(`${ref}.${pin}`)) return instancesOfRef.get(ref) ?? [];
+    const inst = instByKey.get(instKeyOf(ref, pin));
+    return inst ? [inst] : [];
+  };
+
   const pinLookup = (ep: string): DraftPin | null => {
     const m = /^([^.]+)\.(.+)$/.exec(ep);
     if (!m) return null;
@@ -368,12 +448,13 @@ export function draftSchematicPlacement(validated: ValidatedIntent, projectName:
    * to see a chain's rail/ground end, which signalNetOfPin cannot). */
   const netByEndpoint = new Map<string, IntentNet>();
   for (const net of intent.nets) for (const ep of net.pins) netByEndpoint.set(ep, net);
-  const labelExtents = (refs: string[]): { left: number; right: number } => {
+  const labelExtents = (keys: string[]): { left: number; right: number } => {
     let left = 0;
     let right = 0;
-    for (const ref of refs) {
-      for (const pin of symbols.get(ref)?.pins ?? []) {
-        const net = signalNetOfPin.get(`${ref}.${pin.number}`);
+    for (const key of keys) {
+      const inst = instByKey.get(key);
+      for (const pin of inst?.sym.pins ?? []) {
+        const net = signalNetOfPin.get(`${inst!.ref}.${pin.number}`);
         if (!net) continue;
         const o = outward(pin);
         if (o.dx === 0) continue;
@@ -410,7 +491,7 @@ export function draftSchematicPlacement(validated: ValidatedIntent, projectName:
   for (const gname of groupNames) {
     groupExtents.set(
       gname,
-      labelExtents(intent.parts.filter((p) => p.group === gname && !symbols.get(p.ref)!.isPower).map((p) => p.ref)),
+      labelExtents(instances.filter((i) => i.part.group === gname && !i.sym.isPower).map((i) => i.key)),
     );
   }
 
@@ -419,19 +500,23 @@ export function draftSchematicPlacement(validated: ValidatedIntent, projectName:
     if (prevGroup !== null) {
       groupX += widenBy(groupExtents.get(prevGroup)!.right, groupExtents.get(gname)!.left, 2 * MARGIN + GROUP_GAP);
     }
-    const members = intent.parts.filter(
-      (p) => p.group === gname && !symbols.get(p.ref)!.isPower && !decapOwner.has(p.ref),
+    const members = instances.filter(
+      (i) => i.part.group === gname && !i.sym.isPower && !decapOwner.has(i.key),
     );
-    const caps = intent.parts.filter((p) => p.group === gname && decapOwner.has(p.ref));
-    for (const p of [...members, ...caps]) groupOf.set(p.ref, gname);
+    const caps = instances.filter((i) => i.part.group === gname && decapOwner.has(i.key));
+    for (const i of [...members, ...caps]) groupOf.set(i.key, gname);
+    const memberKeySet = new Set(members.map((m) => m.key));
 
     // layer assignment: connectors at depth 0; signal edges push depth forward
-    const depth = new Map<string, number>(members.map((m) => [m.ref, isConnector(m) ? 0 : 1]));
+    const depth = new Map<string, number>(members.map((m) => [m.key, isConnector(m.part) ? 0 : 1]));
     const edges: { from: string; to: string }[] = [];
     for (const net of signalNets) {
       const eps = net.pins
-        .map((ep) => /^([^.]+)\./.exec(ep)?.[1] ?? '')
-        .filter((r) => members.some((m) => m.ref === r));
+        .map((ep) => {
+          const m = /^([^.]+)\.(.+)$/.exec(ep);
+          return m ? instKeyOf(m[1]!, m[2]!) : '';
+        })
+        .filter((k) => memberKeySet.has(k));
       const uniq = [...new Set(eps)];
       for (let i = 0; i < uniq.length; i++) {
         for (let j = i + 1; j < uniq.length; j++) {
@@ -452,7 +537,7 @@ export function draftSchematicPlacement(validated: ValidatedIntent, projectName:
       if (!changed) break;
     }
     const depths = [...new Set([...depth.values()])].sort((a, b) => a - b);
-    const columns: string[][] = depths.map((d) => members.filter((m) => depth.get(m.ref) === d).map((m) => m.ref));
+    const columns: string[][] = depths.map((d) => members.filter((m) => depth.get(m.key) === d).map((m) => m.key));
 
     // barycenter row ordering (two sweeps), refdes as the deterministic tie
     const rowOf = new Map<string, number>();
@@ -475,8 +560,8 @@ export function draftSchematicPlacement(validated: ValidatedIntent, projectName:
     // cells: sized from body plus margins, positions snapped to the grid
     const cellDims = new Map<string, { w: number; h: number; body: Bounds }>();
     for (const m of members) {
-      const b = bodyBoundsOf(symbols.get(m.ref)!);
-      cellDims.set(m.ref, {
+      const b = bodyBoundsOf(m.sym);
+      cellDims.set(m.key, {
         w: ceilU(b.maxX - b.minX) + 2 * MARGIN,
         h: ceilU(b.maxY - b.minY) + 2 * MARGIN,
         body: b,
@@ -496,10 +581,12 @@ export function draftSchematicPlacement(validated: ValidatedIntent, projectName:
         // origin so the body centers on the cell center, snapped to grid
         const ox = grid(cx - Math.round((b.minX + b.maxX) / 2 / U));
         const oy = grid(cy + Math.round((b.minY + b.maxY) / 2 / U));
-        const sym = symbols.get(ref)!;
+        const inst = instByKey.get(ref)!;
         placed.set(ref, {
-          part: partByRef.get(ref)!,
-          sym,
+          part: inst.part,
+          refDes: inst.ref,
+          unit: inst.unit,
+          sym: inst.sym,
           x: ox,
           y: oy,
           body: { minX: ox + b.minX, minY: oy - b.maxY, maxX: ox + b.maxX, maxY: oy - b.minY },
@@ -514,18 +601,20 @@ export function draftSchematicPlacement(validated: ValidatedIntent, projectName:
     }
 
     // decoupling rows: caps in a uniform row under their owner (or the group)
-    const capRefs = caps.map((c) => c.ref).sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+    const capRefs = caps.map((c) => c.key).sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
     if (capRefs.length) {
       let capX = groupX;
       const capY = groupMaxY + MARGIN + 4;
       for (const ref of capRefs) {
-        const sym = symbols.get(ref)!;
-        const b = bodyBoundsOf(sym);
+        const inst = instByKey.get(ref)!;
+        const b = bodyBoundsOf(inst.sym);
         const ox = grid(capX + MARGIN);
         const oy = grid(capY + MARGIN);
         placed.set(ref, {
-          part: partByRef.get(ref)!,
-          sym,
+          part: inst.part,
+          refDes: inst.ref,
+          unit: inst.unit,
+          sym: inst.sym,
           x: ox,
           y: oy,
           body: { minX: ox + b.minX, minY: oy - b.maxY, maxX: ox + b.maxX, maxY: oy - b.minY },
@@ -545,40 +634,43 @@ export function draftSchematicPlacement(validated: ValidatedIntent, projectName:
     // rearrange exactly those shapes after column placement, both no-ops
     // unless the textbook topology is present, and both collision-checked so
     // a failed fit falls back to the column position rather than overlapping.
-    const inGroup = new Set(members.map((m) => m.ref));
+    const inGroup = new Set(members.map((m) => m.key));
     const idiomPlaced = new Set<string>();
     const CHAIN_GAP = 4 * U;
-    /** The two pins of a vertically-pinned two-lead part, or null. */
-    const vertPins = (ref: string): { top: DraftPin; bot: DraftPin } | null => {
-      const pins = symbols.get(ref)?.pins ?? [];
+    /** The two pins of a vertically-pinned two-lead instance, or null. */
+    const vertPins = (key: string): { top: DraftPin; bot: DraftPin } | null => {
+      const pins = placed.get(key)?.sym.pins ?? [];
       if (pins.length !== 2) return null;
       const top = pins.find((p) => outward(p).dy === -1);
       const bot = pins.find((p) => outward(p).dy === 1);
       return top && bot ? { top, bot } : null;
     };
-    const isCrystal = (ref: string): boolean => /crystal|reson/i.test(partByRef.get(ref)?.libId ?? '');
-    /** A part the chain pass may move: two vertical leads, in this group, not
-     * already spoken for by the decap row or the crystal template. */
-    const chainable = (ref: string): boolean =>
-      inGroup.has(ref) && !decapOwner.has(ref) && !idiomPlaced.has(ref) && !isCrystal(ref) && vertPins(ref) !== null;
-    const parseEp = (ep: string): { ref: string; pin: string } | null => {
+    const isCrystal = (key: string): boolean => /crystal|reson/i.test(placed.get(key)?.part.libId ?? '');
+    /** An instance the chain pass may move: two vertical leads, in this group,
+     * not already spoken for by the decap row or the crystal template. */
+    const chainable = (key: string): boolean =>
+      inGroup.has(key) && !decapOwner.has(key) && !idiomPlaced.has(key) && !isCrystal(key) && vertPins(key) !== null;
+    /** Endpoint REF.PIN for an instance's pin (the base refdes, never the key). */
+    const epOf = (key: string, pin: string): string => `${placed.get(key)?.refDes ?? key}.${pin}`;
+    const parseEp = (ep: string): { ref: string; pin: string; key: string } | null => {
       const m = /^([^.]+)\.(.+)$/.exec(ep);
-      return m ? { ref: m[1]!, pin: m[2]! } : null;
+      return m ? { ref: m[1]!, pin: m[2]!, key: instKeyOf(m[1]!, m[2]!) } : null;
     };
     const classOf = (name: string): NetClass => netClasses.get(name)?.cls ?? 'signal';
     const padOverlap = (a: Bounds, b: Bounds, pad: number): boolean =>
       a.minX < b.maxX + pad && a.maxX > b.minX - pad && a.minY < b.maxY + pad && a.maxY > b.minY - pad;
-    /** Candidate placement putting `ref`'s TOP pin connection point at (x, y). */
-    const candidateAt = (ref: string, x: number, y: number): Placed => {
-      const sym = symbols.get(ref)!;
-      const v = vertPins(ref)!;
-      const b = bodyBoundsOf(sym);
+    /** Candidate placement putting `key`'s TOP pin connection point at (x, y). */
+    const candidateAt = (key: string, x: number, y: number): Placed => {
+      const prev = placed.get(key)!;
+      const v = vertPins(key)!;
+      const b = bodyBoundsOf(prev.sym);
       const ox = x - v.top.x;
       const oy = y + v.top.y;
-      const prev = placed.get(ref)!;
       return {
         part: prev.part,
-        sym,
+        refDes: prev.refDes,
+        unit: prev.unit,
+        sym: prev.sym,
         x: ox,
         y: oy,
         body: { minX: ox + b.minX, minY: oy - b.maxY, maxX: ox + b.maxX, maxY: oy - b.minY },
@@ -600,11 +692,11 @@ export function draftSchematicPlacement(validated: ValidatedIntent, projectName:
     };
     /** Every endpoint of every net a set of parts touches (the chain's own
      * connection points, allowed to sit on its axis by definition). */
-    const ownEndpoints = (refs: Iterable<string>): Set<string> => {
+    const ownEndpoints = (keys: Iterable<string>): Set<string> => {
       const eps = new Set<string>();
-      for (const ref of refs) {
-        for (const pin of symbols.get(ref)?.pins ?? []) {
-          const net = netByEndpoint.get(`${ref}.${pin.number}`);
+      for (const key of keys) {
+        for (const pin of placed.get(key)?.sym.pins ?? []) {
+          const net = netByEndpoint.get(epOf(key, pin.number));
           for (const ep of net?.pins ?? []) eps.add(ep);
         }
       }
@@ -629,7 +721,7 @@ export function draftSchematicPlacement(validated: ValidatedIntent, projectName:
     ): boolean => {
       for (const [oref, opl] of placed) {
         for (const pin of opl.sym.pins) {
-          const ep = `${oref}.${pin.number}`;
+          const ep = `${opl.refDes}.${pin.number}`;
           const net = netByEndpoint.get(ep);
           if (!net) continue;
           const o = outward(pin);
@@ -704,23 +796,22 @@ export function draftSchematicPlacement(validated: ValidatedIntent, projectName:
     // crystal's pins are symmetric about its body, so the two caps come out
     // mirror-placed at equal offsets and a common height by construction.
     for (const m of members) {
-      if (!isCrystal(m.ref)) continue;
-      const xpl = placed.get(m.ref);
-      const xsym = symbols.get(m.ref);
-      if (!xpl || !xsym || xsym.pins.length !== 2) continue;
+      if (!isCrystal(m.key)) continue;
+      const xpl = placed.get(m.key);
+      if (!xpl || xpl.sym.pins.length !== 2) continue;
       const moves = new Map<string, Placed>();
       const segments: { axisX: number; ys: number[] }[] = [];
       const clearBoxes: Bounds[] = [];
-      for (const pin of xsym.pins) {
+      for (const pin of xpl.sym.pins) {
         const o = outward(pin);
         if (o.dx === 0) continue;
         const net = netByEndpoint.get(`${m.ref}.${pin.number}`);
         if (!net || classOf(net.name) !== 'signal') continue;
         const cap = net.pins
           .map(parseEp)
-          .find((e): e is { ref: string; pin: string } => {
-            if (!e || e.ref === m.ref || !chainable(e.ref) || moves.has(e.ref)) return false;
-            const v = vertPins(e.ref)!;
+          .find((e): e is { ref: string; pin: string; key: string } => {
+            if (!e || e.key === m.key || !chainable(e.key) || moves.has(e.key)) return false;
+            const v = vertPins(e.key)!;
             if (e.pin !== v.top.number) return false; // crystal node must enter the cap's top lead
             const other = netByEndpoint.get(`${e.ref}.${v.bot.number}`);
             return other !== undefined && classOf(other.name) !== 'signal';
@@ -728,9 +819,9 @@ export function draftSchematicPlacement(validated: ValidatedIntent, projectName:
         if (!cap) continue;
         const at = pinAt(xpl, pin);
         const axisX = at.x + o.dx * STUB * U;
-        const cand = candidateAt(cap.ref, axisX, at.y + CHAIN_GAP);
-        const v = vertPins(cap.ref)!;
-        moves.set(cap.ref, cand);
+        const cand = candidateAt(cap.key, axisX, at.y + CHAIN_GAP);
+        const v = vertPins(cap.key)!;
+        moves.set(cap.key, cand);
         segments.push({ axisX, ys: [at.y, cand.y - v.bot.y] });
         clearBoxes.push(powerEndBox(axisX, cand.y - v.bot.y, 1)); // the ground symbol below the cap
       }
@@ -754,34 +845,34 @@ export function draftSchematicPlacement(validated: ValidatedIntent, projectName:
       for (;;) {
         const v = vertPins(current)!;
         const pinN = dir === 'up' ? v.top.number : v.bot.number;
-        const net = netByEndpoint.get(`${current}.${pinN}`);
+        const net = netByEndpoint.get(epOf(current, pinN));
         if (!net) return { kind: 'open' }; // declared no-connect or unused
         if (classOf(net.name) !== 'signal') return { kind: 'power' };
         if (net.pins.length !== 2) return { kind: 'invalid' }; // a tapped node is not a series chain
-        const otherEp = net.pins.map(parseEp).find((e) => e !== null && e.ref !== current);
+        const otherEp = net.pins.map(parseEp).find((e) => e !== null && e.key !== current);
         if (!otherEp) return { kind: 'invalid' };
-        const opl = placed.get(otherEp.ref);
-        if (!opl || groupOf.get(otherEp.ref) !== gname) return { kind: 'invalid' };
-        if (chainable(otherEp.ref) && !chain.includes(otherEp.ref)) {
-          const ov = vertPins(otherEp.ref)!;
+        const opl = placed.get(otherEp.key);
+        if (!opl || groupOf.get(otherEp.key) !== gname) return { kind: 'invalid' };
+        if (chainable(otherEp.key) && !chain.includes(otherEp.key)) {
+          const ov = vertPins(otherEp.key)!;
           // the link must enter through the lead facing the chain, or the
           // drawn run would have to cross the part's own body
           if (otherEp.pin !== (dir === 'up' ? ov.bot.number : ov.top.number)) return { kind: 'invalid' };
-          if (dir === 'up') chain.unshift(otherEp.ref);
-          else chain.push(otherEp.ref);
-          current = otherEp.ref;
+          if (dir === 'up') chain.unshift(otherEp.key);
+          else chain.push(otherEp.key);
+          current = otherEp.key;
           continue;
         }
-        const pin = symbols.get(otherEp.ref)?.pins.find((p) => p.number === otherEp.pin);
-        if (!pin || chain.includes(otherEp.ref)) return { kind: 'invalid' };
-        return { kind: 'anchor', ref: otherEp.ref, pin };
+        const pin = opl.sym.pins.find((p) => p.number === otherEp.pin);
+        if (!pin || chain.includes(otherEp.key)) return { kind: 'invalid' };
+        return { kind: 'anchor', ref: otherEp.key, pin };
       }
     };
     const chained = new Set<string>();
     for (const m of members) {
-      if (!chainable(m.ref) || chained.has(m.ref)) continue;
-      const chain = [m.ref];
-      const topEnd = walk(m.ref, 'up', chain);
+      if (!chainable(m.key) || chained.has(m.key)) continue;
+      const chain = [m.key];
+      const topEnd = walk(m.key, 'up', chain);
       const bottomEnd = walk(chain[chain.length - 1]!, 'down', chain);
       for (const ref of chain) chained.add(ref);
       if (topEnd.kind === 'invalid' || bottomEnd.kind === 'invalid') continue;
@@ -818,7 +909,7 @@ export function draftSchematicPlacement(validated: ValidatedIntent, projectName:
         // Bounded lift: when a connection row would sit on a foreign stub's
         // crossing (axisClear's segment check), raise the whole stack a grid
         // row at a time rather than shipping the contact or losing the idiom.
-        const netOf = (ref: string, pinN: string): string => netByEndpoint.get(`${ref}.${pinN}`)?.name ?? '';
+        const netOf = (key: string, pinN: string): string => netByEndpoint.get(epOf(key, pinN))?.name ?? '';
         for (let lift = 0; lift < 3; lift++) {
           let up = s.y - CHAIN_GAP - lift * 2 * U;
           const moves = new Map<string, Placed>();
@@ -850,7 +941,7 @@ export function draftSchematicPlacement(validated: ValidatedIntent, projectName:
         cursor = topAt.y;
       }
       const cursor0 = cursor;
-      const netOf2 = (ref: string, pinN: string): string => netByEndpoint.get(`${ref}.${pinN}`)?.name ?? '';
+      const netOf2 = (key: string, pinN: string): string => netByEndpoint.get(epOf(key, pinN))?.name ?? '';
       for (let lift = 0; lift < 3; lift++) {
         cursor = cursor0 + lift * 2 * U;
         const moves = new Map<string, Placed>();
@@ -883,7 +974,7 @@ export function draftSchematicPlacement(validated: ValidatedIntent, projectName:
       }
     }
 
-    const memberRefs = [...members.map((m) => m.ref), ...capRefs];
+    const memberRefs = [...members.map((m) => m.key), ...capRefs];
     const cells = memberRefs.map((r) => placed.get(r)!);
     if (cells.length) {
       const minX = Math.min(...cells.map((c) => c.body.minX)) - MARGIN * U;
@@ -1010,12 +1101,17 @@ export function draftSchematicPlacement(validated: ValidatedIntent, projectName:
   let flgSeq = 0;
   const endpointsOf = (net: IntentNet): { ref: string; pin: DraftPin; at: { x: number; y: number } }[] => {
     const eps = net.pins
-      .map((ep) => {
+      // a common (unit-0) pin is drawn on every placed instance of its part;
+      // every appearance is wired to this same net, so the appearances stay
+      // one electrical point and no drawn pin end dangles
+      .flatMap((ep) => {
         const m = /^([^.]+)\.(.+)$/.exec(ep)!;
-        const pl = placed.get(m[1]!);
-        const pin = symbols.get(m[1]!)?.pins.find((p) => p.number === m[2]);
-        if (!pl || !pin) return null;
-        return { ref: m[1]!, pin, at: pinAt(pl, pin) };
+        return expandEp(m[1]!, m[2]!).map((inst) => {
+          const pl = placed.get(inst.key);
+          const pin = pl?.sym.pins.find((p) => p.number === m[2]);
+          if (!pl || !pin) return null;
+          return { ref: inst.key, pin, at: pinAt(pl, pin) };
+        });
       })
       .filter((e): e is NonNullable<typeof e> => e !== null)
       .sort((a, b) => a.ref.localeCompare(b.ref, undefined, { numeric: true }) || a.pin.number.localeCompare(b.pin.number, undefined, { numeric: true }));
@@ -1057,9 +1153,9 @@ export function draftSchematicPlacement(validated: ValidatedIntent, projectName:
     opts: { predictStubs?: boolean } = {},
   ): boolean => {
     const predictStubs = opts.predictStubs ?? true;
-    for (const [oref, opl] of placed) {
+    for (const opl of placed.values()) {
       for (const pin of opl.sym.pins) {
-        const ep = `${oref}.${pin.number}`;
+        const ep = `${opl.refDes}.${pin.number}`;
         const onet = netByEndpoint.get(ep);
         if (!onet || onet.name === netName || ownEps.has(ep)) continue;
         const p = pinAt(opl, pin);
@@ -1362,14 +1458,21 @@ export function draftSchematicPlacement(validated: ValidatedIntent, projectName:
   // collisions at error severity, so a box the checker will see must be a box
   // the avoider saw first.
   const emitSymbols: EmitSymbol[] = [];
-  for (const [ref, pl] of [...placed.entries()].sort((a, b) => a[0].localeCompare(b[0], undefined, { numeric: true }))) {
+  /** Emit entry with its placement, for the slot-refinement pass below (two
+   * unit instances share one refdes, so `ref` alone no longer keys `placed`). */
+  const emitPairs: { sym: EmitSymbol; pl: Placed }[] = [];
+  /** What KiCad renders for the reference: a multi-unit instance shows its
+   * unit letter (U1A, U1B), so width metrics must measure the rendered text. */
+  const displayRefOf = (pl: Placed): string =>
+    pl.unit !== null ? `${pl.refDes}${String.fromCharCode(64 + Math.min(pl.unit, 26))}` : pl.refDes;
+  for (const [, pl] of [...placed.entries()].sort((a, b) => a[0].localeCompare(b[0], undefined, { numeric: true }))) {
     const pinSides = new Set(pl.sym.pins.map((p) => {
       const o = outward(p);
       return o.dx === -1 ? 'left' : o.dx === 1 ? 'right' : o.dy === -1 ? 'top' : 'bottom';
     }));
     const cy = (pl.body.minY + pl.body.maxY) / 2;
     const cx = (pl.body.minX + pl.body.maxX) / 2;
-    const textW = Math.max(ref.length, pl.part.value.length) * 0.8 * 1.27;
+    const textW = Math.max(displayRefOf(pl).length, pl.part.value.length) * 0.8 * 1.27;
     let refAt: { x: number; y: number };
     let valueAt: { x: number; y: number };
     if (!pinSides.has('top')) {
@@ -1391,8 +1494,8 @@ export function draftSchematicPlacement(validated: ValidatedIntent, projectName:
       refAt = { x: pl.body.maxX + textW / 2 + 1.27, y: cy - 1.27 };
       valueAt = { x: pl.body.maxX + textW / 2 + 1.27, y: cy + 1.27 };
     }
-    emitSymbols.push({
-      ref,
+    const sym: EmitSymbol = {
+      ref: pl.refDes,
       libId: pl.sym.libId,
       value: pl.part.value,
       footprint: pl.part.footprint ?? '',
@@ -1400,7 +1503,10 @@ export function draftSchematicPlacement(validated: ValidatedIntent, projectName:
       refAt,
       valueAt,
       pinNumbers: pl.sym.pins.map((p) => p.number),
-    });
+      ...(pl.unit !== null ? { unit: pl.unit } : {}),
+    };
+    emitSymbols.push(sym);
+    emitPairs.push({ sym, pl });
     libSymbols.set(pl.sym.libId, pl.sym.sourceText);
   }
 
@@ -1430,16 +1536,16 @@ export function draftSchematicPlacement(validated: ValidatedIntent, projectName:
     const fieldBoxes: Bounds[] = extraSymbols
       .filter((s) => !s.hideValue)
       .map((s) => centeredTextBox(s.value, s.valueAt.x, s.valueAt.y));
-    for (const sym of emitSymbols) {
-      const pl = placed.get(sym.ref)!;
+    for (const { sym, pl } of emitPairs) {
+      const dref = displayRefOf(pl);
       const cx = (pl.body.minX + pl.body.maxX) / 2;
       const cy = (pl.body.minY + pl.body.maxY) / 2;
-      const textW = Math.max(sym.ref.length, sym.value.length) * 0.8 * 1.27;
+      const textW = Math.max(dref.length, sym.value.length) * 0.8 * 1.27;
       const pairClear = (r: { x: number; y: number }, v: { x: number; y: number }): boolean => {
-        for (const b of [centeredTextBox(sym.ref, r.x, r.y), centeredTextBox(sym.value, v.x, v.y)]) {
+        for (const b of [centeredTextBox(dref, r.x, r.y), centeredTextBox(sym.value, v.x, v.y)]) {
           if (wires.some((w) => segHitsBoxEarly(w, b))) return false;
-          for (const [oref, op] of placed) {
-            if (oref !== sym.ref && boundsOverlap(b, op.body)) return false;
+          for (const op of placed.values()) {
+            if (op !== pl && boundsOverlap(b, op.body)) return false;
           }
           if (fieldBoxes.some((t) => boundsOverlap(t, b))) return false;
         }
@@ -1469,13 +1575,13 @@ export function draftSchematicPlacement(validated: ValidatedIntent, projectName:
           }
         }
       }
-      fieldBoxes.push(centeredTextBox(sym.ref, sym.refAt.x, sym.refAt.y), centeredTextBox(sym.value, sym.valueAt.x, sym.valueAt.y));
+      fieldBoxes.push(centeredTextBox(dref, sym.refAt.x, sym.refAt.y), centeredTextBox(sym.value, sym.valueAt.x, sym.valueAt.y));
     }
   }
 
   /** Every visible ref/value text the checker will measure. */
   const textObstacles: Bounds[] = [
-    ...emitSymbols.flatMap((s) => [centeredTextBox(s.ref, s.refAt.x, s.refAt.y), centeredTextBox(s.value, s.valueAt.x, s.valueAt.y)]),
+    ...emitPairs.flatMap(({ sym: s, pl }) => [centeredTextBox(displayRefOf(pl), s.refAt.x, s.refAt.y), centeredTextBox(s.value, s.valueAt.x, s.valueAt.y)]),
     ...extraSymbols.filter((s) => !s.hideValue).map((s) => centeredTextBox(s.value, s.valueAt.x, s.valueAt.y)),
   ];
 
@@ -1621,14 +1727,17 @@ export function draftSchematicPlacement(validated: ValidatedIntent, projectName:
   for (const e of endCount.values()) if (e.n >= 3) junctions.push({ x: e.x, y: e.y });
   const uniqJunctions = [...new Map(junctions.map((j) => [pointKey(j.x, j.y), j])).values()];
 
-  // no-connect markers (design D6a)
+  // no-connect markers (design D6a); a common pin's marker lands on every
+  // placed appearance, mirroring how the wiring passes treat such pins
   const noConnects: { x: number; y: number }[] = [];
   for (const ep of intent.noConnect ?? []) {
     const m = /^([^.]+)\.(.+)$/.exec(ep);
     if (!m) continue;
-    const pl = placed.get(m[1]!);
-    const pin = symbols.get(m[1]!)?.pins.find((p) => p.number === m[2]);
-    if (pl && pin) noConnects.push(pinAt(pl, pin));
+    for (const inst of expandEp(m[1]!, m[2]!)) {
+      const pl = placed.get(inst.key);
+      const pin = pl?.sym.pins.find((p) => p.number === m[2]);
+      if (pl && pin) noConnects.push(pinAt(pl, pin));
+    }
   }
 
   // ---------- sheet: content-derived paper, balanced placement ----------
@@ -1731,7 +1840,10 @@ export function draftSchematicPlacement(validated: ValidatedIntent, projectName:
   const report: SchematicDraftReport = {
     groups: groupNames.map((g) => ({
       name: g,
-      members: [...groupOf.entries()].filter(([, gg]) => gg === g).map(([r]) => r).sort((a, b) => a.localeCompare(b, undefined, { numeric: true })),
+      // instance keys fold back to refdes (a dual opamp is one member, not two)
+      members: [
+        ...new Set([...groupOf.entries()].filter(([, gg]) => gg === g).map(([k]) => placed.get(k)?.refDes ?? k)),
+      ].sort((a, b) => a.localeCompare(b, undefined, { numeric: true })),
     })),
     netClasses: [...netClasses.entries()]
       .sort((a, b) => a[0].localeCompare(b[0]))

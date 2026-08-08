@@ -130,7 +130,7 @@ export function netPartition(nl: Netlist): Set<string> {
 export type RefusalKind = 'multi-unit' | 'symbol-unresolved' | 'missing-pin' | 'merged-net' | 'short-net' | 'other';
 
 export function classifyRefusal(detail: string): RefusalKind {
-  if (/multi-unit/.test(detail)) return 'multi-unit';
+  if (/multi-unit|in more than one unit|outside its default-style units/.test(detail)) return 'multi-unit';
   if (/come into (WIRE|LABEL) contact|share a label point|merge/i.test(detail)) return 'merged-net';
   if (/has no pin/.test(detail)) return 'missing-pin';
   if (/is not installed and not vendored|does not exist in the library|is wrong about the library/.test(detail)) {
