@@ -11,6 +11,7 @@ import {
   searchInstalledSymbols,
   findLibraryFile,
   vendoredCacheDirs,
+  SYM_CACHE_DIR,
 } from '../src/kicad/symlib.js';
 import { symbolAvailabilityFacts } from '../src/agent/recovery.js';
 
@@ -568,7 +569,10 @@ describe('verify_symbols sees a project vendored cache (#212)', () => {
     repo = await mkdtemp(path.join(tmpdir(), 'copperhead-vendor-repo-'));
     // The sheet sits one level down, the layout the reference boards use, so
     // the cache is found by walking up rather than by assuming it is adjacent.
+    // `.copperhead/` marks the project root, which is what stops the walk here
+    // instead of letting it run on into the temp directory's ancestors.
     await mkdir(path.join(repo, 'reference'), { recursive: true });
+    await mkdir(path.join(repo, '.copperhead'), { recursive: true });
     await mkdir(path.join(repo, 'sym-lib-cache'), { recursive: true });
     await writeFile(path.join(repo, 'sym-lib-cache', 'copperhead_power.kicad_sym'), POWER_LIB, 'utf8');
     schPath = path.join(repo, 'reference', 'board.kicad_sch');
@@ -582,6 +586,62 @@ describe('verify_symbols sees a project vendored cache (#212)', () => {
 
   it('finds the cache by walking up from the schematic', async () => {
     expect(await vendoredCacheDirs(schPath)).toEqual([path.join(repo, 'sym-lib-cache')]);
+  });
+
+  it('stops at the project root instead of adopting a cache above it', async () => {
+    // Without the anchor the walk escaped the project: a board nested under a
+    // directory that happens to hold a sym-lib-cache adopted that foreign copy,
+    // and verifySchematicSymbols would then resolve a lib_id against another
+    // project's vendored symbols and report clean where the library is missing.
+    const outer = await mkdtemp(path.join(tmpdir(), 'copperhead-foreign-'));
+    try {
+      await mkdir(path.join(outer, SYM_CACHE_DIR), { recursive: true });
+      const project = path.join(outer, 'boardA');
+      await mkdir(path.join(project, '.copperhead'), { recursive: true });
+      const sch = path.join(project, 'b.kicad_sch');
+      await writeFile(sch, '(kicad_sch)', 'utf8');
+      expect(await vendoredCacheDirs(sch)).toEqual([]);
+    } finally {
+      await rm(outer, { recursive: true, force: true }).catch(() => {});
+    }
+  });
+
+  it('claims no cache when no project root is found within maxDepth', async () => {
+    // The budget is what bounds the walk on a stray sheet outside any project.
+    // With the root beyond it the sheet is unattributable, so only a cache in
+    // its own directory could count, and there is none.
+    const outer = await mkdtemp(path.join(tmpdir(), 'copperhead-deep-'));
+    try {
+      await mkdir(path.join(outer, SYM_CACHE_DIR), { recursive: true });
+      await mkdir(path.join(outer, '.copperhead'), { recursive: true });
+      const deep = path.join(outer, 'a', 'b', 'c', 'd', 'e', 'f', 'g');
+      await mkdir(deep, { recursive: true });
+      const sch = path.join(deep, 'b.kicad_sch');
+      await writeFile(sch, '(kicad_sch)', 'utf8');
+      expect(await vendoredCacheDirs(sch)).toEqual([]);
+      // and the same tree resolves once the root is inside the budget
+      expect(await vendoredCacheDirs(sch, 12)).toEqual([path.join(outer, SYM_CACHE_DIR)]);
+    } finally {
+      await rm(outer, { recursive: true, force: true }).catch(() => {});
+    }
+  });
+
+  it('anchors on a .git FILE, as a linked worktree has', async () => {
+    // A linked git worktree stores `.git` as a file pointing at the real git
+    // dir, and a worktree is exactly where CI and code review read a project
+    // from, so matching on existence rather than on directory type is load
+    // bearing rather than defensive.
+    const outer = await mkdtemp(path.join(tmpdir(), 'copperhead-wt-'));
+    try {
+      const project = path.join(outer, 'checkout');
+      await mkdir(path.join(project, SYM_CACHE_DIR), { recursive: true });
+      await writeFile(path.join(project, '.git'), 'gitdir: /elsewhere/.git/worktrees/x\n', 'utf8');
+      const sch = path.join(project, 'b.kicad_sch');
+      await writeFile(sch, '(kicad_sch)', 'utf8');
+      expect(await vendoredCacheDirs(sch)).toEqual([path.join(project, SYM_CACHE_DIR)]);
+    } finally {
+      await rm(outer, { recursive: true, force: true }).catch(() => {});
+    }
   });
 
   it('verifies engine-owned power symbols instead of misreporting them', async () => {
@@ -623,6 +683,24 @@ describe('verify_symbols sees a project vendored cache (#212)', () => {
       expect(res.findings.some((f) => f.libId === 'Nowhere:Gadget')).toBe(true);
     } finally {
       await rm(orphan, { force: true }).catch(() => {});
+    }
+  });
+
+  it('names both sources when a symbol is absent from an existing library', async () => {
+    // The diagnostic used to say "the installed library", which points at the
+    // wrong file to go fix once this search also covers the project's vendored
+    // cache. Asserted so the wording cannot silently regress: it was itself a
+    // review fix, and an unasserted string change is the weaker outcome.
+    const missing = path.join(repo, 'reference', 'missing.kicad_sch');
+    await writeFile(missing, sheet.replace('(symbol "Device:R"', '(symbol "Device:Gizmo"'), 'utf8');
+    try {
+      const res = await verifySchematicSymbols(missing, env);
+      const finding = res.findings.find((f) => f.libId === 'Device:Gizmo');
+      expect(finding?.kind).toBe('no-symbol');
+      expect(finding?.detail).toContain('installed or vendored symbol library');
+      expect(finding?.detail).not.toContain('does not exist in the installed library');
+    } finally {
+      await rm(missing, { force: true }).catch(() => {});
     }
   });
 });

@@ -159,29 +159,71 @@ export async function symbolSearchDirs(env = process.env, winRoot = 'C:/Program 
 export const SYM_CACHE_DIR = 'sym-lib-cache';
 
 /**
+ * Files that mark a directory as a project root. `.git` is matched by existence
+ * rather than by type on purpose: in a linked worktree it is a FILE pointing at
+ * the real git dir, and a worktree is exactly where a review or a CI job reads a
+ * project from.
+ */
+const PROJECT_MARKERS = ['.git', '.copperhead'];
+
+async function isProjectRoot(dir: string): Promise<boolean> {
+  for (const marker of PROJECT_MARKERS) {
+    try {
+      await stat(path.join(dir, marker));
+      return true;
+    } catch {
+      // marker absent; try the next one
+    }
+  }
+  return false;
+}
+
+/**
  * Vendored symbol caches at or above a schematic's own directory, nearest
  * first. A drafted project keeps `sym-lib-cache/` at its root, which is beside
  * the schematic for a flat project and one or more levels up when the sheet
  * lives in a subdirectory (the reference boards put it beside `reference/`),
  * so the cache is discovered by walking up rather than assumed adjacent.
  *
- * Bounded by `maxDepth` and by the filesystem root: a schematic outside any
- * project simply yields nothing, and the caller falls back to installed
- * libraries alone.
+ * The walk stops AT the project root (a directory holding `.git` or
+ * `.copperhead`), inclusive, and never above it. Without that anchor the search
+ * escaped the project entirely: a board nested under a directory that happened
+ * to hold a `sym-lib-cache/` adopted that foreign cache, and
+ * `verifySchematicSymbols` would then resolve a lib_id against another
+ * project's vendored copy and report clean where the library is in fact
+ * missing. A verification that can silently borrow someone else's evidence is
+ * worse than one that reports the gap.
+ *
+ * When no project root is found within `maxDepth`, the sheet is not inside an
+ * identifiable project, so nothing above its own directory can be attributed to
+ * it and only an adjacent cache counts. Every real copperhead project carries
+ * both markers (a git repo is required before any run starts, and the config
+ * lives in `.copperhead/`), so this fallback is for stray files, not for
+ * projects.
  */
 export async function vendoredCacheDirs(schPath: string, maxDepth = 5): Promise<string[]> {
-  const out: string[] = [];
-  let dir = path.dirname(path.resolve(schPath));
+  const start = path.dirname(path.resolve(schPath));
+  const levels: string[] = [];
+  let dir = start;
+  let anchored = false;
   for (let depth = 0; depth <= maxDepth; depth++) {
-    const candidate = path.join(dir, SYM_CACHE_DIR);
-    try {
-      if ((await stat(candidate)).isDirectory()) out.push(candidate);
-    } catch {
-      // no cache at this level; keep walking up
+    levels.push(dir);
+    if (await isProjectRoot(dir)) {
+      anchored = true;
+      break;
     }
     const parent = path.dirname(dir);
     if (parent === dir) break; // filesystem root
     dir = parent;
+  }
+  const out: string[] = [];
+  for (const level of anchored ? levels : levels.slice(0, 1)) {
+    const candidate = path.join(level, SYM_CACHE_DIR);
+    try {
+      if ((await stat(candidate)).isDirectory()) out.push(candidate);
+    } catch {
+      // no cache at this level
+    }
   }
   return out;
 }
