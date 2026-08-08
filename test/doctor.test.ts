@@ -280,6 +280,8 @@ describe('copperhead doctor', () => {
         }),
       });
       const os = r.checks.find((c) => c.name === 'openspec')!;
+      expect(os.status).toBe('fail');
+      expect(os.detail).toContain('openspec: not found');
       expect(os.detail).not.toContain('\n');
     } finally {
       await cleanup();

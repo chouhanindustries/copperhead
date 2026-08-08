@@ -63,7 +63,7 @@ function defaultDeps(): DoctorDeps {
      * via cross-spawn without a shell, so a missing binary still yields ENOENT
      * (what isNotFoundError expects) on every platform, instead of a
      * shell-reported exit 127/"not found".
-     * @returns the trimmed stdout of `openspec --version` (e.g. "0.1.0").
+     * @returns the trimmed stdout of `openspec --version` (e.g. "1.8.0").
      */
     openspecVersion: async () => (await execa('openspec', ['--version'])).stdout.trim(),
     env: process.env,
