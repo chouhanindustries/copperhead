@@ -15,6 +15,7 @@ import { saveConstraint, classifyAffectsTarget, affectsTargetExists } from '../m
 import { openspecValidate } from '../openspec/cli.js';
 import { existsSync } from 'node:fs';
 import { isEngineAuthoredSchematic } from '../kicad/fab.js';
+import { validateKicadProjectPolicy } from '../kicad/project-policy.js';
 import type { ToolSchema } from '../agent/types.js';
 import type { RunContext } from '../agent/context.js';
 import { corruptionError, markTouched, str } from './helpers.js';
@@ -211,6 +212,7 @@ export const HANDLERS: HandlerDef[] = [
         str(args, 'old_string'),
         args.new_string as string,
         args.replace_all === true,
+        rel.endsWith('.kicad_pro') ? validateKicadProjectPolicy : undefined,
       );
       if (before !== null) {
         const loadErr = await kicadLoadError(abs);

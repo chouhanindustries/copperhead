@@ -87,6 +87,27 @@ describe('KiCad edit probe validation (AC-15.20..15.22)', () => {
     }
   }, 60_000);
 
+  it('refuses a .kicad_pro edit that hides DRC findings before writing it', async () => {
+    const { repo, cleanup } = await tempFixtureRepo();
+    try {
+      const pro = path.join(repo, 'project.kicad_pro');
+      const before = '{ "board": { "design_settings": { "rules": {} } }, "meta": { "version": 1 } }\n';
+      await writeFile(pro, before, 'utf8');
+      const ctx = await makeCtx(repo);
+      const res = await dispatchTool(ctx, 'edit_file', {
+        path: 'project.kicad_pro',
+        old_string: '"rules": {}',
+        new_string: '"rule_severities": { "hole_clearance": "ignore" }, "rules": {}',
+      });
+      expect(res).toContain('edit_file refused');
+      expect(res).toContain('hole_clearance');
+      expect(await readFile(pro, 'utf8')).toBe(before);
+      expect(ctx.filesTouched.has('project.kicad_pro')).toBe(false);
+    } finally {
+      await cleanup();
+    }
+  }, 60_000);
+
   it('an edit that corrupts a loadable schematic is reverted with the kicad-cli reason (AC-15.20)', async () => {
     const { repo, cleanup } = await tempFixtureRepo();
     try {
