@@ -17,7 +17,7 @@ npx vitest run test/create-pipeline-replay.test.ts --no-file-parallelism
 ```
 
 The test creates a fresh git repository, keeps the real
-`examples/simple/usb-c-breakout.md` brief outside that repository, invokes
+`examples/simple/usb-c-breakout-verified-parts.md` brief outside that repository, invokes
 `runCreate` with the selected provider, and writes these generated inputs:
 
 - `usb-c-breakout.md`: the external brief, with its SHA-256 in the manifest;

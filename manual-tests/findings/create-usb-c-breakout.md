@@ -56,7 +56,7 @@ Work toward [#66](https://github.com/copperheadhq/copperhead/issues/66), based o
 - **Where:** KiCad library setup and new import-tool validation.
 - **Symptom:** setting only the binary and symbol directory omitted footprint library tables. Native rotation tests also caught incorrect imported pad angles; the live Codex validator rejected the new tool's `minItems` schema keyword.
 - **Suggested:** configure isolated library tables, test imported geometry with real KiCad, and test the actual tool schema through the provider validator.
-- **Status:** setup corrected; rotation and schema regressions fixed. Nonempty placement validation remains in the handler. Latest full suite: 955 passed, 23 skipped, including the unrecorded E2E harness. No full-board DRC success is claimed.
+- **Status:** setup corrected; rotation and schema regressions fixed. Nonempty placement validation remains in the handler. Latest full suite: 963 passed, 23 skipped, including the unrecorded E2E harness. No full-board DRC success is claimed.
 
 ## DEFECT / P1: project edits can suppress verification findings
 
@@ -71,6 +71,13 @@ Work toward [#66](https://github.com/copperheadhq/copperhead/issues/66), based o
 - **Symptom:** the imported footprint faithfully reproduces the [GCT land pattern](https://gct.co/files/drawings/usb4105.pdf), but its outer roundrect pads leave approximately 0.1944 mm to the 0.65 mm NPTH holes. This is below both KiCad's 0.25 mm default and the 0.20 mm NPTH-to-track minimum in the [JLCPCB capabilities](https://jlcpcb.com/capabilities/pcb-capabilities/) required by the brief. Repositioning the whole footprint cannot fix its internal clearance.
 - **Suggested:** revise the part selection to a compatible installed power-only receptacle and regenerate BOM, intent and schematic before repopulating the board. Do not suppress the rule or move individual embedded pads to manufacture a passing report.
 - **Status:** the layout prompt now explains this replacement path. An isolated real KiCad check of the installed GCT USB4125 power-only footprint showed no hole-clearance or copper-clearance findings; full design integration, cost and final verification remain outstanding.
+
+## NOTE / P2: component evidence needed by the live model
+
+- **Where:** the next layout attempt with a power-only replacement.
+- **Symptom:** the model found a compatible footprint but refused to proceed without evidence of its 3 A rating. That attempt exited 1; no layout-stage success is claimed.
+- **Suggested:** supply verified manufacturer references as input, preserving the original product requirements.
+- **Status:** a new clean run uses [the sourced brief](../../examples/simple/usb-c-breakout-verified-parts.md). It preserves the original brief and adds GCT ratings and drawing references. Its specification stage committed successfully; the remaining stages are still running or outstanding. Generated design artifacts were not manually modified to pass verification.
 
 ## Acceptance evidence outstanding
 

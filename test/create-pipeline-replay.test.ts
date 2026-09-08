@@ -22,7 +22,7 @@ import { LLM_CACHE_ONLY_ENV } from '../src/agent/response-cache.js';
 
 const TEST_DIR = path.dirname(fileURLToPath(import.meta.url));
 const DEFAULT_FIXTURE_DIR = path.join(TEST_DIR, 'fixtures', 'create-pipeline-replay');
-const BRIEF_SOURCE = path.resolve(TEST_DIR, '..', 'examples', 'simple', 'usb-c-breakout.md');
+const BRIEF_SOURCE = path.resolve(TEST_DIR, '..', 'examples', 'simple', 'usb-c-breakout-verified-parts.md');
 const BRIEF_BASENAME = 'usb-c-breakout.md';
 const MODEL_ENV = 'COPPERHEAD_E2E_MODEL';
 const RECORD_ENV = 'COPPERHEAD_E2E_RECORD';
@@ -96,7 +96,7 @@ const INITIAL_CONFIG = JSON.stringify(
     board: null,
     docs: 'docs/',
     model: null,
-    maxTurns: 40,
+    maxTurns: 100,
     maxRepairCycles: 20,
     maxStageRetries: 0,
     llmCache: true,
