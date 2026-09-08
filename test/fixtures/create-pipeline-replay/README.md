@@ -22,7 +22,8 @@ The test creates a fresh git repository, keeps the real
 
 - `usb-c-breakout.md`: the external brief, with its SHA-256 in the manifest;
 - `config.json`: the initial cache-key/config seed used for both passes (it
-  disables uncached automatic stage diagnosis, so a failed stage stops loudly);
+  allows 20 repair cycles without relaxing ERC/DRC and disables uncached
+  automatic stage diagnosis, so a failed stage stops loudly);
 - `llm-cache/*.json`: the actual responses returned by the provider;
 - `manifest.json`: model, per-stage deterministic clocks, KiCad/OpenSpec
   versions, initial/final tree digests, and every cache-entry checksum. The

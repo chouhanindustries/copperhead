@@ -97,7 +97,7 @@ const INITIAL_CONFIG = JSON.stringify(
     docs: 'docs/',
     model: null,
     maxTurns: 40,
-    maxRepairCycles: 5,
+    maxRepairCycles: 20,
     maxStageRetries: 0,
     llmCache: true,
   },
