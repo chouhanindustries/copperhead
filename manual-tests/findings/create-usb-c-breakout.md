@@ -63,7 +63,14 @@ Work toward [#66](https://github.com/copperheadhq/copperhead/issues/66), based o
 - **Where:** [file-edit handler](../../src/capabilities/handlers.ts), `.kicad_pro` edits; layout run `2026-09-08T22-43-51-877Z`, turns 9 through 11.
 - **Symptom:** after importing eight real footprints, the model added global DRC severity overrides for unconnected items, hole clearance and silkscreen categories. The reported count fell from 23 to 3 without corresponding geometric repairs. Three footprint mismatches still failed verification; five repair cycles were exhausted, and the stage rolled back. The failed work was preserved in a stash and is not accepted as a solution.
 - **Suggested:** reject edits that weaken project verification settings before writing them. Resolve board geometry under the existing rules. Separately reconcile the stage's permission to leave ratsnest with the gate's treatment of unconnected items.
-- **Status:** reproduced; project-policy protection is in progress. No fifth-stage commit or clean-board claim results from this attempt.
+- **Status:** project-policy protection is implemented and tested. It rejects weakening edits before writing the candidate JSON, while preserving existing bootstrap ignores and unrelated edits. It does not claim to cover every KiCad rule representation. No fifth-stage commit or clean-board claim results from this attempt.
+
+## DEFECT / P2: installed footprint conflicts with manufacturing clearance
+
+- **Where:** layout run `2026-09-08T22-43-51-877Z`, four USB-C `hole_clearance` findings; installed GCT USB4105 footprint.
+- **Symptom:** the imported footprint faithfully reproduces the [GCT land pattern](https://gct.co/files/drawings/usb4105.pdf), but its outer roundrect pads leave approximately 0.1944 mm to the 0.65 mm NPTH holes. This is below both KiCad's 0.25 mm default and the 0.20 mm NPTH-to-track minimum in the [JLCPCB capabilities](https://jlcpcb.com/capabilities/pcb-capabilities/) required by the brief. Repositioning the whole footprint cannot fix its internal clearance.
+- **Suggested:** revise the part selection to a compatible installed power-only receptacle and regenerate BOM, intent and schematic before repopulating the board. Do not suppress the rule or move individual embedded pads to manufacture a passing report.
+- **Status:** the layout prompt now explains this replacement path. An isolated real KiCad check of the installed GCT USB4125 power-only footprint showed no hole-clearance or copper-clearance findings; full design integration, cost and final verification remain outstanding.
 
 ## Acceptance evidence outstanding
 
