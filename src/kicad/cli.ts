@@ -335,6 +335,32 @@ export interface FabExportResult {
   failed: { artifact: string; reason: string }[];
 }
 
+const STANDARD_FAB_LAYERS = new Set(['F.Mask', 'B.Mask', 'F.Silkscreen', 'B.Silkscreen', 'Edge.Cuts']);
+
+/** Copper plus the physical mask, legend, and profile layers required by fabrication. */
+export async function fabricationGerberLayers(pcbPath: string): Promise<string[]> {
+  const source = await readFile(pcbPath, 'utf8');
+  const block = /(?:^|\n)\s*\(layers\s*\n([\s\S]*?)\n\s*\)/.exec(source)?.[1] ?? '';
+  const layers: string[] = [];
+  for (const match of block.matchAll(/^\s*\(\d+\s+"([^"]+)"\s+([^\s)]+)/gm)) {
+    const name = match[1]!;
+    if (name.endsWith('.Cu') || STANDARD_FAB_LAYERS.has(name)) layers.push(name);
+  }
+  return layers;
+}
+
+/** Artifact identities emitted by exportFab; shared with its persisted receipt validator. */
+export function requiredFabArtifacts(hasSchematic: boolean): string[] {
+  return [
+    'gerbers',
+    'drill',
+    'outline.dxf',
+    'board.step',
+    'board.svg',
+    ...(hasSchematic ? ['schematic.svg'] : []),
+  ];
+}
+
 /**
  * Export the fabrication package (SPEC §2.5 outputs): gerbers + drill, DXF and
  * STEP outline, SVG renders. Each artifact fails independently with a reason so
@@ -342,10 +368,11 @@ export interface FabExportResult {
  */
 export async function exportFab(pcbPath: string, schPath: string | null, outDir: string): Promise<FabExportResult> {
   const result: FabExportResult = { produced: [], failed: [] };
+  const gerberLayers = await fabricationGerberLayers(pcbPath);
   const jobs: { artifact: string; args: string[] }[] = [
-    { artifact: 'gerbers', args: ['pcb', 'export', 'gerbers', '--output', path.join(outDir, 'gerbers'), pcbPath] },
+    { artifact: 'gerbers', args: ['pcb', 'export', 'gerbers', '--layers', gerberLayers.join(','), '--output', path.join(outDir, 'gerbers'), pcbPath] },
     { artifact: 'drill', args: ['pcb', 'export', 'drill', '--output', path.join(outDir, 'gerbers'), pcbPath] },
-    { artifact: 'outline.dxf', args: ['pcb', 'export', 'dxf', '--output', path.join(outDir, 'outline.dxf'), '--layers', 'Edge.Cuts', pcbPath] },
+    { artifact: 'outline.dxf', args: ['pcb', 'export', 'dxf', '--mode-single', '--output', path.join(outDir, 'outline.dxf'), '--layers', 'Edge.Cuts', pcbPath] },
     { artifact: 'board.step', args: ['pcb', 'export', 'step', '--output', path.join(outDir, 'board.step'), pcbPath] },
     { artifact: 'board.svg', args: ['pcb', 'export', 'svg', '--output', path.join(outDir, 'board.svg'), '--layers', 'F.Cu,B.Cu,Edge.Cuts', pcbPath] },
   ];

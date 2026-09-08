@@ -42,7 +42,7 @@
 
 ## 7. Create-pipeline hardening (live-run follow-ups #19/#21/#23/#25 + re-review fixes)
 
-- [x] 7.1 `src/commands/create.ts`: content-aware `isComplete` for schematic (symbols + drift-clean) and layout-draft (board with a footprint + LAYOUT.md marker); post-run contract re-check halts the pipeline instead of advancing
+- [x] 7.1 `src/commands/create.ts`: content-aware `isComplete` for schematic (symbols + drift-clean), layout-draft (board with a footprint + LAYOUT.md marker + clean DRC), and outputs (clean source board + successful-export receipt binding current source and complete non-empty package hashes); post-run contract re-check halts the pipeline instead of advancing
 - [x] 7.2 `src/kicad/cli.ts`: `kicadLoadError` probe (sch netlist / pcb pos export) restricted via `isProbeableKicadFile` to `.kicad_sch`/`.kicad_pcb`; missing ERC/DRC reports raise kicad-cli's own output
 - [x] 7.3 `src/agent/tools.ts` `edit_file`: probe after schematic/board edits; revert newly unloadable files with the kicad-cli reason; keep edits to already-unloadable files (incremental repair); never probe `.kicad_pro`/`.kicad_sym`/`.kicad_mod`
 - [x] 7.4 `src/memory/drift.ts`: zero-symbol schematics produce no mismatches (bootstrap state); `emptySchematicWarning` helper for the check-side warning

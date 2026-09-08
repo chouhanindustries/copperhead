@@ -16,6 +16,7 @@ import { openspecValidate } from '../openspec/cli.js';
 import { existsSync } from 'node:fs';
 import { isEngineAuthoredSchematic } from '../kicad/fab.js';
 import { validateKicadProjectPolicy } from '../kicad/project-policy.js';
+import { invalidateExportReceipt, writeExportReceipt } from '../kicad/export-receipt.js';
 import type { ToolSchema } from '../agent/types.js';
 import type { RunContext } from '../agent/context.js';
 import { corruptionError, markTouched, str } from './helpers.js';
@@ -608,6 +609,9 @@ export const HANDLERS: HandlerDef[] = [
       if (!ctx.config.board) return 'no board configured';
       const outDir = path.join(ctx.repoRoot, 'outputs');
       await mkdir(outDir, { recursive: true });
+      // An old success receipt must never survive a failed or interrupted
+      // replacement export and bless stale files on the next resume.
+      await invalidateExportReceipt(ctx.repoRoot);
       const res = await exportFab(
         path.join(ctx.repoRoot, ctx.config.board),
         ctx.config.schematic ? path.join(ctx.repoRoot, ctx.config.schematic) : null,
@@ -616,6 +620,21 @@ export const HANDLERS: HandlerDef[] = [
       ctx.filesTouched.add('outputs/');
       const lines = [`produced: ${res.produced.join(', ') || '(none)'}`];
       for (const f of res.failed) lines.push(`FAILED ${f.artifact}: ${f.reason}`);
+      if (res.failed.length === 0) {
+        try {
+          await writeExportReceipt({
+            repoRoot: ctx.repoRoot,
+            board: ctx.config.board,
+            schematic: ctx.config.schematic,
+            bom: path.join(ctx.config.docs, 'BOM.md'),
+            artifacts: res.produced,
+          });
+          lines.push('recorded source and output hashes in outputs/.copperhead-export.json');
+        } catch (error) {
+          lines.push(`FAILED package receipt: ${(error as Error).message}`);
+          return { ok: false, text: lines.join('\n') };
+        }
+      }
       return { ok: res.failed.length === 0, text: lines.join('\n') };
     },
   },

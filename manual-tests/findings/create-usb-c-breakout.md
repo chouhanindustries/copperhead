@@ -56,7 +56,7 @@ Work toward [#66](https://github.com/copperheadhq/copperhead/issues/66), based o
 - **Where:** KiCad library setup and new import-tool validation.
 - **Symptom:** setting only the binary and symbol directory omitted footprint library tables. Native rotation tests also caught incorrect imported pad angles; the live Codex validator rejected the new tool's `minItems` schema keyword.
 - **Suggested:** configure isolated library tables, test imported geometry with real KiCad, and test the actual tool schema through the provider validator.
-- **Status:** setup corrected; rotation and schema regressions fixed. Nonempty placement validation remains in the handler. Latest full suite: 963 passed, 23 skipped, including the unrecorded E2E harness. No full-board DRC success is claimed.
+- **Status:** setup corrected; rotation and schema regressions fixed. Nonempty placement validation remains in the handler. Latest full suite: 974 passed, 23 skipped, including the unrecorded E2E harness. No full-board DRC success is claimed.
 
 ## DEFECT / P1: project edits can suppress verification findings
 
@@ -77,7 +77,21 @@ Work toward [#66](https://github.com/copperheadhq/copperhead/issues/66), based o
 - **Where:** the next layout attempt with a power-only replacement.
 - **Symptom:** the model found a compatible footprint but refused to proceed without evidence of its 3 A rating. That attempt exited 1; no layout-stage success is claimed.
 - **Suggested:** supply verified manufacturer references as input, preserving the original product requirements.
-- **Status:** a new clean run uses [the sourced brief](../../examples/simple/usb-c-breakout-verified-parts.md). It preserves the original brief and adds GCT ratings and drawing references. Its specification stage committed successfully; the remaining stages are still running or outstanding. Generated design artifacts were not manually modified to pass verification.
+- **Status:** a new clean run uses [the sourced brief](../../examples/simple/usb-c-breakout-verified-parts.md). It preserves the original brief and adds GCT ratings and drawing references. Its first four stages committed successfully, including a clean schematic ERC; layout and the remaining stages are still running or outstanding. Generated design artifacts were not manually modified to pass verification.
+
+## DEFECT / P1: resume predicates accept unverified layout and partial exports
+
+- **Where:** stage completion predicates in `src/commands/create.ts`.
+- **Symptom:** layout resume accepted a footprint and documentation marker without DRC; outputs resume accepted one Gerber file. The layout prompt also allowed unrouted connections despite the strict DRC gate.
+- **Suggested:** require current DRC on resume and after each stage, require complete successful exports tied to current sources, and align the prompt with the electrical completion requirement.
+- **Status:** implemented with regression coverage. Layout requires clean DRC; outputs require clean DRC plus an exporter-generated receipt binding source and output hashes and the KiCad Gerber job list. Agent file tools cannot author the receipt. Changed or missing sources/outputs invalidate it. This is integrity checking within the agent workflow, not a cryptographic boundary against direct filesystem access. The final full suite passed 974 tests with 23 skipped; native KiCad export-receipt verification also passed: all six export jobs succeeded, the receipt matched, and changing a Gerber or the source BOM invalidated it. The active live run still uses the earlier build.
+
+## DEFECT / P2: DXF export defaults to directory output
+
+- **Where:** `exportFab` DXF invocation in `src/kicad/cli.ts`, KiCad 10.0.6 native verification.
+- **Symptom:** a successful DXF command created `outline.dxf/open-key-Edge_Cuts.dxf` rather than the required `outline.dxf` file, preventing package validation.
+- **Suggested:** request KiCad's single-file DXF mode explicitly.
+- **Status:** fixed with `--mode-single`. A fresh native run produced the required regular file, all export jobs succeeded, and the receipt validated without manually moving any output. A regression asserts the DXF is a nonempty regular file.
 
 ## Acceptance evidence outstanding
 

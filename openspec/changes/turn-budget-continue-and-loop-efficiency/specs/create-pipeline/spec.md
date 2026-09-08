@@ -18,7 +18,7 @@
 
 ### Requirement: Content-aware stage completion
 
-Stage completion SHALL be judged by repo state, not artifact existence alone: the schematic stage is complete only when the configured schematic contains at least one symbol AND the BOM/PINOUT tables are drift-clean against it; the layout-draft stage is complete only when a configured board exists containing at least one footprint AND the LAYOUT.md draft-quality marker is present. After a stage's agent run finishes with outcome success, `create` SHALL re-check that stage's completion contract and halt the pipeline (preserving committed partial work, with a resume hint) if the contract is not met, instead of advancing to later stages.
+Stage completion SHALL be judged by repo state and the applicable deterministic gate, not artifact existence alone: the schematic stage is complete only when the configured schematic contains at least one symbol AND the BOM/PINOUT tables are drift-clean against it; the layout-draft stage is complete only when a configured board exists containing at least one footprint, the LAYOUT.md draft-quality marker is present, AND KiCad DRC reports zero violations including zero unconnected items. The outputs stage is complete only when that board remains DRC-clean and all concrete `exportFab` outputs plus the ordering BOM are present, non-empty, and match a successful-export receipt that hashes the current board, schematic, BOM source, KiCad `.gbrjob` file list, and every output. After a stage's agent run finishes with outcome success, `create` SHALL re-check that stage's completion contract and halt the pipeline (preserving committed partial work, with a resume hint) if the contract is not met, instead of advancing to later stages.
 
 #### Scenario: Blank sheet does not complete the schematic stage (AC-15.23)
 
@@ -29,3 +29,13 @@ Stage completion SHALL be judged by repo state, not artifact existence alone: th
 
 - **WHEN** any stage's agent run returns success without satisfying that stage's completion contract
 - **THEN** `runCreate` returns not-ok with the completed-stage list so far, and later stages do not run
+
+#### Scenario: Ratsnest cannot complete layout (AC-15.30)
+
+- **WHEN** the configured board has footprints and a filled Draft quality section but KiCad DRC reports an unconnected item or any other violation
+- **THEN** layout-draft remains incomplete on both resume and the post-run completion check
+
+#### Scenario: Partial export cannot complete outputs (AC-15.31)
+
+- **WHEN** only part of the concrete export package exists, any required artifact is empty, a source/output hash or KiCad `.gbrjob` file list differs from the successful-export receipt, or the source board no longer passes DRC
+- **THEN** outputs remains incomplete and `create` does not advance to firmware

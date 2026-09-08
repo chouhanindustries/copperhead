@@ -4,7 +4,7 @@ import { readFile, mkdir, writeFile, readdir } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { loadConfig, resolveCompatSettings } from '../config.js';
 import { bootstrapKicadProject, markCreateOrigin } from '../kicad/bootstrap.js';
-import { exportSvg, runErc } from '../kicad/cli.js';
+import { exportSvg, runDrc, runErc } from '../kicad/cli.js';
 import { listSymbols } from '../kicad/sexp.js';
 import { checkLegibility } from '../kicad/legibility.js';
 import { draftSchematicToText, defaultIntentPath } from '../kicad/draft/draft.js';
@@ -26,6 +26,7 @@ import { runCheck } from './check.js';
 import { emitCreateJlcpcbBom } from './export.js';
 import { parseCanonicalTables } from '../memory/bom-table.js';
 import { isLlmCacheOnly } from '../agent/response-cache.js';
+import { exportReceiptMatches } from '../kicad/export-receipt.js';
 
 /**
  * Mode A (`copperhead create`, SPEC §2.5): staged pipeline, each stage a
@@ -256,20 +257,28 @@ export const STAGES: Stage[] = [
       const p = path.join(root, config.board);
       if (!existsSync(p)) return false;
       if (!(await readFile(p, 'utf8')).includes('(footprint')) return false;
-      return docHasContent(root, path.join(docs, 'LAYOUT.md'), '## Draft quality');
+      if (!(await docHasContent(root, path.join(docs, 'LAYOUT.md'), '## Draft quality'))) return false;
+      return (await runDrc(p)).ok;
     },
     prompt: () =>
-      'Stage 5: first-draft layout. Use populate_board to import installed footprints at planned coordinates before routing; never invent pads from library names. Use search_footprints to discover installed IDs, then verify package compatibility. An unavailable footprint requires a verified replacement in the BOM and schematic intent before retrying placement. A library footprint can also be incompatible with the required manufacturing clearances: if its unchanged internal geometry fails DRC, choose a compatible installed component and update BOM, PINOUT and schematic intent rather than suppressing rules or moving individual library pads. For power-only USB designs, consider power-only receptacles instead of retaining unused data contacts. Rule-driven placement written as real coordinates: connectors on edges, decoupling at IC pins, ESD at connectors, keepouts honored. Route power and short critical nets; leave the rest as ratsnest. Every routed net must pass run_drc. Then write the "## Draft quality" section in LAYOUT.md: exactly what is fine and what a human or specialist tool should redo. Non-optimal is acceptable; unlabeled non-optimal is not.',
+      'Stage 5: first-draft layout. Use populate_board to import installed footprints at planned coordinates before routing; never invent pads from library names. Use search_footprints to discover installed IDs, then verify package compatibility. An unavailable footprint requires a verified replacement in the BOM and schematic intent before retrying placement. A library footprint can also be incompatible with the required manufacturing clearances: if its unchanged internal geometry fails DRC, choose a compatible installed component and update BOM, PINOUT and schematic intent before retrying rather than suppressing rules or moving individual library pads. For power-only USB designs, consider power-only receptacles instead of retaining unused data contacts. Rule-driven placement written as real coordinates: connectors on edges, decoupling at IC pins, ESD at connectors, keepouts honored. Route every electrical connection and run run_drc until it reports zero violations, including zero unconnected items. Then write the "## Draft quality" section in LAYOUT.md: exactly what is electrically and geometrically valid and what placement, path, via, or length optimization a human or specialist tool should redo. Non-optimal is acceptable; unrouted or DRC-failing is incomplete.',
   },
   {
     name: 'outputs',
     isComplete: async (root) => {
-      // An empty outputs/ dir (e.g. from a failed export run) must not count
-      // as complete. Require at least one Gerber file (any .gbr variant).
-      return dirHasFiles(path.join(root, 'outputs'), ['.gbr', '.gtl', '.gbl', '.gbs', '.gbo', '.gbp', '.gbd', '.gto', '.gts', '.gml']);
+      const config = await loadConfig(root);
+      if (!config.board) return false;
+      const board = path.join(root, config.board);
+      if (!existsSync(board) || !(await runDrc(board)).ok) return false;
+      return exportReceiptMatches({
+        repoRoot: root,
+        board: config.board,
+        schematic: config.schematic,
+        bom: path.join(config.docs, 'BOM.md'),
+      });
     },
     prompt: () =>
-      'Stage 6: outputs package. Export into outputs/: gerbers+drill (JLC profile), DXF and STEP outline, SVG renders (export_svg), and an ordering BOM.csv generated from BOM.md (refdes, MPN, qty). Every export must succeed.',
+      'Stage 6: outputs package. First run run_drc on the current board and do not export until it reports zero violations, including zero unconnected items. Write an ordering outputs/BOM.csv generated from BOM.md (refdes, MPN, qty), then call export_outputs LAST to write gerbers+drill (JLC profile), DXF and STEP outline, SVG renders, and a receipt binding every output to the current KiCad source hashes. Every export must succeed and every required file must be non-empty; changing the sources or outputs after that call invalidates the receipt and requires calling export_outputs again. A partial or stale package is incomplete.',
   },
   {
     name: 'firmware',

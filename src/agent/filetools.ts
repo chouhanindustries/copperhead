@@ -3,6 +3,12 @@ import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { resolveInRepo, isKicadFile } from '../util/paths.js';
 
+const EXPORT_RECEIPT_PATH = 'outputs/.copperhead-export.json';
+
+function isGeneratedExportReceipt(repoRoot: string, absolute: string): boolean {
+  return path.relative(repoRoot, absolute).split(path.sep).join('/') === EXPORT_RECEIPT_PATH;
+}
+
 export async function toolReadFile(
   repoRoot: string,
   p: string,
@@ -24,6 +30,9 @@ export async function toolReadFile(
 /** New files only; refuses to overwrite anything and to create KiCad files (SPEC §4.2). */
 export async function toolWriteFile(repoRoot: string, p: string, content: string): Promise<string> {
   const abs = resolveInRepo(repoRoot, p);
+  if (isGeneratedExportReceipt(repoRoot, abs)) {
+    throw new Error(`write_file refuses generated export receipt ${p}; call export_outputs to regenerate it`);
+  }
   if (isKicadFile(abs)) {
     throw new Error(`write_file refuses KiCad files (${p}); use edit_file with anchors instead`);
   }
@@ -49,6 +58,9 @@ export async function toolEditFile(
   validate?: (before: string, after: string) => string | null,
 ): Promise<string> {
   const abs = resolveInRepo(repoRoot, p);
+  if (isGeneratedExportReceipt(repoRoot, abs)) {
+    throw new Error(`edit_file refuses generated export receipt ${p}; call export_outputs to regenerate it`);
+  }
   const text = await readFile(abs, 'utf8');
   const first = text.indexOf(oldString);
   if (first === -1) {

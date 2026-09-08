@@ -168,6 +168,16 @@ describe('file tools', () => {
     await expect(toolWriteFile(dir, 'a.md', 'again')).rejects.toThrow(/overwrite/);
   });
 
+  it('refuses agent-authored export receipts', async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), 'ch-'));
+    await expect(toolWriteFile(dir, 'outputs/.copperhead-export.json', '{}')).rejects.toThrow(/generated export receipt/);
+    await mkdir(path.join(dir, 'outputs'), { recursive: true });
+    await writeFile(path.join(dir, 'outputs', '.copperhead-export.json'), '{}', 'utf8');
+    await expect(toolEditFile(dir, 'outputs/.copperhead-export.json', '{}', '{"forged":true}')).rejects.toThrow(
+      /generated export receipt/,
+    );
+  });
+
   it('edit_file requires a unique anchor with actionable errors', async () => {
     const dir = await mkdtemp(path.join(tmpdir(), 'ch-'));
     await writeFile(path.join(dir, 'f.txt'), 'aaa\nbbb\naaa\n');
