@@ -573,6 +573,7 @@ Placement, routing, and legibility are computed from the netlist rather than sam
 
 - **AC-16.4 (byte-identical regeneration)** Drafting the same IR, committing, and drafting again leaves `git diff` over the schematic empty.
 - **AC-16.5 (library upgrade is inert)** When the installed KiCad symbol library changes after a symbol was vendored, re-drafting the same IR is byte-identical to the pre-upgrade output, and `verify_symbols` reports the divergence between vendored and installed sources.
+- **AC-16.40 (generated power symbols are not library aliases)** `verify_symbols` excludes an exact engine-generated `copperhead_power` rail, ground, or `PWR_FLAG` symbol from installed-library comparison because it has no installed-library canonical identity; a prefixed entry whose generated semantic shape is altered remains subject to verification, and ordinary vendored symbols continue to report installed-library drift.
 - **AC-16.12 (output loads in kicad-cli)** Every golden IR drafted in CI loads in `kicad-cli` without error, and ERC runs to completion.
 - **AC-16.13 (connectivity matches intent)** Parsing a drafted reference IR yields a net list equal to the IR's connection list, with no-connect pins excluded.
 

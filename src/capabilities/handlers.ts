@@ -359,7 +359,7 @@ export const HANDLERS: HandlerDef[] = [
     schema: {
       name: 'verify_symbols',
       description:
-        "Cross-check every lib_symbols entry in the schematic against the KiCad symbol library installed on this machine. Reports pins that diverge from the real part (wrong count, name, or electrical type) and lib_ids that do not exist in the current KiCad version (with the closest real names). ERC cannot catch these — a symbol whose lib_id claims to be a canonical part but whose pins are wrong passes ERC while being wrong. Run this after capturing symbols and reconcile every finding.",
+        "Cross-check every installed-library lib_symbols entry in the schematic against the KiCad symbol library installed on this machine. Reports pins that diverge from the real part (wrong count, name, or electrical type) and lib_ids that do not exist in the current KiCad version (with the closest real names). Exact engine-generated copperhead_power symbols are excluded because they have no installed-library canonical identity. ERC cannot catch canonical symbols whose authored pins are wrong, so run this after capturing symbols and reconcile every finding.",
       parameters: { type: 'object', properties: {}, required: [] },
     },
     requiresUnlock: false,
