@@ -44,6 +44,9 @@ interface StructuredTurn {
   toolCalls: Array<{ id: string; name: string; arguments: string }>;
 }
 
+/** One malformed replacement is common on long tool arguments; stay bounded. */
+const MAX_STRUCTURE_CORRECTIONS = 2;
+
 /**
  * Uses the locally installed Codex CLI and its saved ChatGPT login. Codex is a
  * reasoning backend only: its own sandbox is read-only and Copperhead remains
@@ -90,20 +93,26 @@ export class CodexProvider implements Provider {
     const schema = turnSchema(tools);
     const toolCatalog = new Map(tools.map((tool) => [tool.name, tool]));
     const attempts: CodexTurnLike[] = [];
-    let result = await this.runThread(renderTurnPrompt(messages, cursor, tools), schema);
-    if (this.lifecycle !== lifecycle) throw new Error('Codex CLI provider closed during turn');
-    attempts.push(result);
-
-    let parsed: ReturnType<typeof parseStructuredTurn>;
-    try {
-      parsed = parseStructuredTurn(result.finalResponse, toolCatalog);
-    } catch (err) {
-      const validationError = (err as Error).message;
-      result = await this.runThread(renderCorrectionPrompt(tools, validationError), schema);
+    let prompt = renderTurnPrompt(messages, cursor, tools);
+    let parsed: ReturnType<typeof parseStructuredTurn> | null = null;
+    for (let correction = 0; correction <= MAX_STRUCTURE_CORRECTIONS; correction++) {
+      const result = await this.runThread(prompt, schema);
       if (this.lifecycle !== lifecycle) throw new Error('Codex CLI provider closed during turn');
       attempts.push(result);
-      parsed = parseStructuredTurn(result.finalResponse, toolCatalog);
+      try {
+        parsed = parseStructuredTurn(result.finalResponse, toolCatalog);
+        break;
+      } catch (err) {
+        if (correction === MAX_STRUCTURE_CORRECTIONS) throw err;
+        prompt = renderCorrectionPrompt(
+          tools,
+          (err as Error).message,
+          correction + 1,
+          MAX_STRUCTURE_CORRECTIONS,
+        );
+      }
     }
+    if (!parsed) throw new Error('Codex returned no valid structured turn');
 
     // The input remains unseen until Copperhead accepts a structured turn.
     this.messageCursor = messages.length;
@@ -232,9 +241,15 @@ function renderMessage(message: Msg): string {
   }
 }
 
-function renderCorrectionPrompt(tools: ToolSchema[], validationError: string): string {
+function renderCorrectionPrompt(
+  tools: ToolSchema[],
+  validationError: string,
+  correction: number,
+  maxCorrections: number,
+): string {
   return [
     'Copperhead rejected your previous structured turn.',
+    `Correction attempt ${correction} of ${maxCorrections}.`,
     `Validation error (JSON):\n${JSON.stringify({ error: validationError })}`,
     'Return one corrected replacement turn using only the current Copperhead tool catalog.',
     'The original input is already present in this thread and is not repeated here.',

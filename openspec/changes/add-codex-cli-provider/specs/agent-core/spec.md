@@ -24,11 +24,11 @@ The Codex provider SHALL run with a read-only sandbox, approval policy `never`, 
 
 #### Scenario: Edit tools remain structurally absent
 - **WHEN** a Codex turn occurs before its OpenSpec proposal validates
-- **THEN** the structured output schema's tool-name enum contains no `edit_file` or `write_file`, and any returned unavailable name receives one corrective retry before the provider fails
+- **THEN** the structured output schema's tool-name enum contains no `edit_file` or `write_file`, and any returned unavailable name receives at most two corrective attempts before the provider fails
 
 #### Scenario: Rejected structured turn retains its input
 - **WHEN** Codex returns an unavailable tool name, malformed arguments, or another invalid structured turn
-- **THEN** the provider retries once in the same thread with the validation error, does not duplicate the original prompt, and advances its message cursor only after a valid replacement turn
+- **THEN** the provider retries at most twice in the same thread with the latest validation error, does not duplicate the original prompt, never emits an invalid call to Copperhead's dispatcher, and advances its message cursor only after a valid replacement turn
 
 #### Scenario: Native Codex edit is impossible
 - **WHEN** Codex processes any Copperhead turn

@@ -325,7 +325,7 @@ describe('CodexProvider', () => {
     });
   });
 
-  it('rejects malformed JSON tool arguments', async () => {
+  it('recovers when a malformed JSON tool call needs a second bounded correction', async () => {
     const invalid = {
       finalResponse: JSON.stringify({
         text: '',
@@ -346,17 +346,53 @@ describe('CodexProvider', () => {
       client: { startThread: () => ({ run }) },
     });
 
+    await expect(provider.chat([{ role: 'user', content: 'read' }], [readTool])).resolves.toMatchObject({
+      text: 'recovered',
+      toolCalls: [],
+    });
+    expect(run).toHaveBeenCalledTimes(3);
+    expect(run.mock.calls[1]![0]).toContain('invalid JSON arguments');
+    expect(run.mock.calls[1]![0]).not.toContain('"content":"read"');
+    expect(run.mock.calls[1]![0]).toContain('Correction attempt 1 of 2');
+    expect(run.mock.calls[2]![0]).toContain('Correction attempt 2 of 2');
+    expect(run.mock.calls[2]![0]).not.toContain('"content":"read"');
+  });
+
+  it('never dispatches malformed arguments and fails after two correction attempts', async () => {
+    const invalid = {
+      finalResponse: JSON.stringify({
+        text: '',
+        toolCalls: [{ id: 'reroute-cc2-mid', name: 'read_file', arguments: '{"path":"docs/SPEC.md"} trailing' }],
+      }),
+      usage: null,
+    };
+    const run = vi
+      .fn()
+      .mockResolvedValueOnce(invalid)
+      .mockResolvedValueOnce(invalid)
+      .mockResolvedValueOnce(invalid)
+      .mockResolvedValueOnce({
+        finalResponse: JSON.stringify({ text: 'next turn recovered', toolCalls: [] }),
+        usage: null,
+      });
+    const provider = new CodexProvider({
+      workingDirectory: process.cwd(),
+      client: { startThread: () => ({ run }) },
+    });
+
     await expect(provider.chat([{ role: 'user', content: 'read' }], [readTool])).rejects.toThrow(
       'invalid JSON arguments',
     );
-    expect(run).toHaveBeenCalledTimes(2);
-    expect(run.mock.calls[1]![0]).toContain('invalid JSON arguments');
-    expect(run.mock.calls[1]![0]).not.toContain('"content":"read"');
+    expect(run).toHaveBeenCalledTimes(3);
+    expect(run.mock.calls[1]![0]).toContain('Unexpected non-whitespace character after JSON');
+    expect(run.mock.calls[2]![0]).toContain('Correction attempt 2 of 2');
 
+    // A rejected turn advances no cursor, so the next call receives the
+    // original input again instead of losing it with the invalid tool call.
     await expect(provider.chat([{ role: 'user', content: 'read' }], [readTool])).resolves.toMatchObject({
-      text: 'recovered',
+      text: 'next turn recovered',
     });
-    expect(run.mock.calls[2]![0]).toContain('"kind":"user","content":"read"');
+    expect(run.mock.calls[3]![0]).toContain('"kind":"user","content":"read"');
   });
 
   it('retries arguments that do not match the selected tool schema', async () => {

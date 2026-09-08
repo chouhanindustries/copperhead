@@ -16,7 +16,7 @@ The Codex thread runs with `sandboxMode: read-only`, `approvalPolicy: never`, ne
 
 ### D3 — Structural gating is mirrored in structured output
 
-Every SDK turn receives a JSON Schema. `toolCalls[].name` is an enum built from that turn's `availableTools(ctx)`. Before proposal validation the enum cannot represent `edit_file` or `write_file`; after validation the next turn's schema can. Returned names and JSON arguments are validated against the selected tool's parameter schema before entering the normalized `Turn` type. If validation fails, the provider keeps the message cursor unchanged and gives the same thread one corrective retry containing the validation error without duplicating the original prompt. Copperhead messages and tool results use JSON framing so their content cannot terminate pseudo-XML delimiters.
+Every SDK turn receives a JSON Schema. `toolCalls[].name` is an enum built from that turn's `availableTools(ctx)`. Before proposal validation the enum cannot represent `edit_file` or `write_file`; after validation the next turn's schema can. Returned names and JSON arguments are validated against the selected tool's parameter schema before entering the normalized `Turn` type. If validation fails, the provider keeps the message cursor unchanged and gives the same thread at most two corrective attempts containing the latest validation error without duplicating the original prompt. This accommodates one malformed replacement on long JSON arguments while retaining a fixed provider-call bound. Copperhead messages and tool results use JSON framing so their content cannot terminate pseudo-XML delimiters.
 
 ### D4 — One Codex thread per Copperhead run
 

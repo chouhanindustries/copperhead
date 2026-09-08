@@ -77,7 +77,7 @@ Work toward [#66](https://github.com/copperheadhq/copperhead/issues/66), based o
 - **Where:** the next layout attempt with a power-only replacement.
 - **Symptom:** the model found a compatible footprint but refused to proceed without evidence of its 3 A rating. That attempt exited 1; no layout-stage success is claimed.
 - **Suggested:** supply verified manufacturer references as input, preserving the original product requirements.
-- **Status:** a new clean run uses [the sourced brief](../../examples/simple/usb-c-breakout-verified-parts.md). It preserves the original brief and adds GCT ratings and drawing references. Its first four stages committed successfully, including a clean schematic ERC; layout and the remaining stages are still running or outstanding. Generated design artifacts were not manually modified to pass verification.
+- **Status:** a new clean run uses [the sourced brief](../../examples/simple/usb-c-breakout-verified-parts.md). It preserves the original brief and adds GCT ratings and drawing references. Its first four stages committed successfully, including a clean schematic ERC; layout failed on malformed provider tool arguments; later stages remain outstanding. Generated design artifacts were not manually modified to pass verification.
 
 ## DEFECT / P1: resume predicates accept unverified layout and partial exports
 
@@ -92,6 +92,13 @@ Work toward [#66](https://github.com/copperheadhq/copperhead/issues/66), based o
 - **Symptom:** a successful DXF command created `outline.dxf/open-key-Edge_Cuts.dxf` rather than the required `outline.dxf` file, preventing package validation.
 - **Suggested:** request KiCad's single-file DXF mode explicitly.
 - **Status:** fixed with `--mode-single`. A fresh native run produced the required regular file, all export jobs succeeded, and the receipt validated without manually moving any output. A regression asserts the DXF is a nonempty regular file.
+
+## DEFECT / P2: malformed provider arguments abort otherwise recoverable work
+
+- **Where:** Codex tool call `reroute-cc2-mid` during the sourced-brief layout run.
+- **Symptom:** JSON parsing rejected trailing content at position 867. The CLI exited 1 after four completed stages and rolled back layout; the failed layout was preserved in stash `9ea2fa33fc`. Its last DRC still had 35 violations.
+- **Suggested:** request a bounded corrected response before executing any tools from a malformed batch, preserving cancellation and lifecycle protections.
+- **Status:** the existing single correction attempt is extended to two bounded corrections, each receiving the latest parse error; invalid arguments never reach tool execution. Targeted provider tests passed 14/14, including repeated malformed replacements and cursor preservation after exhaustion. Build and typecheck passed. The full suite passed 974 tests and skipped 23, with one failure in the previously intermittent MCP concurrency test; its isolated rerun passed all 29 MCP tests. The failed run is not eight-stage acceptance evidence, and its preserved board is not DRC-clean.
 
 ## Acceptance evidence outstanding
 
