@@ -13,6 +13,7 @@
 - [x] 1.9 JSON-frame untrusted prompt content and avoid duplicate context on corrective retries.
 - [x] 1.10 Remove owned provider working directories when the agent loop exits.
 - [x] 1.11 Derive load-bearing adapter options from SDK types and narrow setup guidance.
+- [x] 1.12 Abort and settle active SDK turns on provider close, then replay full context on a fresh thread.
 
 ## 2. Selection and configuration
 
@@ -29,3 +30,4 @@
 - [x] 3.4 Run typecheck, build, offline tests, docs build, and live saved-login smoke verification.
 - [x] 3.5 Run the fixture agent-loop acceptance test through `--model codex` with KiCad installed.
 - [x] 3.6 Make the live rollback test structurally deterministic across providers with a one-turn budget.
+- [x] 3.7 Cover pending-turn cancellation, cleanup ordering, independent correction signals, and post-close context replay.

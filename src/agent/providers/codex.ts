@@ -15,7 +15,7 @@ type CodexThreadOptions = Pick<
   | 'networkAccessEnabled'
   | 'webSearchMode'
 >;
-type CodexTurnOptions = Pick<TurnOptions, 'outputSchema'>;
+type CodexTurnOptions = Pick<TurnOptions, 'outputSchema' | 'signal'>;
 
 interface CodexTurnLike {
   finalResponse: string;
@@ -58,6 +58,11 @@ export class CodexProvider implements Provider {
   private readonly client: CodexClientLike;
   private thread: CodexThreadLike | null = null;
   private messageCursor = 0;
+  private lifecycle = 0;
+  /** Active SDK turns and their aborters. The watchdog calls close() on a
+   * timeout, which must stop the spawned Codex process before its scratch cwd
+   * is removed and before a retry starts another thread. */
+  private readonly inFlight = new Map<AbortController, Promise<CodexTurnLike>>();
 
   constructor(options: CodexProviderOptions) {
     this.model = options.model;
@@ -67,7 +72,8 @@ export class CodexProvider implements Provider {
   }
 
   async chat(messages: Msg[], tools: ToolSchema[], _opts: ChatOpts = {}): Promise<Turn> {
-    const workingDirectory = await this.ensureWorkingDirectory();
+    const lifecycle = this.lifecycle;
+    const workingDirectory = await this.ensureWorkingDirectory(lifecycle);
     if (!this.thread) {
       this.thread = this.client.startThread({
         ...(this.model ? { model: this.model } : {}),
@@ -85,6 +91,7 @@ export class CodexProvider implements Provider {
     const toolCatalog = new Map(tools.map((tool) => [tool.name, tool]));
     const attempts: CodexTurnLike[] = [];
     let result = await this.runThread(renderTurnPrompt(messages, cursor, tools), schema);
+    if (this.lifecycle !== lifecycle) throw new Error('Codex CLI provider closed during turn');
     attempts.push(result);
 
     let parsed: ReturnType<typeof parseStructuredTurn>;
@@ -93,6 +100,7 @@ export class CodexProvider implements Provider {
     } catch (err) {
       const validationError = (err as Error).message;
       result = await this.runThread(renderCorrectionPrompt(tools, validationError), schema);
+      if (this.lifecycle !== lifecycle) throw new Error('Codex CLI provider closed during turn');
       attempts.push(result);
       parsed = parseStructuredTurn(result.finalResponse, toolCatalog);
     }
@@ -110,25 +118,57 @@ export class CodexProvider implements Provider {
   }
 
   async close(): Promise<void> {
+    // Detach mutable provider state before the first await. withTimeout invokes
+    // close asynchronously and may let the caller retry immediately; that retry
+    // must get a fresh thread/cwd rather than race cleanup of the timed-out one.
+    this.lifecycle += 1;
     this.thread = null;
-    if (this.ownsWorkingDirectory && this.workingDirectory) {
-      await rm(this.workingDirectory, { recursive: true, force: true });
-      this.workingDirectory = null;
+    this.messageCursor = 0;
+    const workingDirectory = this.ownsWorkingDirectory ? this.workingDirectory : null;
+    if (this.ownsWorkingDirectory) this.workingDirectory = null;
+
+    const active = [...this.inFlight.entries()];
+    for (const [aborter] of active) {
+      this.inFlight.delete(aborter);
+      try {
+        aborter.abort();
+      } catch {
+        // Best effort: an already-settled controller has no useful failure.
+      }
+    }
+    // The SDK wires signal to child_process.spawn. Wait until each aborted SDK
+    // promise settles so no child can still use the directory we remove below.
+    await Promise.allSettled(active.map(([, pending]) => pending));
+
+    if (workingDirectory) {
+      await rm(workingDirectory, { recursive: true, force: true });
     }
   }
 
-  private async ensureWorkingDirectory(): Promise<string> {
+  private async ensureWorkingDirectory(lifecycle: number): Promise<string> {
     if (this.workingDirectory) {
-      await mkdir(this.workingDirectory, { recursive: true });
-      return this.workingDirectory;
+      const existing = this.workingDirectory;
+      await mkdir(existing, { recursive: true });
+      if (this.lifecycle !== lifecycle) throw new Error('Codex CLI provider closed during setup');
+      return existing;
     }
-    this.workingDirectory = await mkdtemp(path.join(tmpdir(), 'copperhead-codex-'));
-    return this.workingDirectory;
+    const created = await mkdtemp(path.join(tmpdir(), 'copperhead-codex-'));
+    if (this.lifecycle !== lifecycle) {
+      await rm(created, { recursive: true, force: true });
+      throw new Error('Codex CLI provider closed during setup');
+    }
+    this.workingDirectory = created;
+    return created;
   }
 
   private async runThread(prompt: string, outputSchema: Record<string, unknown>): Promise<CodexTurnLike> {
+    const thread = this.thread;
+    if (!thread) throw new Error('Codex CLI provider is closed');
+    const aborter = new AbortController();
+    const pending = thread.run(prompt, { outputSchema, signal: aborter.signal });
+    this.inFlight.set(aborter, pending);
     try {
-      return await this.thread!.run(prompt, { outputSchema });
+      return await pending;
     } catch (err) {
       const original = err as Error & { status?: number; statusCode?: number };
       const setupHint = isCliSetupError(original)
@@ -138,6 +178,8 @@ export class CodexProvider implements Provider {
       if (original.status !== undefined) Object.assign(enhanced, { status: original.status });
       if (original.statusCode !== undefined) Object.assign(enhanced, { statusCode: original.statusCode });
       throw enhanced;
+    } finally {
+      this.inFlight.delete(aborter);
     }
   }
 }

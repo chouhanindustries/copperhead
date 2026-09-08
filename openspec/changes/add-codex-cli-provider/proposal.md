@@ -12,6 +12,7 @@ Copperhead currently requires a metered OpenAI or Anthropic API key for every ag
 - Constrain every Codex response with structured output whose tool-name enum is derived from the tools currently exposed by Copperhead, preserving the structural spec gate.
 - Allow an explicit Codex model override as `codex:<model-id>` while plain `codex` follows the user's Codex model configuration/default.
 - Document and test the new provider, including a live opt-in provider-parity path.
+- Abort active Codex SDK turns when the watchdog closes the provider, settle them before scratch-directory cleanup, and replay full context on the retry's fresh thread.
 
 ## Impact
 

@@ -26,9 +26,13 @@ The provider retains a Codex `Thread` across loop turns. The first prompt carrie
 
 `codex` selects the user's Codex default model. `codex:<model-id>` selects an explicit Codex model. Other non-Claude model strings continue to route to the direct OpenAI API, preserving backward compatibility.
 
+### D6 — Provider close cancels active SDK turns
+
+Every SDK turn receives its own `AbortSignal`. Closing the provider synchronously advances a lifecycle generation, detaches its thread, resets its message cursor, and detaches its owned temporary directory before aborting all captured turns. Close waits for those SDK promises to settle before removing the captured directory. A stale turn that resolves despite cancellation cannot advance the new lifecycle's cursor. A watchdog retry can therefore start a fresh thread and directory immediately without sharing cleanup state with the aborted attempt, and the fresh thread receives the full Copperhead transcript. Corrective structured-output retries use a distinct controller so each active SDK call has an independent lifecycle.
+
 ## Failure behavior
 
-Missing optional SDK, CLI, or authentication produces an actionable provider error. Only missing-CLI and authentication-shaped failures point to `codex login status`; rate limits and unrelated execution failures retain their original context. The normal loop failure path restores the git snapshot and writes the transcript. Codex does not silently fall back to a paid API provider.
+Missing optional SDK, CLI, or authentication produces an actionable provider error. Only missing-CLI and authentication-shaped failures point to `codex login status`; rate limits and unrelated execution failures retain their original context. A watchdog timeout closes the provider, aborting and settling the active CLI subprocess before its scratch directory is removed. The normal loop failure path restores the git snapshot and writes the transcript. Codex does not silently fall back to a paid API provider.
 
 ## Security properties
 
