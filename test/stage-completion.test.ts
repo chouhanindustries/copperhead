@@ -251,6 +251,18 @@ describe('part-selection isComplete', () => {
     });
   });
 
+  it('returns false when the canonical BOM contains only its header and separator', async () => {
+    await withTmpDir(async (root) => {
+      await mkdir(path.join(root, DOCS), { recursive: true });
+      await writeFile(
+        path.join(root, DOCS, 'BOM.md'),
+        `# Bill of Materials\n\n| Refdes | Value | Footprint | MPN | Rationale |\n|---|---|---|---|---|\n`,
+        'utf8',
+      );
+      expect(await stageNamed('part-selection')(root, DOCS)).toBe(false);
+    });
+  });
+
   it('returns false when all BOM rows have UNVERIFIED MPNs (init scaffold)', async () => {
     await withTmpDir(async (root) => {
       await mkdir(path.join(root, DOCS), { recursive: true });
@@ -264,7 +276,7 @@ describe('part-selection isComplete', () => {
     });
   });
 
-  it('returns true when at least one BOM row has a real (non-UNVERIFIED) MPN', async () => {
+  it('returns true for existing concrete MPNs whose UNVERIFIED flag was cleared by human review', async () => {
     await withTmpDir(async (root) => {
       await mkdir(path.join(root, DOCS), { recursive: true });
       await writeFile(
@@ -273,6 +285,30 @@ describe('part-selection isComplete', () => {
         'utf8',
       );
       expect(await stageNamed('part-selection')(root, DOCS)).toBe(true);
+    });
+  });
+
+  it('returns true when an UNVERIFIED MPN cell names a concrete selected part', async () => {
+    await withTmpDir(async (root) => {
+      await mkdir(path.join(root, DOCS), { recursive: true });
+      await writeFile(
+        path.join(root, DOCS, 'BOM.md'),
+        `# Bill of Materials\n\n| Refdes | Value | Footprint | MPN | Rationale |\n|---|---|---|---|---|\n| R1 | 10k | R_0603 | UNVERIFIED: RC0603FR-0710KL | selected for 1% tolerance; confirm against datasheet |\n`,
+        'utf8',
+      );
+      expect(await stageNamed('part-selection')(root, DOCS)).toBe(true);
+    });
+  });
+
+  it('returns false when the text after UNVERIFIED is another placeholder', async () => {
+    await withTmpDir(async (root) => {
+      await mkdir(path.join(root, DOCS), { recursive: true });
+      await writeFile(
+        path.join(root, DOCS, 'BOM.md'),
+        `# Bill of Materials\n\n| Refdes | Value | Footprint | MPN | Rationale |\n|---|---|---|---|---|\n| R1 | 10k | R_0603 | UNVERIFIED: TBD | choose after review |\n`,
+        'utf8',
+      );
+      expect(await stageNamed('part-selection')(root, DOCS)).toBe(false);
     });
   });
 });

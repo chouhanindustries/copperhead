@@ -175,6 +175,8 @@ brief.md
 
 Each stage is a `do`-loop run with a stage-specific prompt. State lives in the repo (docs + files), so `create` is resumable: kill it at any stage, re-run, it continues from the docs.
 
+Part selection records a concrete chosen MPN in the canonical BOM table. New selections retain the human-review marker, for example `UNVERIFIED: RC0603FR-0710KL`; an existing concrete MPN remains complete if a human later clears that marker. A bare `UNVERIFIED` cell is only the `init` scaffold placeholder and does not complete the stage. This gate proves that a selection was made, not that Copperhead verified the datasheet.
+
 ### First-draft layout (explicitly non-optimal, explicitly useful)
 
 The agent produces an **initial placement and routing plan** — correct, not optimal — and says so:
