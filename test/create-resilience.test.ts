@@ -7,6 +7,7 @@ import { tempFixtureRepo } from './helpers.js';
 import { createHash } from 'node:crypto';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
+import { LLM_CACHE_ONLY_ENV } from '../src/agent/response-cache.js';
 
 // Covers the review's F3 gap: the retry / resume-commit branches of runCreate
 // were essentially untested. These drive them with a scripted runAgentLoop and a
@@ -95,6 +96,28 @@ async function seedRepo(repo: string): Promise<string> {
 }
 
 describe('create pipeline resilience (review F3)', () => {
+  it('cache-only stage failure never constructs a live diagnosis provider', async () => {
+    const { repo, cleanup } = await tempFixtureRepo();
+    const savedCacheOnly = process.env[LLM_CACHE_ONLY_ENV];
+    try {
+      const briefPath = await seedRepo(repo);
+      delete process.env.OPENAI_API_KEY;
+      process.env[LLM_CACHE_ONLY_ENV] = '1';
+      mockRunAgentLoop.mockResolvedValue(ok());
+      const lines: string[] = [];
+
+      const res = await runCreate({ repoRoot: repo, briefPath, model: 'gpt-5', log: (s) => lines.push(s) });
+
+      expect(res).toEqual({ ok: false, completed: [] });
+      expect(mockDiagnose).not.toHaveBeenCalled();
+      expect(lines.join('\n')).toContain('cache-only replay cannot diagnose');
+    } finally {
+      if (savedCacheOnly === undefined) delete process.env[LLM_CACHE_ONLY_ENV];
+      else process.env[LLM_CACHE_ONLY_ENV] = savedCacheOnly;
+      await cleanup();
+    }
+  });
+
   it('a retry verdict drives a successful second attempt, prepends the guidance, and accumulates cost across attempts', async () => {
     const { repo, cleanup } = await tempFixtureRepo();
     try {

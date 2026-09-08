@@ -25,6 +25,7 @@ import { assertDiskSpace, DEFAULT_MIN_FREE_BYTES } from '../util/preflight.js';
 import { runCheck } from './check.js';
 import { emitCreateJlcpcbBom } from './export.js';
 import { parseCanonicalTables } from '../memory/bom-table.js';
+import { isLlmCacheOnly } from '../agent/response-cache.js';
 
 /**
  * Mode A (`copperhead create`, SPEC §2.5): staged pipeline, each stage a
@@ -478,6 +479,14 @@ async function diagnose(input: {
   /** Compatible-endpoint settings, so a `compat` run can diagnose itself. */
   compat?: CompatSettings | undefined;
 }): Promise<StageDiagnosis> {
+  // A deterministic replay must never escape to a live diagnosis provider
+  // when a cached stage misses, wedges, or fails its completion contract.
+  if (isLlmCacheOnly()) {
+    return {
+      verdict: 'abort',
+      reason: 'cache-only replay cannot diagnose a failed stage without a cached provider turn',
+    };
+  }
   let provider: Provider | undefined;
   try {
     provider = await makeProvider(input.model, false, input.compat);

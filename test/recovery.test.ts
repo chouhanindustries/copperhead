@@ -1,12 +1,14 @@
 import { describe, it, expect } from 'vitest';
 import path from 'node:path';
 import { tmpdir } from 'node:os';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { withTimeout, TurnTimeoutError, parseDiagnosis, diagnoseStageFailure } from '../src/agent/recovery.js';
-import { CachingProvider } from '../src/agent/response-cache.js';
+import { CachingProvider, LLM_CACHE_ONLY_ENV } from '../src/agent/response-cache.js';
 import type { Msg, Provider, ToolSchema, Turn } from '../src/agent/types.js';
+import { runAgentLoop } from '../src/agent/loop.js';
+import { tempFixtureRepo } from './helpers.js';
 
 function turn(text: string): Turn {
   return { text, toolCalls: [], usage: { inputTokens: 10, outputTokens: 20 } };
@@ -125,6 +127,87 @@ describe('CachingProvider', () => {
       await cached.chat(msgs, tools);
       await cached.chat([{ role: 'user', content: 'different' }], tools);
       expect(inner.calls).toBe(2);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('cache-only mode replays a hit without constructing or calling a live provider', async () => {
+    const { repo, cleanup } = await tempFixtureRepo();
+    const cacheDir = path.join(repo, '.copperhead', 'llm-cache');
+    const model = 'provider-that-must-not-be-constructed';
+    const request = 'decline this replay request';
+    const reply: Turn = {
+      text: 'The request is declined.',
+      toolCalls: [{ id: 'refuse-1', name: 'finish', args: { outcome: 'refuse', summary: 'declined' } }],
+      usage: { inputTokens: 10, outputTokens: 5 },
+    };
+    const inner = new CountingProvider(() => reply);
+    const savedEnv = {
+      cacheOnly: process.env[LLM_CACHE_ONLY_ENV],
+      openai: process.env.OPENAI_API_KEY,
+      anthropic: process.env.ANTHROPIC_API_KEY,
+    };
+    try {
+      const warm = await runAgentLoop({
+        repoRoot: repo,
+        request,
+        model,
+        maxTurns: 1,
+        provider: new CachingProvider(inner, cacheDir, undefined, model),
+        log: () => {},
+      });
+      expect(warm.outcome).toBe('refused');
+      expect(inner.calls).toBe(1);
+
+      process.env[LLM_CACHE_ONLY_ENV] = '1';
+      delete process.env.OPENAI_API_KEY;
+      delete process.env.ANTHROPIC_API_KEY;
+      const replay = await runAgentLoop({ repoRoot: repo, request, model, maxTurns: 1, log: () => {} });
+      expect(replay.outcome).toBe('refused');
+      expect(replay.cacheHits).toBe(1);
+      expect(replay.stats.tokensIn).toBe(0);
+      expect(replay.stats.tokensOut).toBe(0);
+
+      const miss = await runAgentLoop({
+        repoRoot: repo,
+        request: `${request} with divergent input`,
+        model,
+        maxTurns: 1,
+        log: () => {},
+      });
+      expect(miss).toMatchObject({ outcome: 'failure', exitPath: 'provider-error' });
+      expect(miss.summary).toContain('cache-only miss');
+      expect(miss.summary).toContain('live provider was not called');
+    } finally {
+      if (savedEnv.cacheOnly === undefined) delete process.env[LLM_CACHE_ONLY_ENV];
+      else process.env[LLM_CACHE_ONLY_ENV] = savedEnv.cacheOnly;
+      if (savedEnv.openai === undefined) delete process.env.OPENAI_API_KEY;
+      else process.env.OPENAI_API_KEY = savedEnv.openai;
+      if (savedEnv.anthropic === undefined) delete process.env.ANTHROPIC_API_KEY;
+      else process.env.ANTHROPIC_API_KEY = savedEnv.anthropic;
+      await cleanup();
+    }
+  });
+
+  it('cache-only mode rejects a corrupt entry without calling the inner provider', async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), 'copperhead-cache-'));
+    try {
+      const inner = new CountingProvider(() => turn('must not run'));
+      const cached = new CachingProvider(inner, dir, undefined, 'strict-model', undefined, true);
+      const key = createHash('sha256')
+        .update(JSON.stringify({ model: 'strict-model', messages: msgs, tools: [] }))
+        .digest('hex');
+      await writeFile(path.join(dir, `${key}.json`), '{not json', 'utf8');
+      await expect(cached.chat(msgs, tools)).rejects.toThrow('cache-only entry is unreadable or invalid');
+      expect(inner.calls).toBe(0);
+
+      const normal = new CachingProvider(inner, dir, undefined, 'strict-model');
+      await expect(normal.chat(msgs, tools)).resolves.toMatchObject({ text: 'must not run' });
+      expect(inner.calls).toBe(1);
+      expect(JSON.parse(await readFile(path.join(dir, `${key}.json`), 'utf8'))).toMatchObject({
+        text: 'must not run',
+      });
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
