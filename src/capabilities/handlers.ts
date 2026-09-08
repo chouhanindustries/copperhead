@@ -412,7 +412,6 @@ export const HANDLERS: HandlerDef[] = [
         properties: {
           placements: {
             type: 'array',
-            minItems: 1,
             items: {
               type: 'object',
               properties: {

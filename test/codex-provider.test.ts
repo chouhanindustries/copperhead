@@ -2,6 +2,7 @@ import { access } from 'node:fs/promises';
 import { describe, expect, it, vi } from 'vitest';
 import { CodexProvider } from '../src/agent/providers/codex.js';
 import { makeProvider } from '../src/agent/loop.js';
+import { HANDLERS } from '../src/capabilities/handlers.js';
 import type { Msg, ToolSchema } from '../src/agent/types.js';
 
 const readTool: ToolSchema = {
@@ -15,6 +16,23 @@ const readTool: ToolSchema = {
 };
 
 describe('CodexProvider', () => {
+  it('accepts the installed-footprint tool schema through the real Codex argument validator', async () => {
+    const schema = HANDLERS.find((handler) => handler.schema.name === 'populate_board')!.schema;
+    const args = { placements: [{ ref: 'R1', x: 105, y: 107, rotation: 90 }] };
+    const run = vi.fn(async () => ({
+      finalResponse: JSON.stringify({ text: 'place real footprint', toolCalls: [{ id: 'place-1', name: schema.name, arguments: JSON.stringify(args) }] }),
+      usage: null,
+    }));
+    const provider = new CodexProvider({ client: { startThread: () => ({ run }) } });
+    try {
+      const result = await provider.chat([{ role: 'user', content: 'place R1' }], [schema]);
+      expect(result.toolCalls[0]?.args).toEqual(args);
+      expect(run).toHaveBeenCalledTimes(1);
+    } finally {
+      await provider.close();
+    }
+  });
+
   it('is selected by the codex model namespace without an API key', async () => {
     expect((await makeProvider('codex')).name).toBe('codex');
     expect((await makeProvider('codex:gpt-test')).name).toBe('codex');
