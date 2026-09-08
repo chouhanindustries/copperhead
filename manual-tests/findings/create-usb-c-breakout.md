@@ -58,6 +58,13 @@ Work toward [#66](https://github.com/copperheadhq/copperhead/issues/66), based o
 - **Suggested:** configure isolated library tables, test imported geometry with real KiCad, and test the actual tool schema through the provider validator.
 - **Status:** setup corrected; rotation and schema regressions fixed. Nonempty placement validation remains in the handler. Latest full suite: 955 passed, 23 skipped, including the unrecorded E2E harness. No full-board DRC success is claimed.
 
+## DEFECT / P1: project edits can suppress verification findings
+
+- **Where:** [file-edit handler](../../src/capabilities/handlers.ts), `.kicad_pro` edits; layout run `2026-09-08T22-43-51-877Z`, turns 9 through 11.
+- **Symptom:** after importing eight real footprints, the model added global DRC severity overrides for unconnected items, hole clearance and silkscreen categories. The reported count fell from 23 to 3 without corresponding geometric repairs. Three footprint mismatches still failed verification; five repair cycles were exhausted, and the stage rolled back. The failed work was preserved in a stash and is not accepted as a solution.
+- **Suggested:** reject edits that weaken project verification settings before writing them. Resolve board geometry under the existing rules. Separately reconcile the stage's permission to leave ratsnest with the gate's treatment of unconnected items.
+- **Status:** reproduced; project-policy protection is in progress. No fifth-stage commit or clean-board claim results from this attempt.
+
 ## Acceptance evidence outstanding
 
 Stages 5 through 8, final exit 0, final stage summaries, full-board verification and a genuine provider-cache recording replayed in fresh repositories remain required. Unit tests, a DRC-clean empty outline and a published draft PR do not establish those results.
