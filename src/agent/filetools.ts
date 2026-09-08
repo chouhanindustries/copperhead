@@ -3,6 +3,12 @@ import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { resolveInRepo, isKicadFile } from '../util/paths.js';
 
+const EXPORT_RECEIPT_PATH = 'outputs/.copperhead-export.json';
+
+function isGeneratedExportReceipt(repoRoot: string, absolute: string): boolean {
+  return path.relative(repoRoot, absolute).split(path.sep).join('/') === EXPORT_RECEIPT_PATH;
+}
+
 export async function toolReadFile(
   repoRoot: string,
   p: string,
@@ -24,6 +30,9 @@ export async function toolReadFile(
 /** New files only; refuses to overwrite anything and to create KiCad files (SPEC §4.2). */
 export async function toolWriteFile(repoRoot: string, p: string, content: string): Promise<string> {
   const abs = resolveInRepo(repoRoot, p);
+  if (isGeneratedExportReceipt(repoRoot, abs)) {
+    throw new Error(`write_file refuses generated export receipt ${p}; call export_outputs to regenerate it`);
+  }
   if (isKicadFile(abs)) {
     throw new Error(`write_file refuses KiCad files (${p}); use edit_file with anchors instead`);
   }
@@ -46,16 +55,24 @@ export async function toolEditFile(
   oldString: string,
   newString: string,
   replaceAll = false,
+  validate?: (before: string, after: string) => string | null,
 ): Promise<string> {
   const abs = resolveInRepo(repoRoot, p);
+  if (isGeneratedExportReceipt(repoRoot, abs)) {
+    throw new Error(`edit_file refuses generated export receipt ${p}; call export_outputs to regenerate it`);
+  }
   const text = await readFile(abs, 'utf8');
   const first = text.indexOf(oldString);
   if (first === -1) {
     throw new Error(`edit_file: anchor not found in ${p}; re-read the file and use an exact excerpt`);
   }
   const count = text.split(oldString).length - 1;
+  let edited: string;
   if (replaceAll) {
-    await writeFile(abs, text.split(oldString).join(newString), 'utf8');
+    edited = text.split(oldString).join(newString);
+    const refusal = validate?.(text, edited);
+    if (refusal) throw new Error(`edit_file refused: ${refusal}`);
+    await writeFile(abs, edited, 'utf8');
     return `edited ${p} (${count} occurrence(s) replaced)`;
   }
   if (count > 1) {
@@ -63,7 +80,10 @@ export async function toolEditFile(
       `edit_file: anchor matched ${count} times in ${p}; widen the anchor with surrounding lines until it is unique, or pass replace_all: true to replace every occurrence`,
     );
   }
-  await writeFile(abs, text.slice(0, first) + newString + text.slice(first + oldString.length), 'utf8');
+  edited = text.slice(0, first) + newString + text.slice(first + oldString.length);
+  const refusal = validate?.(text, edited);
+  if (refusal) throw new Error(`edit_file refused: ${refusal}`);
+  await writeFile(abs, edited, 'utf8');
   return `edited ${p}`;
 }
 

@@ -107,6 +107,14 @@ describe('drafting engine: the reference IR end to end', () => {
       expect(res.report.noConnects).toBe(5);
       expect(text).toContain('(no_connect');
 
+      // Engine-authored power symbols have no installed-library canonical
+      // identity. verify_symbols checks the four ordinary vendored lib_ids and
+      // does not misreport the exact generated GND/VCC/PWR_FLAG forms.
+      const verification = await verifySchematicSymbols(res.schematicPath, {
+        KICAD_SYMBOL_DIR: SYMLIB,
+      } as NodeJS.ProcessEnv);
+      expect(verification).toEqual({ findings: [], checked: 4, skipped: 0 });
+
       // DIV is the divider's tap, on U1.3. With R1 and R2 hung on that pin
       // (#220 phase 3) the net is local enough to wire, and the trunk clears
       // every foreign connection point — the merged-net guard below is what

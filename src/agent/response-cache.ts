@@ -4,6 +4,14 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import type { ChatOpts, Msg, Provider, ToolSchema, Turn } from './types.js';
 
+export const LLM_CACHE_ONLY_ENV = 'COPPERHEAD_LLM_CACHE_ONLY';
+
+/** Explicit offline replay mode. Exact `1` avoids surprising activation from
+ * an inherited but empty/false-like environment variable. */
+export function isLlmCacheOnly(env: NodeJS.ProcessEnv = process.env): boolean {
+  return env[LLM_CACHE_ONLY_ENV] === '1';
+}
+
 /**
  * Wraps a provider so each turn's `(messages, tools) -> Turn` is written to disk
  * and replayed on an identical later call. This makes the pipeline cheap and
@@ -41,6 +49,9 @@ export class CachingProvider implements Provider {
      *  ids), so the endpoint must be part of the key too, or two different hosts
      *  serving "the same" model id would share cached turns. */
     private readonly baseURL?: string,
+    /** Fail closed on a missing or unreadable entry instead of consulting the
+     * inner provider. Used by deterministic, credential-free replay. */
+    private readonly cacheOnly = false,
   ) {
     this.name = inner.name;
   }
@@ -71,9 +82,18 @@ export class CachingProvider implements Provider {
         this.log?.(`llm-cache: replayed a cached response (hit #${this.hits}, no tokens spent)`);
         // Report zero usage: replaying a cached turn costs nothing.
         return { ...cached, usage: { inputTokens: 0, outputTokens: 0 } };
-      } catch {
+      } catch (err) {
+        if (this.cacheOnly) {
+          throw new Error(
+            `llm-cache: cache-only entry is unreadable or invalid (${file}); live provider was not called`,
+            { cause: err },
+          );
+        }
         // corrupt/partial cache file — fall through and regenerate
       }
+    }
+    if (this.cacheOnly) {
+      throw new Error(`llm-cache: cache-only miss (${file}); live provider was not called`);
     }
     const turn = await this.inner.chat(messages, tools, opts);
     try {

@@ -1,0 +1,9 @@
+(footprint "TerminalBlock_4Ucon_1x02_P3.50mm_Vertical"
+	(version 20240108)
+	(generator "test")
+	(layer "F.Cu")
+	(property "Reference" "REF**" (at 0 -3 0) (layer "F.SilkS"))
+	(property "Value" "TerminalBlock_4Ucon_1x02_P3.50mm_Vertical" (at 0 3 0) (layer "F.Fab"))
+	(pad "1" thru_hole rect (at 0 0) (size 2.4 2.4) (drill 1.2) (layers "*.Cu" "*.Mask"))
+	(pad "2" thru_hole circle (at 3.5 0) (size 2.4 2.4) (drill 1.2) (layers "*.Cu" "*.Mask"))
+)

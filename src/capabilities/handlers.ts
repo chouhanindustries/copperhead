@@ -5,6 +5,7 @@ import { resolveInRepo, isKicadFile } from '../util/paths.js';
 import { runErc, runDrc, exportSvg, exportFab, kicadLoadError, isProbeableKicadFile } from '../kicad/cli.js';
 import { formatViolations } from '../kicad/report.js';
 import { listSymbols, listNets } from '../kicad/sexp.js';
+import { populateBoardFromSchematic, searchInstalledFootprints } from '../kicad/footprints.js';
 import { checkLegibility, formatLegibility } from '../kicad/legibility.js';
 import { scoreSchematic, formatScore } from '../kicad/score.js';
 import { draftSchematic, defaultIntentPath, formatSchematicDraftReport } from '../kicad/draft/draft.js';
@@ -14,6 +15,8 @@ import { saveConstraint, classifyAffectsTarget, affectsTargetExists } from '../m
 import { openspecValidate } from '../openspec/cli.js';
 import { existsSync } from 'node:fs';
 import { isEngineAuthoredSchematic } from '../kicad/fab.js';
+import { validateKicadProjectPolicy } from '../kicad/project-policy.js';
+import { invalidateExportReceipt, writeExportReceipt } from '../kicad/export-receipt.js';
 import type { ToolSchema } from '../agent/types.js';
 import type { RunContext } from '../agent/context.js';
 import { corruptionError, markTouched, str } from './helpers.js';
@@ -210,6 +213,7 @@ export const HANDLERS: HandlerDef[] = [
         str(args, 'old_string'),
         args.new_string as string,
         args.replace_all === true,
+        rel.endsWith('.kicad_pro') ? validateKicadProjectPolicy : undefined,
       );
       if (before !== null) {
         const loadErr = await kicadLoadError(abs);
@@ -359,7 +363,7 @@ export const HANDLERS: HandlerDef[] = [
     schema: {
       name: 'verify_symbols',
       description:
-        "Cross-check every lib_symbols entry in the schematic against the KiCad symbol library installed on this machine. Reports pins that diverge from the real part (wrong count, name, or electrical type) and lib_ids that do not exist in the current KiCad version (with the closest real names). ERC cannot catch these — a symbol whose lib_id claims to be a canonical part but whose pins are wrong passes ERC while being wrong. Run this after capturing symbols and reconcile every finding.",
+        "Cross-check every installed-library lib_symbols entry in the schematic against the KiCad symbol library installed on this machine. Reports pins that diverge from the real part (wrong count, name, or electrical type) and lib_ids that do not exist in the current KiCad version (with the closest real names). Exact engine-generated copperhead_power symbols are excluded because they have no installed-library canonical identity. ERC cannot catch canonical symbols whose authored pins are wrong, so run this after capturing symbols and reconcile every finding.",
       parameters: { type: 'object', properties: {}, required: [] },
     },
     requiresUnlock: false,
@@ -382,6 +386,81 @@ export const HANDLERS: HandlerDef[] = [
         ok: mismatches === 0,
         text: `verify_symbols: ${checked} verified, ${skipped} unverifiable (library not installed), ${mismatches} issue(s) to reconcile:\n${lines.join('\n')}`,
       };
+    },
+  },
+  {
+    schema: {
+      name: 'search_footprints',
+      description: 'Search installed KiCad footprint IDs by name. Returns at most 50 matching library:name IDs; a match establishes availability, not compatibility with a component datasheet.',
+      parameters: {
+        type: 'object',
+        properties: { query: { type: 'string' } },
+        required: ['query'],
+      },
+    },
+    requiresUnlock: false,
+    handler: async (_ctx, args) => {
+      const query = str(args, 'query');
+      const matches = await searchInstalledFootprints(query);
+      return matches.length ? `installed footprints matching ${JSON.stringify(query)}:\n${matches.join('\n')}` : `no installed footprints matching ${JSON.stringify(query)}`;
+    },
+  },
+  {
+    schema: {
+      name: 'populate_board',
+      description:
+        'Place real installed KiCad footprints on the configured PCB using schematic references and pin-to-net mappings. Supply reference, x/y in mm and optional rotation in degrees. Imports library geometry; never invent pads. Existing references and missing or ambiguous footprints are refused before any board write. This does not route tracks; run ERC and DRC after placement.',
+      parameters: {
+        type: 'object',
+        properties: {
+          placements: {
+            type: 'array',
+            items: {
+              type: 'object',
+              properties: {
+                ref: { type: 'string' },
+                x: { type: 'number' },
+                y: { type: 'number' },
+                rotation: { type: 'number' },
+              },
+              required: ['ref', 'x', 'y'],
+              additionalProperties: false,
+            },
+          },
+        },
+        required: ['placements'],
+      },
+    },
+    requiresUnlock: true,
+    handler: async (ctx, args) => {
+      if (!ctx.config.schematic || !ctx.config.board) {
+        return { ok: false, text: 'populate_board requires a configured schematic and board' };
+      }
+      if (!Array.isArray(args.placements) || args.placements.length === 0) {
+        return { ok: false, text: 'placements must be a non-empty array' };
+      }
+      const placements = args.placements.map((item: unknown) => {
+        if (!item || typeof item !== 'object') throw new Error('each placement must be an object');
+        const row = item as Record<string, unknown>;
+        if (typeof row.ref !== 'string' || !row.ref.trim() ||
+            typeof row.x !== 'number' || !Number.isFinite(row.x) ||
+            typeof row.y !== 'number' || !Number.isFinite(row.y) ||
+            (row.rotation !== undefined && (typeof row.rotation !== 'number' || !Number.isFinite(row.rotation)))) {
+          throw new Error('placement requires a reference and finite x, y, and optional rotation');
+        }
+        return { ref: row.ref, x: row.x, y: row.y, ...(row.rotation === undefined ? {} : { rotation: row.rotation as number }) };
+      });
+      // Apply the same repository boundary as file-edit tools before import.
+      resolveInRepo(ctx.repoRoot, ctx.config.schematic);
+      resolveInRepo(ctx.repoRoot, ctx.config.board);
+      const result = await populateBoardFromSchematic({
+        repoRoot: ctx.repoRoot,
+        schematic: ctx.config.schematic,
+        board: ctx.config.board,
+        placements,
+      });
+      markTouched(ctx, ctx.config.board);
+      return `populate_board: placed ${result.placed.join(', ')} from installed libraries; ERC and DRC required`;
     },
   },
   {
@@ -530,6 +609,9 @@ export const HANDLERS: HandlerDef[] = [
       if (!ctx.config.board) return 'no board configured';
       const outDir = path.join(ctx.repoRoot, 'outputs');
       await mkdir(outDir, { recursive: true });
+      // An old success receipt must never survive a failed or interrupted
+      // replacement export and bless stale files on the next resume.
+      await invalidateExportReceipt(ctx.repoRoot);
       const res = await exportFab(
         path.join(ctx.repoRoot, ctx.config.board),
         ctx.config.schematic ? path.join(ctx.repoRoot, ctx.config.schematic) : null,
@@ -538,6 +620,21 @@ export const HANDLERS: HandlerDef[] = [
       ctx.filesTouched.add('outputs/');
       const lines = [`produced: ${res.produced.join(', ') || '(none)'}`];
       for (const f of res.failed) lines.push(`FAILED ${f.artifact}: ${f.reason}`);
+      if (res.failed.length === 0) {
+        try {
+          await writeExportReceipt({
+            repoRoot: ctx.repoRoot,
+            board: ctx.config.board,
+            schematic: ctx.config.schematic,
+            bom: path.join(ctx.config.docs, 'BOM.md'),
+            artifacts: res.produced,
+          });
+          lines.push('recorded source and output hashes in outputs/.copperhead-export.json');
+        } catch (error) {
+          lines.push(`FAILED package receipt: ${(error as Error).message}`);
+          return { ok: false, text: lines.join('\n') };
+        }
+      }
       return { ok: res.failed.length === 0, text: lines.join('\n') };
     },
   },

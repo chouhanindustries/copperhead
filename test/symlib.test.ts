@@ -141,6 +141,37 @@ describe('symlib (I9: verify symbols against the installed KiCad library)', () =
     // The faithful Device:R must NOT produce a pin-mismatch.
     expect(findings.find((f) => f.libId === 'Device:R')).toBeUndefined();
   });
+
+  it('excludes only exact engine-generated power symbols from installed-library verification', async () => {
+    const work = await mkdtemp(path.join(tmpdir(), 'copperhead-generated-power-test-'));
+    const generatedPath = path.join(work, 'generated.kicad_sch');
+    try {
+      await writeFile(
+        generatedPath,
+        `(kicad_sch (version 20251024) (generator test)
+  (lib_symbols
+    (symbol "copperhead_power:GND"
+      (power) (exclude_from_sim yes) (in_bom no) (on_board no)
+      (property "Reference" "#PWR") (property "Value" "GND")
+      (symbol "GND_1_1" (pin power_in line (at 0 0 270) (length 0) hide (name "GND") (number "1"))))
+    (symbol "copperhead_power:PWR_FLAG"
+      (power) (exclude_from_sim yes) (in_bom no) (on_board no)
+      (property "Reference" "#FLG") (property "Value" "PWR_FLAG")
+      (symbol "PWR_FLAG_1_1" (pin power_out line (at 0 0 90) (length 0) hide (name "pwr") (number "1"))))
+    (symbol "copperhead_power:Altered"
+      (power) (exclude_from_sim yes) (in_bom no) (on_board no)
+      (property "Reference" "#PWR") (property "Value" "Altered")
+      (symbol "Altered_1_1" (pin passive line (at 0 0 270) (length 0) hide (name "Altered") (number "1"))))))`,
+        'utf8',
+      );
+      const result = await verifySchematicSymbols(generatedPath, env);
+      expect(result.findings.map((f) => [f.libId, f.kind])).toEqual([['copperhead_power:Altered', 'no-library']]);
+      expect(result.checked).toBe(0);
+      expect(result.skipped).toBe(1);
+    } finally {
+      await rm(work, { recursive: true, force: true });
+    }
+  });
 });
 
 describe('cross-library resolution (review findings on #186)', () => {

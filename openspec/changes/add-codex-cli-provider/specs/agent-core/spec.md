@@ -20,15 +20,15 @@ The agent core SHALL implement a tool-use loop behind a `Provider` interface (`c
 ## ADDED Requirements
 
 ### Requirement: Codex cannot bypass Copperhead mutations
-The Codex provider SHALL run with a read-only sandbox, approval policy `never`, model-initiated network access and web search disabled, and a unique temporary working directory that is removed when the provider closes. The sandbox SHALL prevent native mutations; avoiding native reads SHALL be prompt-enforced because the read-only sandbox does not confine reads to the working directory. Every requested action SHALL be returned as structured output, validated against the selected tool's parameter schema, and dispatched by Copperhead. Messages and tool results SHALL be framed as JSON data rather than unescaped pseudo-XML.
+The Codex provider SHALL run with a read-only sandbox, approval policy `never`, model-initiated network access and web search disabled, and a unique temporary working directory that is removed when the provider closes. The sandbox SHALL prevent native mutations; avoiding native reads SHALL be prompt-enforced because the read-only sandbox does not confine reads to the working directory. Every requested action SHALL be returned as structured output, validated against the selected tool's parameter schema, and dispatched by Copperhead. Messages and tool results SHALL be framed as JSON data rather than unescaped pseudo-XML. Every SDK turn SHALL receive an independent abort signal. Closing the provider SHALL advance its lifecycle, detach its thread and owned working directory, reset its message cursor, abort active SDK turns, wait for them to settle, and then remove the detached working directory. A stale turn SHALL NOT advance state after its lifecycle closes.
 
 #### Scenario: Edit tools remain structurally absent
 - **WHEN** a Codex turn occurs before its OpenSpec proposal validates
-- **THEN** the structured output schema's tool-name enum contains no `edit_file` or `write_file`, and any returned unavailable name receives one corrective retry before the provider fails
+- **THEN** the structured output schema's tool-name enum contains no `edit_file` or `write_file`, and any returned unavailable name receives at most two corrective attempts before the provider fails
 
 #### Scenario: Rejected structured turn retains its input
 - **WHEN** Codex returns an unavailable tool name, malformed arguments, or another invalid structured turn
-- **THEN** the provider retries once in the same thread with the validation error, does not duplicate the original prompt, and advances its message cursor only after a valid replacement turn
+- **THEN** the provider retries at most twice in the same thread with the latest validation error, does not duplicate the original prompt, never emits an invalid call to Copperhead's dispatcher, and advances its message cursor only after a valid replacement turn
 
 #### Scenario: Native Codex edit is impossible
 - **WHEN** Codex processes any Copperhead turn
@@ -37,6 +37,10 @@ The Codex provider SHALL run with a read-only sandbox, approval policy `never`, 
 #### Scenario: Codex-local data is outside Copperhead redaction
 - **WHEN** Codex processes a Copperhead turn
 - **THEN** documentation warns that host-readable files are not technically confined and that `~/.codex/sessions/` logs are outside Copperhead's transcript-redaction boundary
+
+#### Scenario: Timed-out Codex turn is not orphaned
+- **WHEN** the watchdog closes the provider while an SDK turn is pending
+- **THEN** the turn's abort signal is triggered, close waits for the SDK promise to settle before removing its owned working directory, and a retry uses a fresh thread, working directory, abort signal, and full Copperhead transcript
 
 ### Requirement: Codex authentication remains external
 Copperhead SHALL invoke the installed Codex CLI and allow it to manage saved authentication. Copperhead SHALL NOT read, copy, serialize, or log the saved ChatGPT credential.

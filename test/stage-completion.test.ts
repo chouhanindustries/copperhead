@@ -8,11 +8,20 @@
  * The STAGES array is imported directly so we always test the live contracts,
  * not a copy.
  */
-import { describe, it, expect } from 'vitest';
+import { beforeEach, describe, it, expect, vi } from 'vitest';
 import path from 'node:path';
 import { mkdir, writeFile, rm } from 'node:fs/promises';
 import os from 'node:os';
+
+const runDrcMock = vi.hoisted(() => vi.fn());
+vi.mock('../src/kicad/cli.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../src/kicad/cli.js')>()),
+  runDrc: runDrcMock,
+}));
+
 import { STAGES } from '../src/commands/create.js';
+import { writeExportReceipt } from '../src/kicad/export-receipt.js';
+import { requiredFabArtifacts } from '../src/kicad/cli.js';
 
 /** Return the isComplete function for the named stage (throws if not found). */
 function stageNamed(name: string) {
@@ -36,6 +45,69 @@ async function withTmpDir(fn: (root: string) => Promise<void>): Promise<void> {
 }
 
 const DOCS = 'docs';
+
+async function writeBoardConfig(root: string, schematic: string | null = null): Promise<void> {
+  await mkdir(path.join(root, '.copperhead'), { recursive: true });
+  await mkdir(path.join(root, 'hardware'), { recursive: true });
+  await writeFile(
+    path.join(root, '.copperhead', 'config.json'),
+    JSON.stringify({ board: 'hardware/board.kicad_pcb', schematic, docs: DOCS }),
+    'utf8',
+  );
+  await writeFile(
+    path.join(root, 'hardware', 'board.kicad_pcb'),
+    '(kicad_pcb\n  (layers\n    (0 "F.Cu" signal)\n    (31 "B.Cu" signal)\n    (36 "B.Silkscreen" user)\n    (37 "F.Silkscreen" user)\n    (38 "B.Mask" user)\n    (39 "F.Mask" user)\n    (44 "Edge.Cuts" user)\n  )\n  (footprint "Fixture:Part")\n)\n',
+    'utf8',
+  );
+  if (schematic) await writeFile(path.join(root, schematic), '(kicad_sch)\n', 'utf8');
+  await mkdir(path.join(root, DOCS), { recursive: true });
+  await writeFile(path.join(root, DOCS, 'BOM.md'), '# BOM\n\n| Refdes | MPN |\n|---|---|\n| R1 | RC0603 |\n', 'utf8');
+}
+
+async function writeCompleteOutputs(root: string, withSchematic = false, withReceipt = true): Promise<void> {
+  const out = path.join(root, 'outputs');
+  await mkdir(path.join(out, 'gerbers'), { recursive: true });
+  const gerberRows = [
+    ['board-F_Cu.gtl', 'Copper,L1,Top'],
+    ['board-B_Cu.gbl', 'Copper,L2,Bot'],
+    ['board-F_Mask.gts', 'SolderMask,Top'],
+    ['board-B_Mask.gbs', 'SolderMask,Bot'],
+    ['board-F_Silkscreen.gto', 'Legend,Top'],
+    ['board-B_Silkscreen.gbo', 'Legend,Bot'],
+    ['board-Edge_Cuts.gm1', 'Profile'],
+  ];
+  for (const [name, fileFunction] of gerberRows) {
+    await writeFile(path.join(out, 'gerbers', name!), `%TF.FileFunction,${fileFunction}*%\n`, 'utf8');
+  }
+  await writeFile(
+    path.join(out, 'gerbers', 'board-job.gbrjob'),
+    JSON.stringify({ FilesAttributes: gerberRows.map(([Path, FileFunction]) => ({ Path, FileFunction })) }),
+    'utf8',
+  );
+  await writeFile(path.join(out, 'gerbers', 'board-PTH.drl'), 'M48\n', 'utf8');
+  await writeFile(path.join(out, 'outline.dxf'), 'SECTION\n', 'utf8');
+  await writeFile(path.join(out, 'board.step'), 'ISO-10303-21;\n', 'utf8');
+  await writeFile(path.join(out, 'board.svg'), '<svg/>\n', 'utf8');
+  await writeFile(path.join(out, 'BOM.csv'), 'refdes,mpn,qty\nR1,RC0603,1\n', 'utf8');
+  if (withSchematic) {
+    await mkdir(path.join(out, 'renders'), { recursive: true });
+    await writeFile(path.join(out, 'renders', 'schematic.svg'), '<svg/>\n', 'utf8');
+  }
+  if (withReceipt) {
+    await writeExportReceipt({
+      repoRoot: root,
+      board: 'hardware/board.kicad_pcb',
+      schematic: withSchematic ? 'hardware/design.kicad_sch' : null,
+      bom: 'docs/BOM.md',
+      artifacts: requiredFabArtifacts(withSchematic),
+    });
+  }
+}
+
+beforeEach(() => {
+  runDrcMock.mockReset();
+  runDrcMock.mockResolvedValue({ ok: true, source: 'drc', violations: [] });
+});
 
 // ---------------------------------------------------------------------------
 // Stage 1: spec-seed
@@ -251,6 +323,18 @@ describe('part-selection isComplete', () => {
     });
   });
 
+  it('returns false when the canonical BOM contains only its header and separator', async () => {
+    await withTmpDir(async (root) => {
+      await mkdir(path.join(root, DOCS), { recursive: true });
+      await writeFile(
+        path.join(root, DOCS, 'BOM.md'),
+        `# Bill of Materials\n\n| Refdes | Value | Footprint | MPN | Rationale |\n|---|---|---|---|---|\n`,
+        'utf8',
+      );
+      expect(await stageNamed('part-selection')(root, DOCS)).toBe(false);
+    });
+  });
+
   it('returns false when all BOM rows have UNVERIFIED MPNs (init scaffold)', async () => {
     await withTmpDir(async (root) => {
       await mkdir(path.join(root, DOCS), { recursive: true });
@@ -264,7 +348,7 @@ describe('part-selection isComplete', () => {
     });
   });
 
-  it('returns true when at least one BOM row has a real (non-UNVERIFIED) MPN', async () => {
+  it('returns true for existing concrete MPNs whose UNVERIFIED flag was cleared by human review', async () => {
     await withTmpDir(async (root) => {
       await mkdir(path.join(root, DOCS), { recursive: true });
       await writeFile(
@@ -275,27 +359,100 @@ describe('part-selection isComplete', () => {
       expect(await stageNamed('part-selection')(root, DOCS)).toBe(true);
     });
   });
+
+  it('returns true when an UNVERIFIED MPN cell names a concrete selected part', async () => {
+    await withTmpDir(async (root) => {
+      await mkdir(path.join(root, DOCS), { recursive: true });
+      await writeFile(
+        path.join(root, DOCS, 'BOM.md'),
+        `# Bill of Materials\n\n| Refdes | Value | Footprint | MPN | Rationale |\n|---|---|---|---|---|\n| R1 | 10k | R_0603 | UNVERIFIED: RC0603FR-0710KL | selected for 1% tolerance; confirm against datasheet |\n`,
+        'utf8',
+      );
+      expect(await stageNamed('part-selection')(root, DOCS)).toBe(true);
+    });
+  });
+
+  it('returns false when the text after UNVERIFIED is another placeholder', async () => {
+    await withTmpDir(async (root) => {
+      await mkdir(path.join(root, DOCS), { recursive: true });
+      await writeFile(
+        path.join(root, DOCS, 'BOM.md'),
+        `# Bill of Materials\n\n| Refdes | Value | Footprint | MPN | Rationale |\n|---|---|---|---|---|\n| R1 | 10k | R_0603 | UNVERIFIED: TBD | choose after review |\n`,
+        'utf8',
+      );
+      expect(await stageNamed('part-selection')(root, DOCS)).toBe(false);
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Stage 5: layout-draft
+// ---------------------------------------------------------------------------
+describe('layout-draft isComplete', () => {
+  it('instructs the agent to route all connections rather than complete with ratsnest', () => {
+    const prompt = STAGES.find((stage) => stage.name === 'layout-draft')!.prompt('');
+    expect(prompt).toContain('Route every electrical connection');
+    expect(prompt).toContain('zero unconnected items');
+    expect(prompt).not.toContain('leave the rest as ratsnest');
+  });
+
+  it('requires a real clean DRC result after the footprint and honesty marker exist', async () => {
+    await withTmpDir(async (root) => {
+      await writeBoardConfig(root);
+      await mkdir(path.join(root, DOCS), { recursive: true });
+      await writeFile(path.join(root, DOCS, 'LAYOUT.md'), '# Layout\n\n## Draft quality\n\nPlacement is valid.\n', 'utf8');
+      runDrcMock.mockResolvedValueOnce({
+        ok: false,
+        source: 'drc',
+        violations: [{ type: 'unconnected_items', severity: 'error', description: 'R1.1 to R2.1' }],
+      });
+
+      expect(await stageNamed('layout-draft')(root, DOCS)).toBe(false);
+      expect(runDrcMock).toHaveBeenCalledWith(path.join(root, 'hardware', 'board.kicad_pcb'));
+    });
+  });
+
+  it('completes only when the populated, documented board is DRC-clean', async () => {
+    await withTmpDir(async (root) => {
+      await writeBoardConfig(root);
+      await mkdir(path.join(root, DOCS), { recursive: true });
+      await writeFile(path.join(root, DOCS, 'LAYOUT.md'), '# Layout\n\n## Draft quality\n\nDRC-clean draft.\n', 'utf8');
+
+      expect(await stageNamed('layout-draft')(root, DOCS)).toBe(true);
+      expect(runDrcMock).toHaveBeenCalledTimes(1);
+    });
+  });
 });
 
 // ---------------------------------------------------------------------------
 // Stage 6: outputs
 // ---------------------------------------------------------------------------
 describe('outputs isComplete', () => {
+  it('instructs the agent to verify the source board and require every output', () => {
+    const prompt = STAGES.find((stage) => stage.name === 'outputs')!.prompt('');
+    expect(prompt).toContain('run run_drc');
+    expect(prompt).toContain('call export_outputs LAST');
+    expect(prompt).toContain('partial or stale package is incomplete');
+  });
+
   it('returns false when outputs/ does not exist', async () => {
     await withTmpDir(async (root) => {
+      await writeBoardConfig(root);
       expect(await stageNamed('outputs')(root, DOCS)).toBe(false);
     });
   });
 
   it('returns false when outputs/ exists but is empty (failed export run)', async () => {
     await withTmpDir(async (root) => {
+      await writeBoardConfig(root);
       await mkdir(path.join(root, 'outputs'), { recursive: true });
       expect(await stageNamed('outputs')(root, DOCS)).toBe(false);
     });
   });
 
-  it('returns false when outputs/ contains only non-Gerber files', async () => {
+  it('returns false when outputs/ contains only an ordering BOM', async () => {
     await withTmpDir(async (root) => {
+      await writeBoardConfig(root);
       await mkdir(path.join(root, 'outputs'), { recursive: true });
       await writeFile(path.join(root, 'outputs', 'BOM.csv'), 'ref,mpn\nR1,RC0603\n', 'utf8');
       expect(await stageNamed('outputs')(root, DOCS)).toBe(false);
@@ -304,33 +461,104 @@ describe('outputs isComplete', () => {
 
   it('returns false when outputs/ contains only a .drl drill file (no Gerbers)', async () => {
     await withTmpDir(async (root) => {
+      await writeBoardConfig(root);
       await mkdir(path.join(root, 'outputs'), { recursive: true });
       await writeFile(path.join(root, 'outputs', 'board.drl'), 'M48\n', 'utf8');
       expect(await stageNamed('outputs')(root, DOCS)).toBe(false);
     });
   });
 
-  it('returns true when outputs/ contains at least one Gerber file (.gbr)', async () => {
+  it('returns false when only a Gerber exists', async () => {
     await withTmpDir(async (root) => {
+      await writeBoardConfig(root);
       await mkdir(path.join(root, 'outputs'), { recursive: true });
       await writeFile(path.join(root, 'outputs', 'board-F_Cu.gbr'), 'G04 Gerber*\n', 'utf8');
+      expect(await stageNamed('outputs')(root, DOCS)).toBe(false);
+    });
+  });
+
+  it('returns false when one required export is empty', async () => {
+    await withTmpDir(async (root) => {
+      await writeBoardConfig(root);
+      await writeCompleteOutputs(root);
+      await writeFile(path.join(root, 'outputs', 'board.step'), '', 'utf8');
+      expect(await stageNamed('outputs')(root, DOCS)).toBe(false);
+    });
+  });
+
+  it('requires a schematic render when a schematic is configured', async () => {
+    await withTmpDir(async (root) => {
+      await writeBoardConfig(root, 'hardware/design.kicad_sch');
+      await writeCompleteOutputs(root, false, false);
+      expect(await stageNamed('outputs')(root, DOCS)).toBe(false);
+      await mkdir(path.join(root, 'outputs', 'renders'), { recursive: true });
+      await writeFile(path.join(root, 'outputs', 'renders', 'design.svg'), '<svg/>\n', 'utf8');
+      await writeExportReceipt({
+        repoRoot: root,
+        board: 'hardware/board.kicad_pcb',
+        schematic: 'hardware/design.kicad_sch',
+        bom: 'docs/BOM.md',
+        artifacts: requiredFabArtifacts(true),
+      });
       expect(await stageNamed('outputs')(root, DOCS)).toBe(true);
     });
   });
 
-  it('returns true when outputs/ contains a .gtl (top copper) Gerber', async () => {
+  it('requires the source board to remain DRC-clean', async () => {
     await withTmpDir(async (root) => {
-      await mkdir(path.join(root, 'outputs'), { recursive: true });
-      await writeFile(path.join(root, 'outputs', 'board.gtl'), 'G04*\n', 'utf8');
-      expect(await stageNamed('outputs')(root, DOCS)).toBe(true);
+      await writeBoardConfig(root);
+      await writeCompleteOutputs(root);
+      runDrcMock.mockResolvedValueOnce({
+        ok: false,
+        source: 'drc',
+        violations: [{ type: 'clearance', severity: 'error', description: 'track clearance' }],
+      });
+      expect(await stageNamed('outputs')(root, DOCS)).toBe(false);
     });
   });
 
-  it('returns true when Gerber file is located in a nested subdirectory inside outputs/', async () => {
+  it('returns true only for the complete non-empty export package on a clean board', async () => {
     await withTmpDir(async (root) => {
-      await mkdir(path.join(root, 'outputs', 'gerbers'), { recursive: true });
-      await writeFile(path.join(root, 'outputs', 'gerbers', 'board-F_Cu.gbr'), 'G04 Gerber*\n', 'utf8');
+      await writeBoardConfig(root);
+      await writeCompleteOutputs(root);
       expect(await stageNamed('outputs')(root, DOCS)).toBe(true);
+      expect(runDrcMock).toHaveBeenCalledWith(path.join(root, 'hardware', 'board.kicad_pcb'));
+    });
+  });
+
+  it('rejects a complete-looking package after the board source changes', async () => {
+    await withTmpDir(async (root) => {
+      await writeBoardConfig(root);
+      await writeCompleteOutputs(root);
+      await writeFile(path.join(root, 'hardware', 'board.kicad_pcb'), '(kicad_pcb\n  (footprint "Fixture:Changed")\n)\n', 'utf8');
+      expect(await stageNamed('outputs')(root, DOCS)).toBe(false);
+    });
+  });
+
+  it('rejects a complete-looking package when a recorded output changes', async () => {
+    await withTmpDir(async (root) => {
+      await writeBoardConfig(root);
+      await writeCompleteOutputs(root);
+      await writeFile(path.join(root, 'outputs', 'board.svg'), '<svg>changed</svg>\n', 'utf8');
+      expect(await stageNamed('outputs')(root, DOCS)).toBe(false);
+    });
+  });
+
+  it('rejects the package when a fabrication layer listed by KiCad becomes empty', async () => {
+    await withTmpDir(async (root) => {
+      await writeBoardConfig(root);
+      await writeCompleteOutputs(root);
+      await writeFile(path.join(root, 'outputs', 'gerbers', 'board-Edge_Cuts.gm1'), '', 'utf8');
+      expect(await stageNamed('outputs')(root, DOCS)).toBe(false);
+    });
+  });
+
+  it('rejects the ordering package after its BOM source changes', async () => {
+    await withTmpDir(async (root) => {
+      await writeBoardConfig(root);
+      await writeCompleteOutputs(root);
+      await writeFile(path.join(root, DOCS, 'BOM.md'), '# BOM\n\n| Refdes | MPN |\n|---|---|\n| R1 | DIFFERENT |\n', 'utf8');
+      expect(await stageNamed('outputs')(root, DOCS)).toBe(false);
     });
   });
 });

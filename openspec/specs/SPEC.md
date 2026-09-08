@@ -175,13 +175,15 @@ brief.md
 
 Each stage is a `do`-loop run with a stage-specific prompt. State lives in the repo (docs + files), so `create` is resumable: kill it at any stage, re-run, it continues from the docs.
 
+Part selection records a concrete chosen MPN in the canonical BOM table. New selections retain the human-review marker, for example `UNVERIFIED: RC0603FR-0710KL`; an existing concrete MPN remains complete if a human later clears that marker. A bare `UNVERIFIED` cell is only the `init` scaffold placeholder and does not complete the stage. This gate proves that a selection was made, not that Copperhead verified the datasheet.
+
 ### First-draft layout (explicitly non-optimal, explicitly useful)
 
 The agent produces an **initial placement and routing plan** — correct, not optimal — and says so:
 
 - **Placement:** rule-driven, from LAYOUT.md intent: connectors on edges, decoupling caps at their IC pins, ESD at connectors, antenna keepout honored, crystal next to MCU, user-facing parts (buttons, LEDs) where the brief puts them. Written as actual coordinates into the .kicad_pcb.
-- **Routing:** power nets and short critical nets routed by rule (USB differential pair length-matched via KiCad's tools where possible); remaining nets left as ratsnest or routed naively. Every routed net must pass DRC; nothing hand-wavy.
-- **Honesty gate:** LAYOUT.md gets a `## Draft quality` section auto-written by the agent, listing exactly what is fine (budgets, keepouts, DRC-clean) and what a human or a specialist tool (Quilter, autorouter) should redo before fab. Non-optimal is acceptable; unlabeled non-optimal is not.
+- **Routing:** power nets and short critical nets routed by rule (USB differential pair length-matched via KiCad's tools where possible); remaining nets may be routed naively, but every electrical connection is routed before the stage completes. KiCad DRC must report zero violations, including zero unconnected items; nothing hand-wavy.
+- **Honesty gate:** LAYOUT.md gets a `## Draft quality` section auto-written by the agent, listing exactly what is fine (budgets, keepouts, DRC-clean) and what placement, path, via, or length optimization a human or a specialist tool (Quilter, autorouter) should redo before fab. Non-optimal is acceptable; unrouted or unlabeled non-optimal is not.
 - **Positioning:** this makes layout tools *complements, not competitors* — copperhead produces the DRC-clean draft and constraints file they optimize from.
 
 Delta 4 framing: a first-draft board that passes DRC in an hour vs. a blank canvas that takes a specialist a week. Optimization is iteration; the blank canvas was the bottleneck.
@@ -402,7 +404,16 @@ interface Provider {
 - On any unrecoverable failure: preserve the touched work as a git stash entry named `copperhead failed run <run-id>`, restore the snapshot, print the stash ref and transcript path, exit 1
 - Rate-limit (429): exponential backoff ×3, then fail over to the other **keyed** provider (`openai` ↔ `anthropic`) if a key exists; saved-login providers (`codex`, `claude-code`, `cursor`) never fail over to a keyed or alternate provider
 - Nested skill provider turns use the same bounded timeout and 429 backoff policy. A provider error inside a skill becomes a failed tool envelope, so it cannot escape the parent loop and bypass its failure/rollback path.
+- Closing the Codex provider aborts its active SDK turns and waits for them to settle before removing their scratch directory. A retry starts a fresh thread with the full transcript; late responses from a closed lifecycle cannot advance its cursor or dispatch correction prompts on the replacement thread.
+- Codex structured turns and their tool arguments are validated before dispatch. A rejected turn receives at most two same-thread correction attempts with the latest validation error; invalid calls never execute, exhausted correction stays a provider error, and the message cursor advances only after a valid replacement.
+- With `COPPERHEAD_LLM_CACHE_ONLY=1`, the loop replays exact on-disk response-cache hits without constructing a model provider. A missing or unreadable entry fails through the normal provider-error/rollback path; `create` does not call its live diagnosis provider in this mode. The default response-cache read-through behavior is unchanged when the variable is absent.
 - The Anthropic provider marks `cache_control` breakpoints (system prompt, last tool, last message block) so the resent conversation prefix is cached; reported input tokens include cache reads/writes
+
+---
+
+### 4.6 Installed footprint placement
+
+The read-only `search_footprints` tool returns at most 50 matching installed footprint IDs. It ranks exact and prefix name matches before other name matches. When no ID matches, it searches declared footprint `descr` and `tags` metadata together with the ID, using separator and camel-case normalization; arbitrary footprint body text is not searchable metadata. Discovery does not establish datasheet or package compatibility. The spec-gated `populate_board` tool accepts schematic references with x/y millimetres and optional rotation. It resolves assigned footprints from installed KiCad libraries and imports their geometry with schematic pad-to-net assignments and deterministic instance identifiers. It refuses missing definitions, ambiguous mappings, duplicate placements and existing board references before writing. The existing board geometry is preserved. Placement marks the PCB changed and requires the normal ERC/DRC checks; it neither routes tracks nor relaxes verification gates. The layout stage must use library geometry instead of inventing pads from footprint names.
 
 ---
 
@@ -497,6 +508,7 @@ Format: Given / When / Then. "Fixture" = the open-telegraph repo (or the tiny te
 - **AC-3.18 (compat never fails over to a paid key)** A rate limit against a `compat:<id>` endpoint never fails over to `OPENAI_API_KEY`/`ANTHROPIC_API_KEY`, even when one is present in the environment: the compat provider is not `'openai'` by name, so the same isolation that protects `codex`/`claude-code`/`cursor` (AC-3.11, AC-3.12) applies to it too.
 - **AC-3.19 (ambiguous auto-selection refuses)** With no `--model`, no `COPPERHEAD_MODEL`, and no `model` in config, model resolution refuses with an actionable "ambiguous" error naming every credential found when two or more of `OPENAI_API_KEY`/`ANTHROPIC_API_KEY` are set; with exactly one, that provider is selected as before. **Breaking change**: an environment with both keys set that previously auto-selected `OPENAI_API_KEY` now fails `do`/`sync`/`create`/`demo` until a model is chosen explicitly (`repl` degrades gracefully via its interactive picker instead).
 - **AC-3.20 (compat cache is endpoint-scoped)** Re-running a cached `compat:<id>` request against a different `baseURL` calls the new endpoint rather than replaying the previous one's turns: one model id can be served by several hosts, so the id alone no longer identifies the backend. The endpoint enters the cache key only for the `compat` route, so a non-`compat` run's existing cache entries still replay unchanged.
+- **AC-3.21 (cache-only replay fails closed)** With `COPPERHEAD_LLM_CACHE_ONLY=1` and response caching enabled, an exact cache hit completes without constructing or calling the selected provider and reports zero token usage. A missing, corrupt, or unreadable entry fails explicitly without provider, credential, CLI, subprocess, diagnosis, or network fallback. Without this opt-in, cache misses retain the existing read-through/write-through behavior.
 
 ### AC-4 · Safety
 
@@ -525,7 +537,10 @@ Format: Given / When / Then. "Fixture" = the open-telegraph repo (or the tiny te
 - **AC-15.16 / AC-15.17 (work preservation)** Any run failure with touched files leaves a `copperhead failed run <run-id>` stash entry holding the work while the tree is restored byte-identical; a clean failure leaves no stash.
 - **AC-15.18 / AC-15.19 (per-stage budgets)** `stageMaxTurns` in config overrides `maxTurns` for named create-pipeline stages; absent entries change nothing.
 - **AC-15.20 – AC-15.22 (edit validation)** An `edit_file` that makes a loadable `.kicad_sch`/`.kicad_pcb` unloadable is reverted with kicad-cli's error; `.kicad_pro`/`.kicad_sym`/`.kicad_mod` edits are never probed or reverted; an already-unloadable file keeps repair edits.
-- **AC-15.23 / AC-15.24 (content-aware completion)** The schematic stage completes only with symbols present and drift-clean BOM/PINOUT (layout-draft: a board with a footprint plus the LAYOUT.md marker); a successful run that leaves the contract unmet halts the pipeline for resume instead of advancing.
+- **AC-15.29 (project verification policy)** Before writing an anchored `.kicad_pro` edit, copperhead compares the project JSON semantically and refuses changes that lower or remove existing clearances, lower existing rule severities or introduce non-error severities, or add verification exclusions. Existing ignores may remain unchanged, tightening and removal of ignores/exclusions are allowed, and unrelated valid project edits retain AC-15.21 behavior. This policy check is not a kicad-cli load probe.
+- **AC-15.30 (layout resume gate)** Resume and post-run completion checks execute KiCad DRC on the configured board; a footprint plus the Draft quality marker cannot skip layout while any DRC or unconnected-item violation remains.
+- **AC-15.31 (outputs package completion)** The outputs stage completes only when the source board remains DRC-clean and the concrete `exportFab` package is present and non-empty: every fabrication layer selected from the current board and enumerated by KiCad's `.gbrjob`, drill files, `outline.dxf`, `board.step`, `board.svg`, the schematic SVG render when a schematic is configured, and `BOM.csv`. A generated receipt records hashes of the current board, schematic, BOM source, and the exact output files; completion recalculates them, and the agent file tools cannot author or edit the receipt. A partial, changed, or source-stale package does not complete the stage.
+- **AC-15.23 / AC-15.24 (content-aware completion)** The schematic stage completes only with symbols present and drift-clean BOM/PINOUT; layout-draft requires a board with a footprint, the LAYOUT.md marker, and a current clean DRC report with zero unconnected items. A successful run that leaves the contract unmet halts the pipeline for resume instead of advancing.
 - **AC-15.25 / AC-15.26 (drift bootstrap)** Zero-symbol schematics produce no drift mismatches; `check` surfaces a non-failing warning when an empty schematic coexists with a populated BOM.md.
 - **AC-15.27 (consecutive stalls)** Only consecutive tool-less turns count toward the stopped-without-finishing failure; the counter resets on any tool call.
 - **AC-15.28 (load-failure ERC/DRC)** A missing ERC/DRC report raises an error quoting kicad-cli's own output and naming the likely load failure.
@@ -568,6 +583,7 @@ Placement, routing, and legibility are computed from the netlist rather than sam
 
 - **AC-16.4 (byte-identical regeneration)** Drafting the same IR, committing, and drafting again leaves `git diff` over the schematic empty.
 - **AC-16.5 (library upgrade is inert)** When the installed KiCad symbol library changes after a symbol was vendored, re-drafting the same IR is byte-identical to the pre-upgrade output, and `verify_symbols` reports the divergence between vendored and installed sources.
+- **AC-16.40 (generated power symbols are not library aliases)** `verify_symbols` excludes an exact engine-generated `copperhead_power` rail, ground, or `PWR_FLAG` symbol from installed-library comparison because it has no installed-library canonical identity; a prefixed entry whose generated semantic shape is altered remains subject to verification, and ordinary vendored symbols continue to report installed-library drift.
 - **AC-16.12 (output loads in kicad-cli)** Every golden IR drafted in CI loads in `kicad-cli` without error, and ERC runs to completion.
 - **AC-16.13 (connectivity matches intent)** Parsing a drafted reference IR yields a net list equal to the IR's connection list, with no-connect pins excluded.
 

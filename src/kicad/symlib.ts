@@ -498,18 +498,56 @@ export interface SymbolFinding {
   detail: string;
 }
 
-/** A schematic lib_symbols entry: its lib_id and the pins as authored. */
-function schematicLibSymbols(root: SexpNode[]): { libId: string; pins: LibPin[] }[] {
+/** A schematic lib_symbols entry: its lib_id, pins, and authored source node. */
+function schematicLibSymbols(root: SexpNode[]): { libId: string; pins: LibPin[]; source: SexpNode[] }[] {
   const libs = child(root, 'lib_symbols');
   if (!libs) return [];
   return children(libs, 'symbol').map((sym) => ({
     libId: atomAt(sym, 1) ?? '',
     pins: pinsOfSymbolNode(sym),
+    source: sym,
   }));
 }
 
 /**
- * Compare every lib_symbols entry in a schematic against the installed library.
+ * True only for the semantic shape emitted by draft/symsource's private power
+ * namespace. These symbols are authored by Copperhead rather than copied from
+ * an installed library, so comparing `copperhead_power:GND` with `power:GND`
+ * is a category error. The structural checks keep the reserved prefix from
+ * becoming a blanket exemption for arbitrary or altered embedded symbols.
+ */
+function isEngineGeneratedPowerSymbol(entry: { libId: string; pins: LibPin[]; source: SexpNode[] }): boolean {
+  if (!entry.libId.startsWith('copperhead_power:')) return false;
+  if (!child(entry.source, 'power')) return false;
+  if (atomAt(child(entry.source, 'exclude_from_sim'), 1) !== 'yes') return false;
+  if (atomAt(child(entry.source, 'in_bom'), 1) !== 'no') return false;
+  if (atomAt(child(entry.source, 'on_board'), 1) !== 'no') return false;
+
+  const property = (name: string): string | undefined => {
+    const node = children(entry.source, 'property').find((p) => atomAt(p, 1) === name);
+    return atomAt(node, 2);
+  };
+  const bare = entry.libId.slice('copperhead_power:'.length);
+  const pin = entry.pins.length === 1 ? entry.pins[0] : undefined;
+  if (!pin || pin.number !== '1') return false;
+
+  if (bare === 'PWR_FLAG') {
+    return property('Reference') === '#FLG' && property('Value') === 'PWR_FLAG' && pin.name === 'pwr' && pin.type === 'power_out';
+  }
+  const value = property('Value');
+  return (
+    property('Reference') === '#PWR' &&
+    value !== undefined &&
+    value.replace(/[^A-Za-z0-9_+.-]/g, '_') === bare &&
+    pin.name === value &&
+    pin.type === 'power_in'
+  );
+}
+
+/**
+ * Compare every installed-library lib_symbols entry in a schematic against the
+ * installed library. Exact engine-generated power symbols have no installed
+ * canonical identity and are outside this check.
  * Returns one finding per divergence; an empty array means every resolvable
  * symbol matched. A part whose library is not installed is reported once (so
  * the model knows the check could not run for it) but never treated as a
@@ -528,6 +566,7 @@ export async function verifySchematicSymbols(
   let skipped = 0;
   for (const entry of schematicLibSymbols(root)) {
     if (!entry.libId) continue;
+    if (isEngineGeneratedPowerSymbol(entry)) continue;
     const resolved = await resolveLibrarySymbol(entry.libId, dirs);
     if (resolved.status === 'no-library') {
       skipped++;

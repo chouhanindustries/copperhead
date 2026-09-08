@@ -4,7 +4,7 @@ import { readFile, mkdir, writeFile, readdir } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { loadConfig, resolveCompatSettings } from '../config.js';
 import { bootstrapKicadProject, markCreateOrigin } from '../kicad/bootstrap.js';
-import { exportSvg, runErc } from '../kicad/cli.js';
+import { exportSvg, runDrc, runErc } from '../kicad/cli.js';
 import { listSymbols } from '../kicad/sexp.js';
 import { checkLegibility } from '../kicad/legibility.js';
 import { draftSchematicToText, defaultIntentPath } from '../kicad/draft/draft.js';
@@ -24,6 +24,9 @@ import { symbolSearchDirs } from '../kicad/symlib.js';
 import { assertDiskSpace, DEFAULT_MIN_FREE_BYTES } from '../util/preflight.js';
 import { runCheck } from './check.js';
 import { emitCreateJlcpcbBom } from './export.js';
+import { parseCanonicalTables } from '../memory/bom-table.js';
+import { isLlmCacheOnly } from '../agent/response-cache.js';
+import { exportReceiptMatches } from '../kicad/export-receipt.js';
 
 /**
  * Mode A (`copperhead create`, SPEC §2.5): staged pipeline, each stage a
@@ -166,26 +169,27 @@ export const STAGES: Stage[] = [
   {
     name: 'part-selection',
     isComplete: async (root, docs) => {
-      // init scaffolds BOM.md with a table pre-filled with UNVERIFIED MPNs
-      // extracted from the schematic. Require at least one row whose MPN
-      // column is NOT the UNVERIFIED placeholder — i.e. a real part was chosen.
+      // init scaffolds BOM.md with bare UNVERIFIED placeholders. Completion
+      // requires a concrete selected MPN; a new selection retains the marker,
+      // while an existing human-reviewed MPN may legitimately have removed it.
       const p = path.join(root, docs, 'BOM.md');
       if (!existsSync(p)) return false;
       const text = await readFile(p, 'utf8');
-      // Find table rows (lines starting with |) that are not the header or separator
-      const rows = text.split('\n').filter(
-        (l) => l.startsWith('|') && !l.includes('---') && !l.toLowerCase().includes('refdes'),
-      );
-      if (!rows.length) return false;
-      // At least one row must have a non-UNVERIFIED MPN (4th column)
-      return rows.some((row) => {
-        const cols = row.split('|').map((c) => c.trim());
-        const mpn = cols[4] ?? ''; // 0=empty, 1=Refdes, 2=Value, 3=Footprint, 4=MPN
-        return mpn && !mpn.toUpperCase().startsWith('UNVERIFIED');
+      return parseCanonicalTables(text).some(({ header, rows }) => {
+        const mpnColumn = header.cells.findIndex((cell) => /^mpn$/i.test(cell));
+        if (mpnColumn < 0) return false;
+        return rows.some((row) => {
+          const mpn = row.cells[mpnColumn]?.trim() ?? '';
+          const selected = mpn
+            .replace(/\bUNVERIFIED\b/gi, '')
+            .replace(/^[\s:;,\-–—()[\]{}]+|[\s:;,\-–—()[\]{}]+$/g, '')
+            .trim();
+          return selected.length > 0 && !/^(?:TBD|TODO|UNKNOWN|N\/?A|NONE|\?+)$/i.test(selected);
+        });
       });
     },
     prompt: () =>
-      'Stage 3: part selection. Write docs/BOM.md with the fixed table format (| Refdes | Value | Footprint | MPN | Rationale |). The Value column holds the COMPONENT VALUE and nothing else — "4.7uF", "1M", "500mAh Li-Po", "STM32F103C8T6" — because stage 4 draws it on the sheet as that part\'s Value field, where a description ("1S Li-Po cell, 500 mAh, bare leads") collides with neighbouring symbols and fails the legibility gate. Put the prose in the Rationale column instead; that is the column for it, and nothing draws it. One row per refdes: a grouped row ("SW3-SW16", "C5-C8") is not a BOM row and the schematic stage cannot match it. Every MPN you introduce is flagged UNVERIFIED with a datasheet-verifiable justification. Check leakage/quiescent current of every part against the power budget. The design must be capturable with the KiCad symbol libraries installed on THIS machine: run search_symbols for every IC, module, connector and other active part before committing it to the BOM, and if a part has no installed symbol, pick one that has — stage 4 draws only from installed symbols, and a BOM row it cannot resolve makes the whole run unwinnable. Existence is not enough: confirm the chosen symbol with symbol_pins so the pin numbers you wire in stage 4 are real. Multi-unit symbols (gate packs, dual opamps) are fine — the engine places each unit separately under the one refdes, and net endpoints use plain package pin numbers. Run check_drift before finishing.',
+      'Stage 3: part selection. Write docs/BOM.md with the fixed table format (| Refdes | Value | Footprint | MPN | Rationale |). The Value column holds the COMPONENT VALUE and nothing else — "4.7uF", "1M", "500mAh Li-Po", "STM32F103C8T6" — because stage 4 draws it on the sheet as that part\'s Value field, where a description ("1S Li-Po cell, 500 mAh, bare leads") collides with neighbouring symbols and fails the legibility gate. Put the prose in the Rationale column instead; that is the column for it, and nothing draws it. One row per refdes: a grouped row ("SW3-SW16", "C5-C8") is not a BOM row and the schematic stage cannot match it. Every MPN you introduce uses the form "UNVERIFIED: <concrete MPN>" with a datasheet-verifiable justification; bare UNVERIFIED is only a placeholder and does not complete this stage. Check leakage/quiescent current of every part against the power budget. The design must be capturable with the KiCad symbol libraries installed on THIS machine: run search_symbols for every IC, module, connector and other active part before committing it to the BOM, and if a part has no installed symbol, pick one that has — stage 4 draws only from installed symbols, and a BOM row it cannot resolve makes the whole run unwinnable. Existence is not enough: confirm the chosen symbol with symbol_pins so the pin numbers you wire in stage 4 are real. Multi-unit symbols (gate packs, dual opamps) are fine — the engine places each unit separately under the one refdes, and net endpoints use plain package pin numbers. Run check_drift before finishing.',
   },
   {
     name: 'schematic',
@@ -253,20 +257,28 @@ export const STAGES: Stage[] = [
       const p = path.join(root, config.board);
       if (!existsSync(p)) return false;
       if (!(await readFile(p, 'utf8')).includes('(footprint')) return false;
-      return docHasContent(root, path.join(docs, 'LAYOUT.md'), '## Draft quality');
+      if (!(await docHasContent(root, path.join(docs, 'LAYOUT.md'), '## Draft quality'))) return false;
+      return (await runDrc(p)).ok;
     },
     prompt: () =>
-      'Stage 5: first-draft layout. Rule-driven placement written as real coordinates: connectors on edges, decoupling at IC pins, ESD at connectors, keepouts honored. Route power and short critical nets; leave the rest as ratsnest. Every routed net must pass run_drc. Then write the "## Draft quality" section in LAYOUT.md: exactly what is fine and what a human or specialist tool should redo. Non-optimal is acceptable; unlabeled non-optimal is not.',
+      'Stage 5: first-draft layout. Use populate_board to import installed footprints at planned coordinates before routing; never invent pads from library names. Use search_footprints to discover installed IDs, then verify package compatibility. An unavailable footprint requires a verified replacement in the BOM and schematic intent before retrying placement. A library footprint can also be incompatible with the required manufacturing clearances: if its unchanged internal geometry fails DRC, choose a compatible installed component and update BOM, PINOUT and schematic intent before retrying rather than suppressing rules or moving individual library pads. For power-only USB designs, consider power-only receptacles instead of retaining unused data contacts. Rule-driven placement written as real coordinates: connectors on edges, decoupling at IC pins, ESD at connectors, keepouts honored. Route every electrical connection and run run_drc until it reports zero violations, including zero unconnected items. Then write the "## Draft quality" section in LAYOUT.md: exactly what is electrically and geometrically valid and what placement, path, via, or length optimization a human or specialist tool should redo. Non-optimal is acceptable; unrouted or DRC-failing is incomplete.',
   },
   {
     name: 'outputs',
     isComplete: async (root) => {
-      // An empty outputs/ dir (e.g. from a failed export run) must not count
-      // as complete. Require at least one Gerber file (any .gbr variant).
-      return dirHasFiles(path.join(root, 'outputs'), ['.gbr', '.gtl', '.gbl', '.gbs', '.gbo', '.gbp', '.gbd', '.gto', '.gts', '.gml']);
+      const config = await loadConfig(root);
+      if (!config.board) return false;
+      const board = path.join(root, config.board);
+      if (!existsSync(board) || !(await runDrc(board)).ok) return false;
+      return exportReceiptMatches({
+        repoRoot: root,
+        board: config.board,
+        schematic: config.schematic,
+        bom: path.join(config.docs, 'BOM.md'),
+      });
     },
     prompt: () =>
-      'Stage 6: outputs package. Export into outputs/: gerbers+drill (JLC profile), DXF and STEP outline, SVG renders (export_svg), and an ordering BOM.csv generated from BOM.md (refdes, MPN, qty). Every export must succeed.',
+      'Stage 6: outputs package. First run run_drc on the current board and do not export until it reports zero violations, including zero unconnected items. Write an ordering outputs/BOM.csv generated from BOM.md (refdes, MPN, qty), then call export_outputs LAST to write gerbers+drill (JLC profile), DXF and STEP outline, SVG renders, and a receipt binding every output to the current KiCad source hashes. Every export must succeed and every required file must be non-empty; changing the sources or outputs after that call invalidates the receipt and requires calling export_outputs again. A partial or stale package is incomplete.',
   },
   {
     name: 'firmware',
@@ -476,6 +488,14 @@ async function diagnose(input: {
   /** Compatible-endpoint settings, so a `compat` run can diagnose itself. */
   compat?: CompatSettings | undefined;
 }): Promise<StageDiagnosis> {
+  // A deterministic replay must never escape to a live diagnosis provider
+  // when a cached stage misses, wedges, or fails its completion contract.
+  if (isLlmCacheOnly()) {
+    return {
+      verdict: 'abort',
+      reason: 'cache-only replay cannot diagnose a failed stage without a cached provider turn',
+    };
+  }
   let provider: Provider | undefined;
   try {
     provider = await makeProvider(input.model, false, input.compat);

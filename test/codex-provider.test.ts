@@ -2,6 +2,7 @@ import { access } from 'node:fs/promises';
 import { describe, expect, it, vi } from 'vitest';
 import { CodexProvider } from '../src/agent/providers/codex.js';
 import { makeProvider } from '../src/agent/loop.js';
+import { HANDLERS } from '../src/capabilities/handlers.js';
 import type { Msg, ToolSchema } from '../src/agent/types.js';
 
 const readTool: ToolSchema = {
@@ -15,6 +16,23 @@ const readTool: ToolSchema = {
 };
 
 describe('CodexProvider', () => {
+  it('accepts the installed-footprint tool schema through the real Codex argument validator', async () => {
+    const schema = HANDLERS.find((handler) => handler.schema.name === 'populate_board')!.schema;
+    const args = { placements: [{ ref: 'R1', x: 105, y: 107, rotation: 90 }] };
+    const run = vi.fn(async () => ({
+      finalResponse: JSON.stringify({ text: 'place real footprint', toolCalls: [{ id: 'place-1', name: schema.name, arguments: JSON.stringify(args) }] }),
+      usage: null,
+    }));
+    const provider = new CodexProvider({ client: { startThread: () => ({ run }) } });
+    try {
+      const result = await provider.chat([{ role: 'user', content: 'place R1' }], [schema]);
+      expect(result.toolCalls[0]?.args).toEqual(args);
+      expect(run).toHaveBeenCalledTimes(1);
+    } finally {
+      await provider.close();
+    }
+  });
+
   it('is selected by the codex model namespace without an API key', async () => {
     expect((await makeProvider('codex')).name).toBe('codex');
     expect((await makeProvider('codex:gpt-test')).name).toBe('codex');
@@ -46,6 +64,70 @@ describe('CodexProvider', () => {
     expect(directories.every((directory) => directory.includes('copperhead-codex-'))).toBe(true);
     await Promise.all(providers.map((provider) => provider.close()));
     await Promise.all(directories.map((directory) => expect(access(directory)).rejects.toThrow()));
+  });
+
+  it('close aborts and settles a pending SDK turn before removing its cwd, then retries fresh', async () => {
+    const directories: string[] = [];
+    const signals: AbortSignal[] = [];
+    const prompts: string[] = [];
+    let resolvePending: ((result: { finalResponse: string; usage: null }) => void) | undefined;
+    let threadCount = 0;
+    const client = {
+      startThread: (threadOptions?: { workingDirectory?: string }) => {
+        directories.push(threadOptions?.workingDirectory ?? '');
+        const thread = threadCount++;
+        return {
+          run: async (input: string, turnOptions?: { signal?: AbortSignal }) => {
+            prompts.push(input);
+            const signal = turnOptions?.signal;
+            if (!signal) throw new Error('test expected an SDK abort signal');
+            signals.push(signal);
+            if (thread === 0) {
+              return new Promise<{ finalResponse: string; usage: null }>((resolve) => {
+                resolvePending = resolve;
+              });
+            }
+            return {
+              finalResponse: JSON.stringify({ text: 'recovered', toolCalls: [] }),
+              usage: null,
+            };
+          },
+        };
+      },
+    };
+    const provider = new CodexProvider({ client });
+
+    const pending = provider.chat([{ role: 'user', content: 'first' }], [readTool]).catch((err: unknown) => err);
+    await vi.waitFor(() => expect(signals).toHaveLength(1));
+    const firstDirectory = directories[0]!;
+    let closeSettled = false;
+    const closing = provider.close().then(() => {
+      closeSettled = true;
+    });
+
+    expect(signals[0]!.aborted).toBe(true);
+    await Promise.resolve();
+    expect(closeSettled).toBe(false);
+    await expect(access(firstDirectory)).resolves.toBeUndefined();
+
+    const retry = provider.chat([{ role: 'user', content: 'retry' }], [readTool]);
+    await vi.waitFor(() => expect(signals).toHaveLength(2));
+    resolvePending!({
+      finalResponse: 'malformed stale output',
+      usage: null,
+    });
+    await expect(pending).resolves.toMatchObject({ message: 'Codex CLI provider closed during turn' });
+    await expect(retry).resolves.toMatchObject({ text: 'recovered' });
+    await closing;
+    await expect(access(firstDirectory)).rejects.toThrow();
+
+    expect(threadCount).toBe(2);
+    expect(prompts).toHaveLength(2);
+    expect(directories[1]).not.toBe(firstDirectory);
+    expect(signals[1]!.aborted).toBe(false);
+    expect(prompts[1]).toContain('"kind":"user","content":"retry"');
+    await provider.close();
+    await expect(access(directories[1]!)).rejects.toThrow();
   });
 
   it('uses a read-only Codex thread and maps structured tool calls', async () => {
@@ -137,6 +219,44 @@ describe('CodexProvider', () => {
     expect(run.mock.calls[1]![0]).not.toContain('Prior assistant turn (JSON)');
   });
 
+  it('replays the full transcript when reused after close starts a fresh thread', async () => {
+    const runs: Array<ReturnType<typeof vi.fn>> = [];
+    const client = {
+      startThread: () => {
+        const run = vi.fn().mockResolvedValue({
+          finalResponse: JSON.stringify({ text: 'done', toolCalls: [] }),
+          usage: null,
+        });
+        runs.push(run);
+        return { run };
+      },
+    };
+    const provider = new CodexProvider({ workingDirectory: process.cwd(), client });
+    const initial: Msg[] = [
+      { role: 'system', content: 'system policy' },
+      { role: 'user', content: 'inspect the design' },
+    ];
+
+    await provider.chat(initial, [readTool]);
+    await provider.close();
+    await provider.chat(
+      [
+        ...initial,
+        { role: 'assistant', content: 'previous answer' },
+        { role: 'user', content: 'try again' },
+      ],
+      [readTool],
+    );
+
+    expect(runs).toHaveLength(2);
+    const retryPrompt = runs[1]!.mock.calls[0]![0] as string;
+    expect(retryPrompt).toContain('Copperhead system message (JSON)');
+    expect(retryPrompt).toContain('"content":"system policy"');
+    expect(retryPrompt).toContain('"content":"inspect the design"');
+    expect(retryPrompt).toContain('Prior assistant turn (JSON)');
+    expect(retryPrompt).toContain('"content":"try again"');
+  });
+
   it('frames untrusted message and tool-result content as JSON data', async () => {
     const run = vi.fn().mockResolvedValue({
       finalResponse: JSON.stringify({ text: 'done', toolCalls: [] }),
@@ -193,6 +313,11 @@ describe('CodexProvider', () => {
     expect(run.mock.calls[1]![0]).toContain('original input is already present in this thread');
     expect(run.mock.calls[1]![0]).not.toContain('"content":"edit"');
     expect(run.mock.calls[1]![0]).toContain('read_file');
+    const firstSignal = run.mock.calls[0]![1].signal as AbortSignal;
+    const correctionSignal = run.mock.calls[1]![1].signal as AbortSignal;
+    expect(firstSignal).not.toBe(correctionSignal);
+    expect(firstSignal.aborted).toBe(false);
+    expect(correctionSignal.aborted).toBe(false);
     expect(turn).toEqual({
       text: 'I will inspect first.',
       toolCalls: [{ id: 'call-2', name: 'read_file', args: { path: 'docs/SPEC.md' } }],
@@ -200,7 +325,7 @@ describe('CodexProvider', () => {
     });
   });
 
-  it('rejects malformed JSON tool arguments', async () => {
+  it('recovers when a malformed JSON tool call needs a second bounded correction', async () => {
     const invalid = {
       finalResponse: JSON.stringify({
         text: '',
@@ -221,17 +346,53 @@ describe('CodexProvider', () => {
       client: { startThread: () => ({ run }) },
     });
 
+    await expect(provider.chat([{ role: 'user', content: 'read' }], [readTool])).resolves.toMatchObject({
+      text: 'recovered',
+      toolCalls: [],
+    });
+    expect(run).toHaveBeenCalledTimes(3);
+    expect(run.mock.calls[1]![0]).toContain('invalid JSON arguments');
+    expect(run.mock.calls[1]![0]).not.toContain('"content":"read"');
+    expect(run.mock.calls[1]![0]).toContain('Correction attempt 1 of 2');
+    expect(run.mock.calls[2]![0]).toContain('Correction attempt 2 of 2');
+    expect(run.mock.calls[2]![0]).not.toContain('"content":"read"');
+  });
+
+  it('never dispatches malformed arguments and fails after two correction attempts', async () => {
+    const invalid = {
+      finalResponse: JSON.stringify({
+        text: '',
+        toolCalls: [{ id: 'reroute-cc2-mid', name: 'read_file', arguments: '{"path":"docs/SPEC.md"} trailing' }],
+      }),
+      usage: null,
+    };
+    const run = vi
+      .fn()
+      .mockResolvedValueOnce(invalid)
+      .mockResolvedValueOnce(invalid)
+      .mockResolvedValueOnce(invalid)
+      .mockResolvedValueOnce({
+        finalResponse: JSON.stringify({ text: 'next turn recovered', toolCalls: [] }),
+        usage: null,
+      });
+    const provider = new CodexProvider({
+      workingDirectory: process.cwd(),
+      client: { startThread: () => ({ run }) },
+    });
+
     await expect(provider.chat([{ role: 'user', content: 'read' }], [readTool])).rejects.toThrow(
       'invalid JSON arguments',
     );
-    expect(run).toHaveBeenCalledTimes(2);
-    expect(run.mock.calls[1]![0]).toContain('invalid JSON arguments');
-    expect(run.mock.calls[1]![0]).not.toContain('"content":"read"');
+    expect(run).toHaveBeenCalledTimes(3);
+    expect(run.mock.calls[1]![0]).toContain('Unexpected non-whitespace character after JSON');
+    expect(run.mock.calls[2]![0]).toContain('Correction attempt 2 of 2');
 
+    // A rejected turn advances no cursor, so the next call receives the
+    // original input again instead of losing it with the invalid tool call.
     await expect(provider.chat([{ role: 'user', content: 'read' }], [readTool])).resolves.toMatchObject({
-      text: 'recovered',
+      text: 'next turn recovered',
     });
-    expect(run.mock.calls[2]![0]).toContain('"kind":"user","content":"read"');
+    expect(run.mock.calls[3]![0]).toContain('"kind":"user","content":"read"');
   });
 
   it('retries arguments that do not match the selected tool schema', async () => {

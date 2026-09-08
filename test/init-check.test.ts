@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { readFile, writeFile, rm, mkdtemp, mkdir } from 'node:fs/promises';
+import { readFile, writeFile, rm, mkdtemp, mkdir, readdir, stat } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -181,7 +181,7 @@ describe('fab export (create stage 6 tooling)', () => {
   it('produces gerbers, drill, dxf, and svg for the fixture board', async () => {
     const { repo, cleanup } = await tempFixtureRepo();
     try {
-      const { exportFab } = await import('../src/kicad/cli.js');
+      const { exportFab, fabricationGerberLayers } = await import('../src/kicad/cli.js');
       const out = path.join(repo, 'outputs');
       const res = await exportFab(
         path.join(repo, 'hardware', 'open-key.kicad_pcb'),
@@ -192,6 +192,19 @@ describe('fab export (create stage 6 tooling)', () => {
         expect(res.produced, artifact).toContain(artifact);
       }
       expect(existsSync(path.join(out, 'gerbers'))).toBe(true);
+      const outline = await stat(path.join(out, 'outline.dxf'));
+      expect(outline.isFile()).toBe(true);
+      expect(outline.size).toBeGreaterThan(0);
+      const gerberFiles = await readdir(path.join(out, 'gerbers'));
+      const jobName = gerberFiles.find((name) => name.endsWith('.gbrjob'));
+      expect(jobName).toBeTruthy();
+      const job = JSON.parse(await readFile(path.join(out, 'gerbers', jobName!), 'utf8')) as {
+        FilesAttributes: { Path: string; FileFunction: string }[];
+      };
+      const layers = await fabricationGerberLayers(path.join(repo, 'hardware', 'open-key.kicad_pcb'));
+      expect(job.FilesAttributes).toHaveLength(layers.length);
+      expect(job.FilesAttributes.some((file) => file.FileFunction.startsWith('Profile'))).toBe(true);
+      expect(job.FilesAttributes.every((file) => existsSync(path.join(out, 'gerbers', file.Path)))).toBe(true);
     } finally {
       await cleanup();
     }

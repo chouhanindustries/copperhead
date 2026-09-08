@@ -1,0 +1,9 @@
+(footprint "USB4135"
+	(version 20240108)
+	(generator "test")
+	(layer "F.Cu")
+	(descr "charging connector")
+	(tags "USB Type-C receptacle PowerOnly")
+	(property "Reference" "REF**" (at 0 -2 0) (layer "F.SilkS"))
+	(property "Value" "USB4135" (at 0 2 0) (layer "F.Fab"))
+)

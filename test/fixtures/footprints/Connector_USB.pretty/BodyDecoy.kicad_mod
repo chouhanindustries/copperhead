@@ -1,0 +1,11 @@
+(footprint "BodyDecoy"
+	(version 20240108)
+	(generator "test")
+	(layer "F.Cu")
+	(descr "ordinary connector")
+	(tags "fixture")
+	(property "Reference" "REF**" (at 0 -2 0) (layer "F.SilkS"))
+	(property "Value" "BodyDecoy" (at 0 2 0) (layer "F.Fab"))
+	(fp_text user "BodyOnlyPowerMarker" (at 0 0) (layer "F.Fab"))
+	(pad "BodyOnlyPowerMarker" smd rect (at 0 0) (size 1 1) (layers "F.Cu"))
+)

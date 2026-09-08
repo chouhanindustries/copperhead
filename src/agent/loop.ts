@@ -4,7 +4,7 @@ import { execa } from 'execa';
 import type { Msg, Provider, Turn } from './types.js';
 import { availableTools, dispatchToolResult, type RunContext } from './tools.js';
 import { flatten } from './envelope.js';
-import { CachingProvider } from './response-cache.js';
+import { CachingProvider, isLlmCacheOnly, LLM_CACHE_ONLY_ENV } from './response-cache.js';
 import { withTimeout, TurnTimeoutError, MAX_TURN_TIMEOUTS } from './recovery.js';
 import { buildSystemPrompt } from './prompts.js';
 import { loadConstraints, reopenDeferredAffects } from '../memory/constraints.js';
@@ -274,7 +274,22 @@ async function runWithProviders(opts: RunOptions, providers: Set<Provider>): Pro
   // condition under which we skip the CachingProvider wrap below.
   const sessionResume = process.env.COPPERHEAD_CC_SESSION_RESUME === '1' && !config.llmCache;
   const compatSettings = resolveCompatSettings(config);
-  let provider = opts.provider ?? (await makeProvider(opts.model, sessionResume, compatSettings));
+  const cacheOnly = isLlmCacheOnly();
+  if (cacheOnly && !config.llmCache) {
+    throw new Error(`${LLM_CACHE_ONLY_ENV}=1 requires llmCache to be enabled`);
+  }
+  if (cacheOnly && opts.provider) {
+    throw new Error(`${LLM_CACHE_ONLY_ENV}=1 cannot be combined with an injected provider`);
+  }
+  // Cache-only replay deliberately does not construct the selected provider:
+  // no credential, SDK, CLI, subprocess, or network fallback is reachable.
+  const offlineMiss: Provider = {
+    name: 'cache-only',
+    async chat() {
+      throw new Error('internal error: cache-only fallback provider was called');
+    },
+  };
+  let provider = opts.provider ?? (cacheOnly ? offlineMiss : await makeProvider(opts.model, sessionResume, compatSettings));
   // Cache every turn's response so a retried/restarted stage replays what it
   // already paid for instead of re-calling the model (repo-scoped, cross-run).
   // Skip an injected provider (tests drive scripted providers directly).
@@ -290,6 +305,7 @@ async function runWithProviders(opts: RunOptions, providers: Set<Provider>): Pro
       log,
       opts.model,
       isCompatModel(opts.model) ? compatSettings.baseURL : undefined,
+      cacheOnly,
     );
   }
   providers.add(provider);

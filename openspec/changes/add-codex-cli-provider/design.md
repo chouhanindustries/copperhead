@@ -16,7 +16,7 @@ The Codex thread runs with `sandboxMode: read-only`, `approvalPolicy: never`, ne
 
 ### D3 — Structural gating is mirrored in structured output
 
-Every SDK turn receives a JSON Schema. `toolCalls[].name` is an enum built from that turn's `availableTools(ctx)`. Before proposal validation the enum cannot represent `edit_file` or `write_file`; after validation the next turn's schema can. Returned names and JSON arguments are validated against the selected tool's parameter schema before entering the normalized `Turn` type. If validation fails, the provider keeps the message cursor unchanged and gives the same thread one corrective retry containing the validation error without duplicating the original prompt. Copperhead messages and tool results use JSON framing so their content cannot terminate pseudo-XML delimiters.
+Every SDK turn receives a JSON Schema. `toolCalls[].name` is an enum built from that turn's `availableTools(ctx)`. Before proposal validation the enum cannot represent `edit_file` or `write_file`; after validation the next turn's schema can. Returned names and JSON arguments are validated against the selected tool's parameter schema before entering the normalized `Turn` type. If validation fails, the provider keeps the message cursor unchanged and gives the same thread at most two corrective attempts containing the latest validation error without duplicating the original prompt. This accommodates one malformed replacement on long JSON arguments while retaining a fixed provider-call bound. Copperhead messages and tool results use JSON framing so their content cannot terminate pseudo-XML delimiters.
 
 ### D4 — One Codex thread per Copperhead run
 
@@ -26,9 +26,13 @@ The provider retains a Codex `Thread` across loop turns. The first prompt carrie
 
 `codex` selects the user's Codex default model. `codex:<model-id>` selects an explicit Codex model. Other non-Claude model strings continue to route to the direct OpenAI API, preserving backward compatibility.
 
+### D6 — Provider close cancels active SDK turns
+
+Every SDK turn receives its own `AbortSignal`. Closing the provider synchronously advances a lifecycle generation, detaches its thread, resets its message cursor, and detaches its owned temporary directory before aborting all captured turns. Close waits for those SDK promises to settle before removing the captured directory. A stale turn that resolves despite cancellation cannot advance the new lifecycle's cursor. A watchdog retry can therefore start a fresh thread and directory immediately without sharing cleanup state with the aborted attempt, and the fresh thread receives the full Copperhead transcript. Corrective structured-output retries use a distinct controller so each active SDK call has an independent lifecycle.
+
 ## Failure behavior
 
-Missing optional SDK, CLI, or authentication produces an actionable provider error. Only missing-CLI and authentication-shaped failures point to `codex login status`; rate limits and unrelated execution failures retain their original context. The normal loop failure path restores the git snapshot and writes the transcript. Codex does not silently fall back to a paid API provider.
+Missing optional SDK, CLI, or authentication produces an actionable provider error. Only missing-CLI and authentication-shaped failures point to `codex login status`; rate limits and unrelated execution failures retain their original context. A watchdog timeout closes the provider, aborting and settling the active CLI subprocess before its scratch directory is removed. The normal loop failure path restores the git snapshot and writes the transcript. Codex does not silently fall back to a paid API provider.
 
 ## Security properties
 
