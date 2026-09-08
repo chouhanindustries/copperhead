@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import path from 'node:path';
 import { mkdir, writeFile } from 'node:fs/promises';
+import { execa } from 'execa';
 import type { RunOptions, RunResult } from '../src/agent/loop.js';
 import { tempFixtureRepo } from './helpers.js';
 
@@ -24,8 +25,8 @@ vi.mock('../src/commands/export.js', async (importOriginal) => ({ ...(await impo
 
 import { runCreate } from '../src/commands/create.js';
 
-function ok(): RunResult {
-  return { outcome: 'success', exitPath: 'done', summary: 'deterministic replay', transcriptDir: '', filesTouched: [], commit: null,
+function ok(commit: string | null = null): RunResult {
+  return { outcome: 'success', exitPath: 'done', summary: 'deterministic replay', transcriptDir: '', filesTouched: [], commit,
     stats: { exitPath: 'done', turnsUsed: 1, maxTurns: 40, repairCyclesUsed: 0, maxRepairCycles: 5, tokensIn: 0, tokensOut: 0, perTurn: [], durationMs: 1 }, cacheHits: 1 };
 }
 
@@ -64,6 +65,14 @@ async function satisfyStage(repo: string, request: string, includeDevplan = true
   }
 }
 
+async function commitStage(repo: string, request: string): Promise<RunResult> {
+  const stage = request.match(/create pipeline stage:\s*([\w-]+)/)?.[1] ?? 'unknown';
+  await execa('git', ['add', '-A'], { cwd: repo });
+  await execa('git', ['commit', '-q', '-m', `create: ${stage}`], { cwd: repo });
+  const { stdout } = await execa('git', ['rev-parse', 'HEAD'], { cwd: repo });
+  return ok(stdout.trim());
+}
+
 beforeEach(() => {
   mockRunAgentLoop.mockReset(); mockListSymbols.mockReset(); mockRunErc.mockReset(); mockCheckDrift.mockReset(); mockCheckLegibility.mockReset();
   // The bootstrapped schematic is intentionally incomplete until the schematic turn runs.
@@ -74,15 +83,26 @@ beforeEach(() => {
 });
 
 describe('create pipeline deterministic end-to-end replay (#66)', () => {
-  it('reaches the final 8th stage from a non-trivial brief', async () => {
+  it('reaches and commits the final 8th stage from a non-trivial brief', async () => {
     const { repo, cleanup } = await tempFixtureRepo();
     try {
+      const { stdout: before } = await execa('git', ['rev-list', '--count', 'HEAD'], { cwd: repo });
       const briefPath = await seedRepo(repo);
-      mockRunAgentLoop.mockImplementation(async (opts) => { await satisfyStage(opts.repoRoot, opts.request); return ok(); });
+      const stageCommits: string[] = [];
+      mockRunAgentLoop.mockImplementation(async (opts) => {
+        await satisfyStage(opts.repoRoot, opts.request);
+        const result = await commitStage(opts.repoRoot, opts.request);
+        stageCommits.push(result.commit!);
+        return result;
+      });
       const res = await runCreate({ repoRoot: repo, briefPath, model: 'gpt-5', log: () => {} });
+      const { stdout: after } = await execa('git', ['rev-list', '--count', 'HEAD'], { cwd: repo });
       expect(res.ok).toBe(true);
       expect(res.completed).toEqual(['spec-seed','architecture','part-selection','schematic','layout-draft','outputs','firmware','devplan']);
       expect(mockRunAgentLoop).toHaveBeenCalledTimes(8);
+      expect(stageCommits).toHaveLength(8);
+      expect(new Set(stageCommits).size).toBe(8);
+      expect(Number(after) - Number(before)).toBe(8);
     } finally { await cleanup(); }
   });
 
