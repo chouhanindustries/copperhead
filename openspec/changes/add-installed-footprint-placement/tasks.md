@@ -5,4 +5,4 @@
 - [x] Document specification and design
 - [x] Validate geometry, mapping, rejection atomicity and registry gating with tests
 - [x] Run typecheck, full suite, build and strict OpenSpec validation
-- [ ] Exercise real placement through the manual sandbox
+- [x] Exercise real placement through the manual sandbox (eight references imported; full layout and DRC completion remain outstanding)
