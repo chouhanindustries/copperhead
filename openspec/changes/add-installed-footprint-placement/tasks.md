@@ -6,3 +6,5 @@
 - [x] Validate geometry, mapping, rejection atomicity and registry gating with tests
 - [x] Run typecheck, full suite, build and strict OpenSpec validation
 - [x] Exercise real placement through the manual sandbox (eight references imported; full layout and DRC completion remain outstanding)
+- [x] Discover semantic footprint descriptions/tags with bounded header reads while preserving name priority
+- [x] Validate metadata search coverage, typecheck, Markdown lint and strict OpenSpec validation

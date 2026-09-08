@@ -7,7 +7,7 @@
  * existing board outline.
  */
 
-import { access, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises';
+import { access, open, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { listSymbols, pinNets } from './sexp.js';
 import { knum, uuidv5 } from './emit.js';
@@ -58,9 +58,44 @@ export async function footprintSearchDirs(env = process.env): Promise<string[]> 
   return out;
 }
 
+const FOOTPRINT_METADATA_BYTES = 64 * 1024;
+
+function compactSearchText(value: string): string {
+  return value.toLocaleLowerCase('en').replace(/[^a-z0-9]+/g, '');
+}
+
+function searchTokens(value: string): string[] {
+  return value
+    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+    .toLocaleLowerCase('en')
+    .split(/[^a-z0-9]+/g)
+    .filter(Boolean);
+}
+
+/** Read only the header region where KiCad stores `(descr ...)` and `(tags ...)`. */
+async function footprintMetadata(filePath: string): Promise<string[]> {
+  let handle: Awaited<ReturnType<typeof open>> | null = null;
+  try {
+    handle = await open(filePath, 'r');
+    const buffer = Buffer.allocUnsafe(FOOTPRINT_METADATA_BYTES);
+    const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
+    const header = buffer.toString('utf8', 0, bytesRead);
+    const values: string[] = [];
+    const field = /\((?:descr|tags)\s+"((?:[^"\\]|\\.)*)"/g;
+    for (const match of header.matchAll(field)) values.push(match[1] ?? '');
+    return values;
+  } catch {
+    return [];
+  } finally {
+    await handle?.close();
+  }
+}
+
 /**
- * Search installed footprint names without turning user input into a path.
- * Exact normalized names rank first, then prefixes, then token matches.
+ * Search installed footprint names and their declared description/tags without
+ * turning user input into a path. Exact normalized names rank first, then
+ * prefixes, name tokens, and finally declared metadata. Footprint geometry is
+ * deliberately not searchable metadata.
  */
 export async function searchInstalledFootprints(
   query: string,
@@ -71,14 +106,11 @@ export async function searchInstalledFootprints(
   if (!trimmed) return [];
   const roots = dirs ?? (await footprintSearchDirs());
   const limit = Math.min(50, Math.max(1, Math.floor(cap)));
-  const normalize = (value: string): string => value.toLocaleLowerCase('en').replace(/[^a-z0-9]+/g, '');
-  const normalizedQuery = normalize(trimmed);
+  const normalizedQuery = compactSearchText(trimmed);
   if (!normalizedQuery) return [];
-  const tokens = trimmed
-    .toLocaleLowerCase('en')
-    .split(/[^a-z0-9]+/g)
-    .filter(Boolean);
+  const tokens = searchTokens(trimmed);
   const hits: { libId: string; rank: number }[] = [];
+  const candidates = new Map<string, { filePath: string; nameMatched: boolean }>();
 
   for (const root of roots) {
     let libraries: import('node:fs').Dirent[];
@@ -99,12 +131,39 @@ export async function searchInstalledFootprints(
       for (const file of files) {
         if (!file.isFile() || !file.name.endsWith('.kicad_mod')) continue;
         const name = file.name.slice(0, -'.kicad_mod'.length);
-        const normalizedName = normalize(name);
-        const normalizedId = normalize(`${lib}:${name}`);
-        const tokenMatch = tokens.length > 0 && tokens.every((token) => normalizedId.includes(normalize(token)));
-        if (!normalizedId.includes(normalizedQuery) && !tokenMatch) continue;
-        const rank = normalizedName === normalizedQuery ? 0 : normalizedName.startsWith(normalizedQuery) ? 1 : 2;
-        hits.push({ libId: `${lib}:${name}`, rank });
+        const libId = `${lib}:${name}`;
+        if (candidates.has(libId)) continue;
+        const normalizedName = compactSearchText(name);
+        const normalizedId = compactSearchText(libId);
+        const tokenMatch = tokens.length > 0 && tokens.every((token) => normalizedId.includes(token));
+        const nameMatched = normalizedId.includes(normalizedQuery) || tokenMatch;
+        candidates.set(libId, { filePath: path.join(root, library.name, file.name), nameMatched });
+        if (nameMatched) {
+          const rank = normalizedName === normalizedQuery ? 0 : normalizedName.startsWith(normalizedQuery) ? 1 : 2;
+          hits.push({ libId, rank });
+        }
+      }
+    }
+  }
+
+  // A name result is already the strongest answer and stays cheap: do not scan
+  // thousands of installed definitions merely to fill the cap after an exact
+  // or partial ID match. Metadata is a fallback for semantic queries that the
+  // installed IDs cannot answer at all.
+  if (hits.length === 0) {
+    const metadataCandidates = [...candidates.entries()]
+      .filter(([, candidate]) => !candidate.nameMatched)
+      .sort(([a], [b]) => a.localeCompare(b));
+    const batchSize = 32;
+    for (let offset = 0; offset < metadataCandidates.length && hits.length < limit; offset += batchSize) {
+      const batch = metadataCandidates.slice(offset, offset + batchSize);
+      const metadata = await Promise.all(batch.map(([, candidate]) => footprintMetadata(candidate.filePath)));
+      for (let index = 0; index < batch.length; index++) {
+        const [libId] = batch[index]!;
+        const declaredTokens = new Set([...searchTokens(libId), ...searchTokens(metadata[index]!.join(' '))]);
+        if (tokens.every((token) => declaredTokens.has(token))) {
+          hits.push({ libId, rank: 3 });
+        }
       }
     }
   }

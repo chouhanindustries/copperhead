@@ -129,6 +129,15 @@ describe('searchInstalledFootprints', () => {
     ]);
   });
 
+  it('finds semantic descr/tags with separator and camel-case normalization, but never footprint body text', async () => {
+    expect(await searchInstalledFootprints('USB_C_Receptacle_PowerOnly', [FOOTPRINTS])).toEqual([
+      'Connector_USB:USB4125',
+      'Connector_USB:USB4135',
+    ]);
+    expect(await searchInstalledFootprints('USB4125 PowerOnly', [FOOTPRINTS])).toEqual(['Connector_USB:USB4125']);
+    expect(await searchInstalledFootprints('BodyOnlyPowerMarker', [FOOTPRINTS])).toEqual([]);
+  });
+
   it('returns no result for a missing footprint or path-like query', async () => {
     expect(await searchInstalledFootprints('691137710002', [FOOTPRINTS])).toEqual([]);
     expect(await searchInstalledFootprints('../../Resistor_SMD.pretty', [FOOTPRINTS])).toEqual([]);

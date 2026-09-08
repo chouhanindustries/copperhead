@@ -27,7 +27,7 @@ The system SHALL provide a spec-gated populate_board tool that imports installed
 
 ### Requirement: Discover installed footprint names
 
-The system SHALL expose read-only search_footprints returning at most 50 matching installed library IDs without accepting arbitrary filesystem paths.
+The system SHALL expose read-only search_footprints returning at most 50 matching installed library IDs without accepting arbitrary filesystem paths. Exact and prefix name matches SHALL rank before other name matches. When no ID matches, metadata matching SHALL compare normalized query tokens with the union of the ID and declared `descr`/`tags`, normalizing separators and camel-case boundaries. Arbitrary footprint body content SHALL NOT produce metadata matches.
 
 #### Scenario: Search before proposal validation
 
@@ -35,3 +35,15 @@ The system SHALL expose read-only search_footprints returning at most 50 matchin
 - **WHEN** the agent searches for a footprint name before edits are unlocked
 - **THEN** matching installed IDs are returned without modifying the repository
 - **AND** availability is not represented as component compatibility verification
+
+#### Scenario: Semantic metadata discovery
+
+- **GIVEN** an installed footprint whose filename is a part number and whose declared description or tags say `power-only`
+- **WHEN** the agent searches for `USB_C_Receptacle_PowerOnly`
+- **THEN** the installed library ID is returned after any matching footprint names
+
+#### Scenario: Geometry text is not metadata
+
+- **GIVEN** a query appears only in a footprint pad or drawing text
+- **WHEN** the agent searches for that query
+- **THEN** that footprint is not returned solely because of the body text

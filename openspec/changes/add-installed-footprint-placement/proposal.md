@@ -7,6 +7,7 @@ A real create stage5 run produced 76 DRC findings after the model invented footp
 ## What Changes
 
 - Add a spec-gated `populate_board` tool importing real installed footprint geometry and schematic pad nets at requested positions.
+- Search declared footprint descriptions and tags when a semantic query does not appear in the footprint ID.
 - Refuse invalid or missing definitions before any write and retain existing verification obligations.
 - Require this import path in the layout prompt.
 
@@ -22,4 +23,4 @@ None.
 
 ## Impact
 
-KiCad footprint helper, capability catalog, layout prompt, tests and central SPEC. No routing or relaxed DRC.
+KiCad footprint helper, capability catalog, layout prompt, tests and central SPEC. Metadata search reads only bounded footprint headers and does not treat body text as search metadata. No routing or relaxed DRC.
