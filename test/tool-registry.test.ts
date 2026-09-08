@@ -91,10 +91,40 @@ describe('tool-registry catalog', () => {
       const ctx = await makeCtx(repo);
       const names = registry.list(ctx).map((e) => e.name);
       expect(names).toContain('read_file');
+      expect(names).toContain('search_footprints');
       expect(names).toContain('generate_report');
       expect(names).not.toContain('edit_file');
       expect(names).not.toContain('write_file');
+      expect(names).not.toContain('populate_board');
+      expect((await dispatchToolResult(ctx, 'populate_board', { placements: [] })).error?.kind).toBe('unavailable');
+      ctx.editsUnlocked = true;
+      expect(availableTools(ctx).map((t) => t.name)).toContain('populate_board');
     } finally {
+      await cleanup();
+    }
+  });
+
+  it('populate_board imports through the gated handler and reopens verification obligations', async () => {
+    const { repo, cleanup } = await tempFixtureRepo();
+    const previous = process.env.KICAD_FOOTPRINT_DIR;
+    try {
+      await runInit({ repoRoot: repo });
+      const ctx = await makeCtx(repo, true);
+      ctx.config.board = 'placement.kicad_pcb';
+      await writeFile(path.join(repo, ctx.config.board), '(kicad_pcb\n  (version 20240108)\n  (generator "test")\n  (net 0 "")\n)\n');
+      process.env.KICAD_FOOTPRINT_DIR = path.join(ROOT, 'test', 'fixtures', 'footprints');
+      ctx.lastDrc = { ok: true, source: 'drc', violations: [] };
+      const result = await dispatchToolResult(ctx, 'populate_board', {
+        placements: [{ ref: 'R1', x: 105, y: 107, rotation: 90 }],
+      });
+      expect(result.ok, JSON.stringify(result)).toBe(true);
+      expect(ctx.filesTouched.has(ctx.config.board)).toBe(true);
+      expect(ctx.lastDrc).toBeNull();
+      expect(ctx.ledger.openOfKind('erc')).toHaveLength(1);
+      expect(ctx.ledger.openOfKind('drc')).toHaveLength(1);
+    } finally {
+      if (previous === undefined) delete process.env.KICAD_FOOTPRINT_DIR;
+      else process.env.KICAD_FOOTPRINT_DIR = previous;
       await cleanup();
     }
   });

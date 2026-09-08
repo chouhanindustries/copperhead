@@ -5,6 +5,7 @@ import { resolveInRepo, isKicadFile } from '../util/paths.js';
 import { runErc, runDrc, exportSvg, exportFab, kicadLoadError, isProbeableKicadFile } from '../kicad/cli.js';
 import { formatViolations } from '../kicad/report.js';
 import { listSymbols, listNets } from '../kicad/sexp.js';
+import { populateBoardFromSchematic, searchInstalledFootprints } from '../kicad/footprints.js';
 import { checkLegibility, formatLegibility } from '../kicad/legibility.js';
 import { scoreSchematic, formatScore } from '../kicad/score.js';
 import { draftSchematic, defaultIntentPath, formatSchematicDraftReport } from '../kicad/draft/draft.js';
@@ -382,6 +383,82 @@ export const HANDLERS: HandlerDef[] = [
         ok: mismatches === 0,
         text: `verify_symbols: ${checked} verified, ${skipped} unverifiable (library not installed), ${mismatches} issue(s) to reconcile:\n${lines.join('\n')}`,
       };
+    },
+  },
+  {
+    schema: {
+      name: 'search_footprints',
+      description: 'Search installed KiCad footprint IDs by name. Returns at most 50 matching library:name IDs; a match establishes availability, not compatibility with a component datasheet.',
+      parameters: {
+        type: 'object',
+        properties: { query: { type: 'string' } },
+        required: ['query'],
+      },
+    },
+    requiresUnlock: false,
+    handler: async (_ctx, args) => {
+      const query = str(args, 'query');
+      const matches = await searchInstalledFootprints(query);
+      return matches.length ? `installed footprints matching ${JSON.stringify(query)}:\n${matches.join('\n')}` : `no installed footprints matching ${JSON.stringify(query)}`;
+    },
+  },
+  {
+    schema: {
+      name: 'populate_board',
+      description:
+        'Place real installed KiCad footprints on the configured PCB using schematic references and pin-to-net mappings. Supply reference, x/y in mm and optional rotation in degrees. Imports library geometry; never invent pads. Existing references and missing or ambiguous footprints are refused before any board write. This does not route tracks; run ERC and DRC after placement.',
+      parameters: {
+        type: 'object',
+        properties: {
+          placements: {
+            type: 'array',
+            minItems: 1,
+            items: {
+              type: 'object',
+              properties: {
+                ref: { type: 'string' },
+                x: { type: 'number' },
+                y: { type: 'number' },
+                rotation: { type: 'number' },
+              },
+              required: ['ref', 'x', 'y'],
+              additionalProperties: false,
+            },
+          },
+        },
+        required: ['placements'],
+      },
+    },
+    requiresUnlock: true,
+    handler: async (ctx, args) => {
+      if (!ctx.config.schematic || !ctx.config.board) {
+        return { ok: false, text: 'populate_board requires a configured schematic and board' };
+      }
+      if (!Array.isArray(args.placements) || args.placements.length === 0) {
+        return { ok: false, text: 'placements must be a non-empty array' };
+      }
+      const placements = args.placements.map((item: unknown) => {
+        if (!item || typeof item !== 'object') throw new Error('each placement must be an object');
+        const row = item as Record<string, unknown>;
+        if (typeof row.ref !== 'string' || !row.ref.trim() ||
+            typeof row.x !== 'number' || !Number.isFinite(row.x) ||
+            typeof row.y !== 'number' || !Number.isFinite(row.y) ||
+            (row.rotation !== undefined && (typeof row.rotation !== 'number' || !Number.isFinite(row.rotation)))) {
+          throw new Error('placement requires a reference and finite x, y, and optional rotation');
+        }
+        return { ref: row.ref, x: row.x, y: row.y, ...(row.rotation === undefined ? {} : { rotation: row.rotation as number }) };
+      });
+      // Apply the same repository boundary as file-edit tools before import.
+      resolveInRepo(ctx.repoRoot, ctx.config.schematic);
+      resolveInRepo(ctx.repoRoot, ctx.config.board);
+      const result = await populateBoardFromSchematic({
+        repoRoot: ctx.repoRoot,
+        schematic: ctx.config.schematic,
+        board: ctx.config.board,
+        placements,
+      });
+      markTouched(ctx, ctx.config.board);
+      return `populate_board: placed ${result.placed.join(', ')} from installed libraries; ERC and DRC required`;
     },
   },
   {

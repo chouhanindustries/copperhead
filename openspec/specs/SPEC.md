@@ -410,6 +410,12 @@ interface Provider {
 
 ---
 
+### 4.6 Installed footprint placement
+
+The read-only `search_footprints` tool returns at most 50 matching installed footprint IDs; discovery does not establish datasheet or package compatibility. The spec-gated `populate_board` tool accepts schematic references with x/y millimetres and optional rotation. It resolves assigned footprints from installed KiCad libraries and imports their geometry with schematic pad-to-net assignments and deterministic instance identifiers. It refuses missing definitions, ambiguous mappings, duplicate placements and existing board references before writing. The existing board geometry is preserved. Placement marks the PCB changed and requires the normal ERC/DRC checks; it neither routes tracks nor relaxes verification gates. The layout stage must use library geometry instead of inventing pads from footprint names.
+
+---
+
 ## 5. Config (`.copperhead/config.json`)
 
 ```json
