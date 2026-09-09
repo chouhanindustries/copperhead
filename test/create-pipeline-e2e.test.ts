@@ -118,7 +118,7 @@ describe('create pipeline deterministic end-to-end replay (#66)', () => {
         }
         return ok();
       });
-      const res = await runCreate({ repoRoot: repo, briefPath, model: 'gpt-5', log: () => {} });
+      const res = await runCreate({ repoRoot: repo, briefPath, model: 'gpt-5', maxStageRetries: 0, log: () => {} });
       expect(res.ok).toBe(false);
       expect(res.completed).toEqual(['spec-seed','architecture','part-selection']);
       expect(mockRunErc).not.toHaveBeenCalled();
@@ -130,7 +130,7 @@ describe('create pipeline deterministic end-to-end replay (#66)', () => {
     try {
       const briefPath = await seedRepo(repo);
       mockRunAgentLoop.mockImplementation(async (opts) => { await satisfyStage(opts.repoRoot, opts.request, false); return ok(); });
-      const res = await runCreate({ repoRoot: repo, briefPath, model: 'gpt-5', log: () => {} });
+      const res = await runCreate({ repoRoot: repo, briefPath, model: 'gpt-5', maxStageRetries: 0, log: () => {} });
       expect(res.ok).toBe(false);
       expect(res.completed).toEqual(['spec-seed','architecture','part-selection','schematic','layout-draft','outputs','firmware']);
     } finally { await cleanup(); }
