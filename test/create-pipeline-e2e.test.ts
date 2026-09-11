@@ -131,11 +131,11 @@ describe('create pipeline deterministic end-to-end replay (#66)', () => {
         }
         return ok();
       });
-      const res = await runCreate({ repoRoot: repo, briefPath, model: 'gpt-5', log: () => {} });
+      const res = await runCreate({ repoRoot: repo, briefPath, model: 'gpt-5', log: () => {}, maxStageRetries: 0 });
       expect(res.ok).toBe(false);
       expect(res.completed).toEqual(['spec-seed','architecture','part-selection']);
       expect(mockRunErc).not.toHaveBeenCalled();
-      expect(mockMakeProvider).toHaveBeenCalledTimes(1);
+      expect(mockMakeProvider).toHaveBeenCalledTimes(0);
     } finally { await cleanup(); }
   });
 
@@ -144,10 +144,10 @@ describe('create pipeline deterministic end-to-end replay (#66)', () => {
     try {
       const briefPath = await seedRepo(repo);
       mockRunAgentLoop.mockImplementation(async (opts) => { await satisfyStage(opts.repoRoot, opts.request, false); return ok(); });
-      const res = await runCreate({ repoRoot: repo, briefPath, model: 'gpt-5', log: () => {} });
+      const res = await runCreate({ repoRoot: repo, briefPath, model: 'gpt-5', log: () => {}, maxStageRetries: 0 });
       expect(res.ok).toBe(false);
       expect(res.completed).toEqual(['spec-seed','architecture','part-selection','schematic','layout-draft','outputs','firmware']);
-      expect(mockMakeProvider).toHaveBeenCalledTimes(1);
+      expect(mockMakeProvider).toHaveBeenCalledTimes(0);
     } finally { await cleanup(); }
   });
 
@@ -162,6 +162,7 @@ describe('create pipeline deterministic end-to-end replay (#66)', () => {
           { name: 'validate_change', args: {} },
         ] },
         { toolCalls: [{ name: 'write_file', args: { path: 'E2E-COMMIT-PROOF.md', content: '# E2E commit proof\n\nProduced through the real agent loop.\n' } }] },
+        { toolCalls: [{ name: 'check_drift', args: {} }] },
         { toolCalls: [{ name: 'finish', args: { outcome: 'done', summary: 'production loop commit proof complete' } }] },
       ]);
       const res = await realRunAgentLoop({
@@ -169,7 +170,7 @@ describe('create pipeline deterministic end-to-end replay (#66)', () => {
         request: 'write deterministic E2E commit proof',
         model: 'gpt-5',
         provider,
-        maxTurns: 4,
+        maxTurns: 5,
         log: () => {},
       });
       const { stdout: after } = await execa('git', ['rev-list', '--count', 'HEAD'], { cwd: repo });
