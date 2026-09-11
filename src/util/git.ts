@@ -16,7 +16,7 @@ import { PreflightError } from './preflight.js';
  * never a project artifact) and the fix for that abort. Kept as a list so other
  * KiCad transients can join it if they surface.
  */
-const GIT_ADD_EXCLUDES = ['.history/'];
+const GIT_ADD_EXCLUDES = ['.history/', '.copperhead/runs/', '.env'];
 
 /**
  * Ensure the repo's root .gitignore lists each entry, appending only the

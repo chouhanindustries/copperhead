@@ -1,5 +1,5 @@
 import path from 'node:path';
-import { readFile, writeFile } from 'node:fs/promises';
+import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { execa } from 'execa';
 import type { Msg, Provider, Turn } from './types.js';
 import { availableTools, dispatchToolResult, type RunContext } from './tools.js';
@@ -67,6 +67,11 @@ export interface RunOptions {
   renderer?: ProgressRenderer;
   /** Caller-known run identity for the metadata block (design D2). */
   meta?: RunMetaInput;
+  /**
+   * Optional predicate called before commit on finish({outcome: 'done'}).
+   * Returns a rejection reason string to block finish and continue the loop, or null to proceed.
+   */
+  finishGuard?: () => Promise<string | null>;
 }
 
 export interface RunResult {
@@ -200,6 +205,7 @@ async function appendChangelog(
     }
   }
   lines.splice(insertAt, 0, ...block.split('\n').slice(1), '');
+  await mkdir(path.dirname(p), { recursive: true });
   await writeFile(p, lines.join('\n'), 'utf8');
 }
 
@@ -575,6 +581,22 @@ async function runWithProviders(opts: RunOptions, providers: Set<Provider>): Pro
     messages.push({ role: 'assistant', content: res.text, toolCalls: res.toolCalls });
 
     if (!res.toolCalls.length) {
+      if (res.withheld?.length) {
+        nudges = 0;
+        const names = res.withheld.map((w) => `"${w.name}"`).join(', ');
+        for (const w of res.withheld) {
+          await transcript.event('tool-withheld', { name: w.name, args: w.args, reason: w.reason });
+          r.toolResult(w.name, `withheld (${w.reason})`, false);
+        }
+        messages.push({
+          role: 'user',
+          content:
+            `No call ran for ${names}: ${res.withheld.length > 1 ? 'these tools are' : 'this tool is'} not in this turn's tool ` +
+            `catalog. Edit and drafting tools are withheld until a proposal validates — call propose_change, ` +
+            `then validate_change, and they appear. Available this turn: ${[...tools.map((t) => t.name)].join(', ')}.`,
+        });
+        continue;
+      }
       // Only *consecutive* tool-less turns are a stall. Providers emit the
       // occasional empty completion mid-run (observed live: three empties
       // spread across 31 productive turns); a cumulative counter turns those
@@ -598,6 +620,30 @@ async function runWithProviders(opts: RunOptions, providers: Set<Provider>): Pro
       messages.push({ role: 'tool', toolCallId: call.id, content: result });
     }
 
+    if (res.withheld?.length) {
+      const names = res.withheld.map((w) => `"${w.name}"`).join(', ');
+      for (const w of res.withheld) {
+        await transcript.event('tool-withheld', { name: w.name, args: w.args, reason: w.reason });
+        r.toolResult(w.name, `withheld (${w.reason})`, false);
+      }
+      const text =
+        `No call ran for ${names}: ${res.withheld.length > 1 ? 'these tools were' : 'this tool was'} withheld because ` +
+        `it was not in this turn's tool catalog. If the tool was unlocked by an earlier call in this same reply (e.g. validate_change), ` +
+        `call it again next turn.`;
+      if (ctx.finishRequest) {
+        ctx.finishRequest = null;
+        messages.push({
+          role: 'user',
+          content: `${text}\n\nCannot finish yet: ${res.withheld.length} call(s) in this reply did not run (${names}). Complete them before calling finish.`,
+        });
+      } else {
+        messages.push({
+          role: 'user',
+          content: text,
+        });
+      }
+    }
+
     if (ctx.repairCycles > config.maxRepairCycles) {
       return fail(`repair cycles exhausted (${config.maxRepairCycles}); violations persist`, 'repair-cycles-exhausted');
     }
@@ -613,6 +659,18 @@ async function runWithProviders(opts: RunOptions, providers: Set<Provider>): Pro
 
     if (ctx.finishRequest) {
       const { outcome, summary } = ctx.finishRequest;
+      if (outcome === 'done' && opts.finishGuard) {
+        const guardReason = await opts.finishGuard();
+        if (guardReason) {
+          log(`finish rejected: ${guardReason}`);
+          ctx.finishRequest = null;
+          messages.push({
+            role: 'user',
+            content: `Cannot finish yet: ${guardReason}`,
+          });
+          continue;
+        }
+      }
       const files = [...ctx.filesTouched];
       if (outcome === 'refuse') {
         await restore(repoRoot, snap);

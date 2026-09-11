@@ -884,6 +884,11 @@ export async function runCreate(opts: CreateOptions): Promise<{ ok: boolean; com
         ...(opts.onBudgetExhausted ? { onBudgetExhausted: opts.onBudgetExhausted } : {}),
         log: opts.log,
         ...(opts.renderer ? { renderer: opts.renderer } : {}),
+        finishGuard: async () => {
+          if (await stage.isComplete(opts.repoRoot, config.docs)) return null;
+          const gap = await contractGapDetail(stage.name, opts.repoRoot, config);
+          return `stage completion contract for "${stage.name}" is not yet satisfied: ${gap}`;
+        },
         meta: {
           ...opts.meta,
           command: 'create',
