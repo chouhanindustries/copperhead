@@ -3,9 +3,16 @@ import path from 'node:path';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { execa } from 'execa';
 import type { RunOptions, RunResult } from '../src/agent/loop.js';
+import type { Provider, Turn } from '../src/agent/types.js';
 import { tempFixtureRepo } from './helpers.js';
 
 const mockRunAgentLoop = vi.hoisted(() => vi.fn<(opts: RunOptions) => Promise<RunResult>>());
+const mockMakeProvider = vi.hoisted(() =>
+  vi.fn(async () => ({
+    name: 'scripted-diagnosis',
+    chat: async () => ({ text: null, toolCalls: [], usage: { inputTokens: 0, outputTokens: 0 } }),
+  })),
+);
 const mockListSymbols = vi.hoisted(() => vi.fn());
 const mockRunErc = vi.hoisted(() => vi.fn());
 const mockCheckDrift = vi.hoisted(() => vi.fn());
@@ -14,6 +21,13 @@ const mockCheckLegibility = vi.hoisted(() => vi.fn());
 vi.mock('../src/agent/loop.js', async (importOriginal) => ({
   ...(await importOriginal<object>()),
   runAgentLoop: mockRunAgentLoop,
+  makeProvider: mockMakeProvider,
+}));
+vi.mock('../src/agent/recovery.js', async (importOriginal) => ({
+  ...(await importOriginal<object>()),
+  diagnoseStageFailure: vi.fn(async () => ({ verdict: 'abort', reason: 'deterministic test stop' })),
+  transcriptExcerpt: vi.fn(async () => ''),
+  symbolAvailabilityFacts: vi.fn(async () => ''),
 }));
 vi.mock('../src/kicad/sexp.js', async (importOriginal) => ({ ...(await importOriginal<object>()), listSymbols: mockListSymbols }));
 vi.mock('../src/kicad/cli.js', async (importOriginal) => ({ ...(await importOriginal<object>()), runErc: mockRunErc }));
@@ -25,8 +39,8 @@ vi.mock('../src/commands/export.js', async (importOriginal) => ({ ...(await impo
 
 import { runCreate } from '../src/commands/create.js';
 
-function ok(commit: string | null = null): RunResult {
-  return { outcome: 'success', exitPath: 'done', summary: 'deterministic replay', transcriptDir: '', filesTouched: [], commit,
+function ok(): RunResult {
+  return { outcome: 'success', exitPath: 'done', summary: 'deterministic replay', transcriptDir: '', filesTouched: [], commit: null,
     stats: { exitPath: 'done', turnsUsed: 1, maxTurns: 40, repairCyclesUsed: 0, maxRepairCycles: 5, tokensIn: 0, tokensOut: 0, perTurn: [], durationMs: 1 }, cacheHits: 1 };
 }
 
@@ -65,17 +79,24 @@ async function satisfyStage(repo: string, request: string, includeDevplan = true
   }
 }
 
-async function commitStage(repo: string, request: string): Promise<RunResult> {
-  const stage = request.match(/create pipeline stage:\s*([\w-]+)/)?.[1] ?? 'unknown';
-  await execa('git', ['add', '-A'], { cwd: repo });
-  await execa('git', ['commit', '-q', '-m', `create: ${stage}`], { cwd: repo });
-  const { stdout } = await execa('git', ['rev-parse', 'HEAD'], { cwd: repo });
-  return ok(stdout.trim());
+function scriptedProvider(turns: Partial<Turn>[]): Provider {
+  let i = 0;
+  return {
+    name: 'scripted',
+    async chat(): Promise<Turn> {
+      const t = turns[Math.min(i, turns.length - 1)]!;
+      i++;
+      return {
+        text: t.text ?? null,
+        toolCalls: (t.toolCalls ?? []).map((c, j) => ({ ...c, id: `call-${i}-${j}` })),
+        usage: t.usage ?? { inputTokens: 1, outputTokens: 1 },
+      };
+    },
+  };
 }
 
 beforeEach(() => {
-  mockRunAgentLoop.mockReset(); mockListSymbols.mockReset(); mockRunErc.mockReset(); mockCheckDrift.mockReset(); mockCheckLegibility.mockReset();
-  // The bootstrapped schematic is intentionally incomplete until the schematic turn runs.
+  mockRunAgentLoop.mockReset(); mockMakeProvider.mockClear(); mockListSymbols.mockReset(); mockRunErc.mockReset(); mockCheckDrift.mockReset(); mockCheckLegibility.mockReset();
   mockListSymbols.mockResolvedValue([]);
   mockRunErc.mockResolvedValue({ ok: true, output: '' });
   mockCheckDrift.mockResolvedValue([]);
@@ -83,26 +104,18 @@ beforeEach(() => {
 });
 
 describe('create pipeline deterministic end-to-end replay (#66)', () => {
-  it('reaches and commits the final 8th stage from a non-trivial brief', async () => {
+  it('reaches the final 8th stage from a non-trivial brief', async () => {
     const { repo, cleanup } = await tempFixtureRepo();
     try {
-      const { stdout: before } = await execa('git', ['rev-list', '--count', 'HEAD'], { cwd: repo });
       const briefPath = await seedRepo(repo);
-      const stageCommits: string[] = [];
       mockRunAgentLoop.mockImplementation(async (opts) => {
         await satisfyStage(opts.repoRoot, opts.request);
-        const result = await commitStage(opts.repoRoot, opts.request);
-        stageCommits.push(result.commit!);
-        return result;
+        return ok();
       });
       const res = await runCreate({ repoRoot: repo, briefPath, model: 'gpt-5', log: () => {} });
-      const { stdout: after } = await execa('git', ['rev-list', '--count', 'HEAD'], { cwd: repo });
       expect(res.ok).toBe(true);
       expect(res.completed).toEqual(['spec-seed','architecture','part-selection','schematic','layout-draft','outputs','firmware','devplan']);
       expect(mockRunAgentLoop).toHaveBeenCalledTimes(8);
-      expect(stageCommits).toHaveLength(8);
-      expect(new Set(stageCommits).size).toBe(8);
-      expect(Number(after) - Number(before)).toBe(8);
     } finally { await cleanup(); }
   });
 
@@ -118,10 +131,11 @@ describe('create pipeline deterministic end-to-end replay (#66)', () => {
         }
         return ok();
       });
-      const res = await runCreate({ repoRoot: repo, briefPath, model: 'gpt-5', maxStageRetries: 0, log: () => {} });
+      const res = await runCreate({ repoRoot: repo, briefPath, model: 'gpt-5', log: () => {} });
       expect(res.ok).toBe(false);
       expect(res.completed).toEqual(['spec-seed','architecture','part-selection']);
       expect(mockRunErc).not.toHaveBeenCalled();
+      expect(mockMakeProvider).toHaveBeenCalledTimes(1);
     } finally { await cleanup(); }
   });
 
@@ -130,9 +144,38 @@ describe('create pipeline deterministic end-to-end replay (#66)', () => {
     try {
       const briefPath = await seedRepo(repo);
       mockRunAgentLoop.mockImplementation(async (opts) => { await satisfyStage(opts.repoRoot, opts.request, false); return ok(); });
-      const res = await runCreate({ repoRoot: repo, briefPath, model: 'gpt-5', maxStageRetries: 0, log: () => {} });
+      const res = await runCreate({ repoRoot: repo, briefPath, model: 'gpt-5', log: () => {} });
       expect(res.ok).toBe(false);
       expect(res.completed).toEqual(['spec-seed','architecture','part-selection','schematic','layout-draft','outputs','firmware']);
+      expect(mockMakeProvider).toHaveBeenCalledTimes(1);
+    } finally { await cleanup(); }
+  });
+
+  it('uses the real agent loop for the production commit path', async () => {
+    const { runAgentLoop: realRunAgentLoop } = await vi.importActual<typeof import('../src/agent/loop.js')>('../src/agent/loop.js');
+    const { repo, cleanup } = await tempFixtureRepo();
+    try {
+      const { stdout: before } = await execa('git', ['rev-list', '--count', 'HEAD'], { cwd: repo });
+      const provider = scriptedProvider([
+        { toolCalls: [
+          { name: 'propose_change', args: { id: 'e2e-commit-proof', why: 'exercise the real production commit path', what_changes: '- add deterministic proof note', tasks: '- [x] add note' } },
+          { name: 'validate_change', args: {} },
+        ] },
+        { toolCalls: [{ name: 'write_file', args: { path: 'E2E-COMMIT-PROOF.md', content: '# E2E commit proof\n\nProduced through the real agent loop.\n' } }] },
+        { toolCalls: [{ name: 'finish', args: { outcome: 'done', summary: 'production loop commit proof complete' } }] },
+      ]);
+      const res = await realRunAgentLoop({
+        repoRoot: repo,
+        request: 'write deterministic E2E commit proof',
+        model: 'gpt-5',
+        provider,
+        maxTurns: 4,
+        log: () => {},
+      });
+      const { stdout: after } = await execa('git', ['rev-list', '--count', 'HEAD'], { cwd: repo });
+      expect(res.outcome).toBe('success');
+      expect(res.commit).toMatch(/^[0-9a-f]{40}$/);
+      expect(Number(after) - Number(before)).toBe(1);
     } finally { await cleanup(); }
   });
 });
